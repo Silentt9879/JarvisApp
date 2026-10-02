@@ -418,16 +418,56 @@
   JV.on('flutter_log', (e) => { const c = cards.get(e.serial); if (c) appendLog(c, e.lines); });
 
   // ------------------------------------------------------------- phone alerts
-  // A notification in your pocket when work stops, posted through adb - no app on the
-  // phone, nothing off this machine. USB works immediately; "Over Wi-Fi" moves the phone
-  // to TCP/IP so the cable can come out.
-  let alerts = { enabled: false, serial: null, address: null, phones: [], connected: false };
+  // A buzz in your pocket when work stops, by one of two routes.
+  //
+  //   This phone  adb posts straight into the tray. No app on the phone and nothing
+  //               leaves this machine - but the phone has to be on the cable or the same
+  //               Wi-Fi. "Over Wi-Fi" moves it to TCP/IP so the cable can come out.
+  //   Telegram    a message from your own bot. Reaches the phone on mobile data anywhere,
+  //               at the cost of the text passing through Telegram.
+  //
+  // The bot token is never held here: it is posted to the main process, which checks it
+  // with Telegram and keeps it in config.json. The window only ever learns whether a token
+  // is set and what the bot is called.
+  let alerts = { enabled: false, route: 'adb', serial: null, address: null, phones: [], connected: false, telegram: { hasToken: false, chatId: null, name: null } };
+
+  const ROUTES = [
+    ['adb', 'This phone', 'Over USB or the same Wi-Fi. Nothing leaves this machine.'],
+    ['telegram', 'Telegram', 'Anywhere, on mobile data. Needs a bot you make once.'],
+  ];
+
+  function renderRoute() {
+    const host = $('paRoute');
+    host.replaceChildren();
+    for (const [value, label, why] of ROUTES) {
+      // The r-<route> class is what a screenshot run clicks: the capture harness takes a
+      // single-token selector only, so each button needs a class of its own.
+      const b = el('button', `r-${value}${alerts.route === value ? ' on' : ''}`, label);
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', String(alerts.route === value));
+      b.title = why;
+      b.onclick = () => { if (alerts.route !== value) setAlerts({ route: value }); };
+      host.appendChild(b);
+    }
+    $('paAdbSetup').hidden = alerts.route !== 'adb';
+    $('paTgSetup').hidden = alerts.route !== 'telegram';
+  }
+
+  /** What Telegram setup still needs, in the order it needs doing. */
+  function telegramStep() {
+    const t = alerts.telegram || {};
+    if (!t.hasToken) return { ready: false, note: 'In Telegram, message @BotFather, send /newbot, then paste the token it gives you here.' };
+    if (!t.chatId) return { ready: false, note: `${t.name || 'Your bot'} is good. Now open it in Telegram, send it anything, and press "Find my chat".` };
+    return { ready: true, note: `Ready: ${t.name || 'your bot'} → chat ${t.chatId}.` };
+  }
 
   function renderAlerts() {
     const sel = $('paPhone');
     const on = $('paOn');
     const usable = alerts.phones.filter((p) => p.state === 'device');
     const chosen = alerts.serial;
+    const tg = alerts.route === 'telegram';
 
     sel.replaceChildren();
     for (const p of usable) {
@@ -443,19 +483,52 @@
     sel.value = chosen || (usable[0] ? usable[0].serial : '');
     sel.disabled = !usable.length && !chosen;
 
+    renderRoute();
+    const step = telegramStep();
+    const note = $('paTgNote');
+    note.textContent = step.note;
+    note.className = `alert-note${step.ready ? ' ok' : ''}`;
+    $('paTgFind').disabled = !alerts.telegram?.hasToken;
+
+    // The toggle and the test are only live once the chosen route can actually carry an alert.
+    const canSend = tg ? step.ready : !!sel.value;
     on.checked = alerts.enabled;
-    on.disabled = !sel.value;
+    on.disabled = !canSend;
+    $('paTest').disabled = !canSend;
     $('paWifi').disabled = !sel.value || sel.value.includes(':');
-    $('paTest').disabled = !sel.value;
+    // Remote control: Telegram only, and only once the bot can reach your chat.
+    $('paRemoteRow').hidden = !tg;
+    const rem = $('paRemote');
+    rem.checked = !!alerts.remote;
+    rem.disabled = !step.ready;
+    $('paRemoteSub').textContent = !step.ready ? 'Set up the bot above first.'
+      : alerts.remote ? 'On. What you send your bot runs on this PC, and approvals and questions come to the chat as buttons. Only your chat is obeyed. Send /help there for the commands. While it is on, the PC is kept from sleeping and closing the window keeps JARVIS in the tray.'
+        : 'Off. Turn it on to send JARVIS tasks from your phone and answer its approvals there.';
+
+    // The mirror rides on remote control: it uses the same chat, and only while that is on.
+    $('paMirrorRow').hidden = !tg;
+    const mir = $('paMirror');
+    mir.checked = !!alerts.mirror;
+    mir.disabled = !step.ready || !alerts.remote;
+    $('paMirrorSub').textContent = !alerts.remote ? 'Needs remote control on.'
+      : alerts.mirror ? 'On. What is typed here shows in the chat as "💻 PC: …", followed by my replies - so the chat holds the whole conversation. The text passes through Telegram.'
+        : 'Off. Only conversations started from your phone show in the chat.';
+
+    // Not while it is being typed into - a re-render must not snatch the value back.
+    const min = $('paMin');
+    if (document.activeElement !== min) min.value = String(Number.isFinite(alerts.minSeconds) ? alerts.minSeconds : 30);
 
     const sub = $('paSub');
-    if (!sel.value) sub.textContent = 'Plug a phone in with USB debugging on, then press Refresh.';
-    else if (!alerts.enabled) sub.textContent = 'Off. Turn it on and your phone buzzes when a turn finishes or I need you.';
+    if (!canSend) sub.textContent = tg ? 'Telegram is not set up yet - follow the line below.' : 'Plug a phone in with USB debugging on, then reopen Settings.';
+    else if (!alerts.enabled) sub.textContent = 'Off. Turn it on and you hear from me when a turn finishes or I need you.';
+    else if (tg) sub.textContent = `On, through Telegram to ${alerts.telegram.name || 'your bot'}. Works wherever the phone has signal.`;
     else if (!alerts.connected) sub.textContent = 'On, but that phone is not reachable right now - reconnect it or pick another.';
     else if (String(sel.value).includes(':')) sub.textContent = `On, over Wi-Fi at ${sel.value}. The cable is not needed.`;
     else sub.textContent = 'On, over the USB cable. Use "Over Wi-Fi" to cut it loose.';
   }
 
+  // The alert settings live in the Settings dialog, so it loads them each time it opens.
+  JV.loadAlerts = () => loadAlerts();
   async function loadAlerts() {
     try {
       alerts = await window.jarvis.phoneState();
@@ -557,7 +630,6 @@
       for (const c of cards.values()) { c.retried = false; c.failedAt = 0; }
       applyLayout();
       refresh();
-      loadAlerts();
       pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 3000);
     } else {
       // Screens only stream while they are on screen; flutter runs carry on.
@@ -574,7 +646,7 @@
     const sel = $('devAllApp');
     for (const a of apps.filter((x) => x.found)) { const o = el('option', null, a.name); o.value = a.key; sel.appendChild(o); }
     $('devRunAll').onclick = runOnAll;
-    $('devRefresh').onclick = () => { refresh(); loadAlerts(); };
+    $('devRefresh').onclick = () => refresh();
 
     // Phone alerts
     $('paOn').onchange = (e) => setAlerts({ enabled: e.target.checked, serial: $('paPhone').value || null });
@@ -584,8 +656,67 @@
       b.disabled = true;
       const r = await window.jarvis.phoneTest($('paPhone').value);
       b.disabled = false;
-      if (r?.ok) JV.notify('Sent. Check your phone, sir.', { level: 'ok', action: 'devices' });
-      else JV.notify(`The phone refused it: ${r?.error || 'no answer from adb'}`, { level: 'err', action: 'devices' });
+      if (r?.ok) JV.notify('Sent. Check your phone, sir.', { level: 'ok', action: () => JV.openSettings?.() });
+      else JV.notify(`It did not go through: ${r?.error || 'no answer'}`, { level: 'err', action: () => JV.openSettings?.() });
+      renderAlerts();
+    };
+
+    // Telegram setup. The token is handed straight to the main process and is never kept
+    // in the window - the box is cleared the moment Telegram confirms it.
+    $('paTgVerify').onclick = async (e) => {
+      const b = e.currentTarget;
+      const box = $('paTgToken');
+      const note = $('paTgNote');
+      b.disabled = true;
+      note.textContent = 'Asking Telegram…';
+      note.className = 'alert-note busy';
+      const r = await window.jarvis.telegramVerify(box.value.trim());
+      b.disabled = false;
+      if (r?.ok) {
+        box.value = '';
+        await loadAlerts();
+        JV.notify(`Token accepted: ${r.name}. Now send it a message and press "Find my chat".`, { level: 'ok', action: () => JV.openSettings?.() });
+      } else {
+        note.textContent = r?.error || 'Telegram would not confirm that token.';
+        note.className = 'alert-note err';
+      }
+    };
+    $('paTgToken').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('paTgVerify').click(); } };
+
+    // Turning remote control on is asked once, in plain words: from then on a message in
+    // that chat can make JARVIS act on this PC.
+    $('paRemote').onchange = (e) => {
+      if (e.target.checked && !confirm('Turn on remote control?\n\nAnything you send your Telegram bot will run on this PC, as if you had typed it here. Approvals still need approving - from the chat or from here.\n\nOnly your own chat is obeyed.')) {
+        e.target.checked = false;
+        return;
+      }
+      setAlerts({ remote: e.target.checked });
+    };
+
+    $('paMirror').onchange = (e) => setAlerts({ mirror: e.target.checked });
+
+    // How long a turn must run before finishing it is worth a buzz. Saved on change (blur or
+    // Enter), not per keystroke, and clamped to what the main process accepts anyway.
+    $('paMin').onchange = (e) => {
+      const n = Math.round(Number(e.target.value));
+      if (!Number.isFinite(n)) { renderAlerts(); return; }
+      setAlerts({ minSeconds: Math.max(0, Math.min(3600, n)) });
+    };
+    $('paTgFind').onclick = async (e) => {
+      const b = e.currentTarget;
+      const note = $('paTgNote');
+      b.disabled = true;
+      note.textContent = 'Reading your bot’s messages…';
+      note.className = 'alert-note busy';
+      const r = await window.jarvis.telegramFindChat();
+      b.disabled = false;
+      if (r?.ok) {
+        await loadAlerts();
+        JV.notify(`Found your chat (${r.name}). Press Test to prove it.`, { level: 'ok', action: () => JV.openSettings?.() });
+      } else {
+        note.textContent = r?.error || 'Could not find a chat.';
+        note.className = 'alert-note err';
+      }
     };
     $('paWifi').onclick = async (e) => {
       const b = e.currentTarget;
@@ -595,11 +726,11 @@
       const r = await window.jarvis.phoneWifi(serial);
       b.disabled = false;
       if (r?.ok) {
-        JV.notify(`That phone is on Wi-Fi at ${r.address}. You can unplug the cable.`, { level: 'ok', action: 'devices' });
+        JV.notify(`That phone is on Wi-Fi at ${r.address}. You can unplug the cable.`, { level: 'ok', action: () => JV.openSettings?.() });
         await loadAlerts();
         await refresh();
       } else {
-        JV.notify(r?.error || 'Could not move the phone onto Wi-Fi.', { level: 'err', action: 'devices' });
+        JV.notify(r?.error || 'Could not move the phone onto Wi-Fi.', { level: 'err', action: () => JV.openSettings?.() });
         renderAlerts();
       }
     };

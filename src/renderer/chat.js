@@ -70,7 +70,7 @@
     m.prepend(b);
   }
 
-  function addUser(text, attachments = [], images = 0, uuid = null) {
+  function addUser(text, attachments = [], images = 0, uuid = null, via = null) {
     hideWelcome();
     if (ui.live) flushText(); else pendingText = '';
     trimTranscript();
@@ -78,17 +78,35 @@
     stick(() => {
       m = el('div', 'msg user');
       const b = el('div', 'bubble');
+      // A message that came from your phone says so, so the desk never wonders who typed it.
+      if (via === 'telegram') {
+        const tag = el('div', 'via');
+        tag.appendChild(JV.icon('phone'));
+        tag.appendChild(el('span', null, 'via Telegram'));
+        b.appendChild(tag);
+      }
       if (text) b.appendChild(el('div', null, text));
       if (attachments.length || images) {
         const row = el('div', 'bubble-att');
         for (const a of attachments) {
-          const chip = el('span', 'achip small');
+          // A picture is shown as itself, and opens full size; a file opens (or is shown in Explorer).
           if (a.kind === 'image' && a.data) {
-            const img = el('img');
+            const img = el('img', 'bubble-img');
             img.src = `data:${a.mediaType};base64,${a.data}`;
-            chip.appendChild(img);
-          } else chip.appendChild(JV.icon('file'));
+            img.alt = a.name || 'image';
+            img.title = 'Click to view full size';
+            img.onclick = () => viewImage(img.src, a);
+            row.appendChild(img);
+            continue;
+          }
+          const chip = el('span', 'achip small');
+          chip.appendChild(JV.icon('file'));
           chip.appendChild(el('span', null, a.name));
+          if (a.path) {
+            chip.classList.add('clickable');
+            chip.title = `${a.path}\nClick to open`;
+            chip.onclick = async () => { const r = await window.jarvis.openAttachment(a.path); if (!r?.ok) flashHint(r?.error || 'Could not open that file.'); };
+          }
           row.appendChild(chip);
         }
         if (images) { const chip = el('span', 'achip small'); chip.appendChild(JV.icon('image')); chip.appendChild(el('span', null, `${images} image${images > 1 ? 's' : ''}`)); row.appendChild(chip); }
@@ -101,6 +119,27 @@
     ui.turn = null;
     ui.live = null;
     return m;
+  }
+
+  /** A picture from a message, full size over the window. Click or Esc closes it. */
+  function viewImage(src, a) {
+    const veil = el('div', 'img-view');
+    const img = el('img');
+    img.src = src;
+    veil.appendChild(img);
+    const bar = el('div', 'img-view-bar');
+    bar.appendChild(el('span', null, a.name || ''));
+    if (a.path) {
+      const open = el('button', 'btn', 'Open file');
+      open.onclick = (e) => { e.stopPropagation(); window.jarvis.openAttachment(a.path); };
+      bar.appendChild(open);
+    }
+    veil.appendChild(bar);
+    const close = () => { veil.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    veil.onclick = close;
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(veil);
   }
 
   function turnBody() {
@@ -242,11 +281,25 @@
       btns.appendChild(once);
       let always = null;
       if (e.canAlways) { always = el('button', 'btn', 'Allow for this session'); btns.appendChild(always); }
+      // Neither yes nor no: say something instead, and JARVIS asks again afterwards.
+      const reply = el('input', 'preply');
+      reply.placeholder = 'Or type a reply instead - JARVIS will ask again after…';
+      const replyBtn = el('button', 'btn btn-ghost', 'Reply');
+      btns.appendChild(reply);
+      btns.appendChild(replyBtn);
       card.appendChild(btns);
       const finish = (label) => { btns.replaceWith(el('div', 'pstate', label)); card.classList.add('done'); };
       deny.onclick = () => { window.jarvis.respond(e.id, { type: 'deny' }); finish('✗ Denied'); };
       once.onclick = () => { window.jarvis.respond(e.id, { type: 'allow' }); finish('✓ Allowed'); };
       if (always) always.onclick = () => { window.jarvis.respond(e.id, { type: 'allow_always' }); finish('✓ Allowed for this session'); };
+      const sendReply = () => {
+        const text = reply.value.trim();
+        if (!text) { reply.focus(); return; }
+        window.jarvis.respond(e.id, { type: 'reply', text });
+        finish(`💬 Replied instead: ${text.length > 120 ? `${text.slice(0, 119)}…` : text}`);
+      };
+      replyBtn.onclick = sendReply;
+      reply.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendReply(); } });
       turnBody().appendChild(card);
       ui.prompts.set(e.id, card);
       // Never put focus on an Allow button: a prompt can appear mid-sentence, and the next
@@ -353,9 +406,15 @@
   function turnFoot(e) {
     if (!ui.turn) return;
     const secs = e.durationMs ? (e.durationMs / 1000).toFixed(1) + 's' : '';
-    const text = e.ok ? `Completed${secs ? ' in ' + secs : ''}` : `Stopped (${e.subtype})${secs ? ' after ' + secs : ''}`;
+    // A stop you asked for is not a failure. Claude Code reports an interrupt as
+    // error_during_execution with a diagnostic string, which used to be drawn as a red error
+    // card - alarming, for something you just did on purpose.
+    const byYou = !e.ok && JV.stoppedByUser();
+    const text = e.ok ? `Completed${secs ? ' in ' + secs : ''}`
+      : byYou ? `Stopped by you${secs ? ' after ' + secs : ''}`
+        : `Stopped (${e.subtype})${secs ? ' after ' + secs : ''}`;
     stick(() => ui.turn.appendChild(el('div', 'turn-foot', text)));
-    if (!e.ok && e.errors && e.errors.length) errorCard(e.errors.join('\n'));
+    if (!e.ok && !byYou && e.errors && e.errors.length) errorCard(e.errors.join('\n'));
     ui.turn = null;
     ui.live = null;
   }
@@ -392,12 +451,14 @@
     input.focus();
   }
 
-  async function resumeSession(id, title) {
-    if (id === state.sessionId) { JV.show('chat'); return; }
-    if (busy() && !confirm('JARVIS is still working. Switch sessions anyway?')) return;
+  // fromPhone: /switch from Telegram. remote.mjs only sends it while idle, so there is no
+  // question to ask, and the view you are on at the desk is left alone.
+  async function resumeSession(id, title, { fromPhone = false } = {}) {
+    if (id === state.sessionId) { if (!fromPhone) JV.show('chat'); return; }
+    if (!fromPhone && busy() && !confirm('JARVIS is still working. Switch sessions anyway?')) return;
     const seq = ++switchSeq;
     state.sessionId = id; // a second click on the same session is now a no-op
-    JV.show('chat');
+    if (!fromPhone) JV.show('chat');
     resetTranscript();
     JV.emit('session_reset', { resumed: true, id });
     // Stop the old session before anything is drawn, so none of its output or prompts
@@ -408,7 +469,7 @@
     const history = await window.jarvis.history(id);
     if (seq !== switchSeq) return;
     for (const h of history) {
-      if (h.role === 'user') addUser(h.text, [], h.images || 0, h.uuid || null);
+      if (h.role === 'user') addUser(h.text, h.attachments || [], h.images || 0, h.uuid || null);
       else if (h.role === 'assistant') { const c = el('div', 'content'); JV.renderMarkdown(c, h.text); turnBody().appendChild(c); }
       else if (h.role === 'tool') turnBody().appendChild(toolRow(h.name, h.detail));
       else if (h.role === 'notice') notice(h.text);
@@ -450,7 +511,7 @@
       const del = el('button', 'icon-btn');
       del.title = 'Delete this session';
       del.appendChild(JV.icon('trash'));
-      del.onclick = (e) => { e.stopPropagation(); deleteSession(s); };
+      del.onclick = (e) => { e.stopPropagation(); confirmDeleteInRow(li, s); };
       acts.appendChild(ren);
       acts.appendChild(del);
       li.appendChild(acts);
@@ -484,6 +545,40 @@
       if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') finish(false);
     };
     box.onblur = () => finish(false);
+  }
+
+  /**
+   * Delete from the sidebar asks right there in the row. It used to put a card in the
+   * conversation, so a few deletes filled whatever session you had open.
+   */
+  function confirmDeleteInRow(li, s) {
+    editingTitle = true; // hold off list refreshes while the question is open
+    const warn = s.id === state.sessionId && busy() ? ' JARVIS is still working.' : '';
+    li.onclick = (e) => e.stopPropagation();
+    li.classList.add('confirming');
+    li.title = '';
+    const q = el('span', 'del-q', `Delete "${s.title}" permanently?${warn}`);
+    q.title = s.title;
+    const btns = el('div', 'del-btns');
+    const yes = el('button', 'btn btn-danger', 'Delete');
+    const no = el('button', 'btn', 'Keep it');
+    btns.appendChild(yes);
+    btns.appendChild(no);
+    li.replaceChildren(q, btns);
+    let done = false;
+    const finish = async (ok) => {
+      if (done) return;
+      done = true;
+      editingTitle = false;
+      if (ok) await deleteSession(s, { force: true, quiet: true });
+      else renderSessions();
+    };
+    yes.onclick = (e) => { e.stopPropagation(); finish(true); };
+    no.onclick = (e) => { e.stopPropagation(); finish(false); };
+    li.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(false); } };
+    // Clicking anywhere else counts as "keep it".
+    btns.addEventListener('focusout', (e) => { if (!li.contains(e.relatedTarget)) setTimeout(() => finish(false), 0); });
+    no.focus();
   }
 
   async function renameSession(s, title) {
@@ -554,7 +649,8 @@
   }
 
   /** Permanently delete a session (anthropics/claude-code#25304). The current one ends and a new one starts. */
-  async function deleteSession(s, { force = false } = {}) {
+  // quiet: asked from the sidebar, so the result goes in the hint line, not the conversation.
+  async function deleteSession(s, { force = false, quiet = false } = {}) {
     const current = s.id === state.sessionId;
     const warn = current && busy() ? ' JARVIS is still working - this stops it.' : '';
     if (!force && !(await confirmCard(`Delete "${s.title}"?`, `The conversation is deleted permanently and cannot be recovered.${warn}`, 'Delete'))) return false;
@@ -565,7 +661,8 @@
       return false;
     }
     if (r.own) await startFresh();
-    notice(`Deleted: ${s.title}`);
+    if (quiet) flashHint(`Deleted: ${s.title}`);
+    else notice(`Deleted: ${s.title}`);
     loadSessions();
     return true;
   }
@@ -667,9 +764,9 @@
   $('attachBtn').onclick = async () => { (await window.jarvis.pickFiles()).forEach(addAttachment); input.focus(); };
 
   // ------------------------------------------------------------- sending
-  async function submit(text, { fromComposer = true } = {}) {
+  async function submit(text, { fromComposer = true, origin = 'desk', attachments = [] } = {}) {
     const t = (text != null ? text : input.value).trim();
-    const atts = fromComposer ? ui.attachments.slice() : [];
+    const atts = fromComposer ? ui.attachments.slice() : attachments.slice();
     if (!t && !atts.length) return;
     // /delete runs here in the window, not in Claude Code: the app owns its session list.
     const del = /^\/delete(?:\s+([\s\S]*))?$/i.exec(t);
@@ -679,7 +776,7 @@
       return deleteCommand((del[1] || '').split(/\s+/).filter(Boolean));
     }
     if (state.status === 'closed' || state.status === 'offline') await window.jarvis.start(state.sessionId ? { resume: state.sessionId } : {});
-    const bubble = addUser(t, atts);
+    const bubble = addUser(t, atts, 0, null, origin);
     if (fromComposer) {
       input.value = '';
       ui.attachments = [];
@@ -688,7 +785,7 @@
     }
     closeSlash();
     JV.emit('user_sent', { text: t || `(${atts.length} attachment${atts.length > 1 ? 's' : ''})` });
-    const r = await window.jarvis.send({ text: t, attachments: atts });
+    const r = await window.jarvis.send({ text: t, attachments: atts, origin });
     if (r && r.ok) attachRewind(bubble, r.uuid);
     else {
       // Give the draft back unless something new has been typed meanwhile.
@@ -904,11 +1001,16 @@
   };
 
   // ------------------------------------------------------------- wiring
+  /** Esc and the Stop button both come here, so the result can be told apart from a crash. */
+  function stopTurn() {
+    state.userStopAt = Date.now();
+    window.jarvis.interrupt();
+  }
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && busy() && slashPop.hidden && modelPop.hidden && modePop.hidden) { e.preventDefault(); window.jarvis.interrupt(); }
+    if (e.key === 'Escape' && busy() && slashPop.hidden && modelPop.hidden && modePop.hidden) { e.preventDefault(); stopTurn(); }
   });
   sendBtn.onclick = () => submit();
-  stopBtn.onclick = () => window.jarvis.interrupt();
+  stopBtn.onclick = () => stopTurn();
   $('newSession').onclick = () => newSession();
   $('refreshSessions').onclick = () => loadSessions();
   $('sessionFilter').addEventListener('input', renderSessions);
@@ -925,6 +1027,32 @@
   JV.on('permission', permissionCard);
   JV.on('question', questionCard);
   JV.on('prompt_done', (e) => promptDone(e.id));
+
+  // ------------------------------------------------------------- remote control (Telegram)
+  // A message from your phone goes through submit() like a typed one - same bubble, same
+  // turn, same restart if the session was closed - but without touching the composer, so
+  // a draft you left there is still there. The view is not switched: whatever you were
+  // looking at stays put, and the conversation catches up when you open it.
+  JV.on('remote_prompt', (e) => {
+    const atts = Array.isArray(e?.attachments) ? e.attachments : [];
+    if (e?.text || atts.length) submit(e.text || '', { fromComposer: false, origin: 'telegram', attachments: atts });
+  });
+  // /new from the phone. remote.mjs only sends this while JARVIS is idle, so there is no
+  // "still working" question to ask - and nobody at the desk to answer it.
+  JV.on('remote_new', () => startFresh());
+  // /switch (or a tap on /sessions) from the phone.
+  JV.on('remote_switch', (e) => { if (e?.id) resumeSession(e.id, e.title || 'a session', { fromPhone: true }); });
+  // /stop from the phone: the ending reads "Stopped by you", as it does for Esc.
+  JV.on('remote_stop', () => { state.userStopAt = Date.now(); });
+  // Answered on the phone: the desk's card says so instead of "No longer needed".
+  JV.on('prompt_remote', (e) => {
+    const card = ui.prompts.get(e.id);
+    if (!card || card.classList.contains('done')) return;
+    const btns = card.querySelector('.pbtns');
+    if (btns) btns.replaceWith(el('div', 'pstate', e.verdict || 'Answered from your phone'));
+    card.querySelectorAll('button, input').forEach((x) => (x.disabled = true));
+    card.classList.add('done');
+  });
   JV.on('result', (e) => { turnFoot(e); JV.refreshSessionsSoon(); });
   JV.on('notice', (e) => notice(e.text));
   JV.on('command_output', (e) => commandOutput(e.text));

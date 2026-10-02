@@ -83,6 +83,15 @@ function cleanUserText(t) {
     .trim();
 }
 
+/** The "Attached files:" list buildContent adds, taken back out of a stored message as file chips. */
+function splitAttached(t) {
+  const m = /(?:^|\n\n)Attached files?:\n((?:- .+(?:\n|$))+)\s*$/.exec(t);
+  if (!m) return { text: t, files: [] };
+  const files = m[1].split('\n').map((l) => l.replace(/^- /, '').trim()).filter(Boolean)
+    .map((p) => ({ kind: 'file', name: path.basename(p), path: p }));
+  return { text: t.slice(0, m.index).trim(), files };
+}
+
 /**
  * Build the message content from the window's text and attachments.
  * Images go to the model as image blocks; other files are named by path so
@@ -280,6 +289,15 @@ export class JarvisSession {
         ? entry.suggestions.map((s) => ({ ...s, destination: 'session' }))
         : null;
       entry.resolve({ behavior: 'allow', updatedInput: entry.input, ...(updatedPermissions ? { updatedPermissions } : {}) });
+    } else if (d.type === 'reply' && String(d.text || '').trim()) {
+      // Neither yes nor no: the user wrote something instead. The tool does not run now;
+      // Claude reads the message, deals with it, and asks for the same action again.
+      entry.resolve({
+        behavior: 'deny',
+        message: 'The user has not decided on this action yet. Instead of answering, they wrote:\n\n'
+          + `${clip(String(d.text).trim(), 4000)}\n\n`
+          + 'Respond to that first. Then, if the action is still needed, request it again (make the same tool call) so they can approve or deny it.',
+      });
     } else {
       entry.resolve({ behavior: 'deny', message: d.message || 'The user declined this action.' });
     }
@@ -703,12 +721,14 @@ export async function loadHistory(cwd, sessionId) {
     if (m.type === 'user') {
       // uuid: the message's id, which file checkpoints (rewind) are keyed by.
       if (typeof content === 'string') {
-        const t = cleanUserText(content);
-        if (t) out.push({ role: 'user', text: t, uuid: m.uuid || null });
+        const { text: t, files } = splitAttached(cleanUserText(content));
+        if (t || files.length) out.push({ role: 'user', text: t, attachments: files, uuid: m.uuid || null });
       } else if (Array.isArray(content)) {
-        const t = cleanUserText(content.filter((b) => b.type === 'text').map((b) => b.text).join('\n'));
-        const images = content.filter((b) => b.type === 'image').length;
-        if (t || images) out.push({ role: 'user', text: t, images, uuid: m.uuid || null });
+        const { text: t, files } = splitAttached(cleanUserText(content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')));
+        // The pictures themselves, so a reopened conversation shows them as it did live.
+        const imgs = content.filter((b) => b.type === 'image' && b.source?.type === 'base64' && typeof b.source.data === 'string')
+          .map((b, i) => ({ kind: 'image', name: `image ${i + 1}`, mediaType: b.source.media_type, data: b.source.data }));
+        if (t || imgs.length || files.length) out.push({ role: 'user', text: t, attachments: [...imgs, ...files], uuid: m.uuid || null });
       }
     } else if (m.type === 'assistant' && Array.isArray(content)) {
       for (const b of content) {

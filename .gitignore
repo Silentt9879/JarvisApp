@@ -1,6 +1,7 @@
 # Build output. electron-builder writes an unpacked app and a 220 MB+ JARVIS.exe here;
 # it is produced by `npm run pack` and never belongs in history.
 dist/
+dist-next/
 out/
 release/
 

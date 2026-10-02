@@ -28,7 +28,7 @@
         break;
       case 'account': state.account = e; break;
       case 'commands': state.commands = e.list; break;
-      case 'agents': state.agentList = e.list; break;
+      case 'agents': state.agentList = e.list; state.agentsLoaded = true; break;
       case 'models': state.models = e.list; break;
       case 'mcp': state.mcp = e.list; break;
       case 'context': state.context = e; break;
@@ -114,8 +114,15 @@
       case 'result': {
         const t = state.turns.slice().reverse().find((x) => x.end && x.durationMs === e.durationMs);
         const secs = e.durationMs ? `${(e.durationMs / 1000).toFixed(1)}s` : '';
-        JV.feed({ level: e.ok ? 'ok' : 'err', title: e.ok ? `Reply complete${secs ? ` in ${secs}` : ''}` : `Turn stopped (${e.subtype})`, sub: t ? JV.clip(t.prompt, 60) : '', action: 'chat' });
-        if (state.view !== 'chat' || !document.hasFocus()) JV.notify(e.ok ? 'JARVIS has finished, sir.' : `The turn stopped (${e.subtype}).`, { level: e.ok ? 'ok' : 'err', action: 'chat', desktop: true });
+        // You stopped it yourself: a quiet line in the feed, and no notification - you know.
+        const byYou = !e.ok && JV.stoppedByUser();
+        JV.feed({
+          level: e.ok ? 'ok' : byYou ? 'info' : 'err',
+          title: e.ok ? `Reply complete${secs ? ` in ${secs}` : ''}` : byYou ? 'Stopped by you' : `Turn stopped (${e.subtype})`,
+          sub: t ? JV.clip(t.prompt, 60) : '',
+          action: 'chat',
+        });
+        if (!byYou && (state.view !== 'chat' || !document.hasFocus())) JV.notify(e.ok ? 'JARVIS has finished, sir.' : `The turn stopped (${e.subtype}).`, { level: e.ok ? 'ok' : 'err', action: 'chat', desktop: true });
         JV.emit('turns');
         JV.emit('agents_changed');
         refreshWorkspaceSoon();
@@ -134,6 +141,7 @@
       case 'context': renderBottom(); resolveEffort(e.model); break;
       case 'error': JV.feed({ level: 'err', title: 'Error', sub: JV.clip(e.message, 90), action: 'chat' }); JV.notify(e.message, { level: 'err', action: 'chat' }); break;
       case 'notice': JV.feed({ level: 'info', title: e.text, action: 'chat' }); break;
+      case 'remote_prompt': JV.feed({ level: 'live', title: !e.attachments?.length ? 'Message from your phone' : e.attachments[0].kind === 'image' ? 'Photo from your phone' : 'File from your phone', sub: JV.clip(e.text || e.attachments?.[0]?.name || '', 80), action: 'chat' }); break;
       default: break;
     }
   }
@@ -150,6 +158,7 @@
 
   // Turns are recorded when the user sends, so the timeline can show them running.
   JV.on('user_sent', (d) => {
+    state.userStopAt = null; // a new message: whatever ends next was not stopped by you yet
     state.turns.push({ start: Date.now(), prompt: d.text, end: null });
     if (!state.sessionStart) state.sessionStart = Date.now();
     JV.emit('turns');
@@ -189,16 +198,16 @@
   function renderSysStatus() {
     const reasons = [];
     let level = 'ok';
-    let word = 'OPTIMAL';
-    if (state.status === 'closed' || state.status === 'offline') { level = 'bad'; word = 'OFFLINE'; reasons.push('The Claude Code session is not running.'); }
-    else if (state.status === 'starting') { level = 'info'; word = 'CONNECTING'; }
-    else if (state.pendingPrompts > 0 || state.status === 'waiting') { level = 'warn'; word = 'AWAITING YOU'; reasons.push('JARVIS is waiting for your decision.'); }
+    let word = 'All systems normal';
+    if (state.status === 'closed' || state.status === 'offline') { level = 'bad'; word = 'Offline'; reasons.push('The Claude Code session is not running.'); }
+    else if (state.status === 'starting') { level = 'info'; word = 'Connecting'; }
+    else if (state.pendingPrompts > 0 || state.status === 'waiting') { level = 'warn'; word = 'Awaiting you'; reasons.push('JARVIS is waiting for your decision.'); }
     const bad = state.mcp.filter((m) => m.status === 'failed' || m.status === 'needs-auth');
     if (bad.length) reasons.push(`${bad.map((m) => m.name).join(', ')}: not connected.`);
     const k = state.workspace?.knowledge;
     if (k && k.state !== 'current') reasons.push(`Knowledge is ${k.state === 'stale' ? 'stale' : k.state}.`);
-    if (level === 'ok' && reasons.length) { level = 'warn'; word = 'ATTENTION'; }
-    if (level === 'ok' && state.status === 'working') word = 'OPTIMAL · WORKING';
+    if (level === 'ok' && reasons.length) { level = 'warn'; word = 'Needs attention'; }
+    if (level === 'ok' && state.status === 'working') word = 'Working';
     const box = $('sysStatus');
     box.className = `sys-status l-${level}`;
     $('sysStatusText').textContent = word;
@@ -234,17 +243,17 @@
     if (q.length < 2) { sRes.hidden = true; return; }
     const ql = q.toLowerCase();
     const groups = [];
-    const views = [['Command Center', 'command'], ['AI Core', 'core'], ['Agents', 'agents'], ['Tasks', 'tasks'], ['Memory', 'memory'], ['Conversations', 'chat'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Workspace', 'workspace'], ['Devices', 'devices'], ['Files', 'files']]
+    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['Source Control', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Agents', 'agents'], ['Workspace', 'workspace'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
       .filter(([n]) => n.toLowerCase().includes(ql)).map(([n, v]) => ({ title: n, sub: 'Go to view', run: () => JV.show(v) }));
-    if (views.length) groups.push(['VIEWS', views]);
+    if (views.length) groups.push(['Views', views]);
     const sessions = state.sessions.filter((s) => s.title.toLowerCase().includes(ql)).slice(0, 6).map((s) => ({ title: s.title, sub: JV.ago(s.lastModified), run: () => JV.chat.resumeSession(s.id, s.title) }));
-    if (sessions.length) groups.push(['SESSIONS', sessions]);
+    if (sessions.length) groups.push(['Sessions', sessions]);
     const agents = state.agentList.filter((a) => (a.name + ' ' + a.description).toLowerCase().includes(ql)).slice(0, 4).map((a) => ({ title: JV.agentInfo(a).code, sub: JV.agentInfo(a).role, run: () => JV.show('agents') }));
-    if (agents.length) groups.push(['AGENTS', agents]);
+    if (agents.length) groups.push(['Agents', agents]);
     const cmds = state.commands.filter((c) => c.name.toLowerCase().includes(ql)).slice(0, 5).map((c) => ({ title: `/${c.name}`, sub: JV.clip(c.description, 70), run: () => JV.chat.insert(`/${c.name} `) }));
-    if (cmds.length) groups.push(['COMMANDS', cmds]);
+    if (cmds.length) groups.push(['Commands', cmds]);
     const repos = (state.workspace?.repos || []).filter((r) => (r.name + ' ' + r.nickname).toLowerCase().includes(ql)).map((r) => ({ title: r.nickname, sub: `${r.name} · ${r.branch}`, run: () => JV.show('workspace') }));
-    if (repos.length) groups.push(['REPOS', repos]);
+    if (repos.length) groups.push(['Repos', repos]);
     renderResults(groups, true);
     const docs = await window.jarvis.search(q);
     if (seq !== sSeq) return;
@@ -256,7 +265,7 @@
         else { JV.show('knowledge'); JV.openDoc($('kReader'), h.root, h.path, h.name); }
       },
     }));
-    if (d.length) groups.push(['DOCUMENTS', d]);
+    if (d.length) groups.push(['Documents', d]);
     renderResults(groups, false);
   }
   let sItems = [];
@@ -285,7 +294,9 @@
   sIn.addEventListener('input', () => { clearTimeout(sTimer); sTimer = setTimeout(runSearch, 220); });
   sIn.addEventListener('focus', () => { if (sIn.value.trim().length >= 2) runSearch(); });
   sIn.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { sRes.hidden = true; sIn.blur(); return; }
+    // stopPropagation: Esc here closes the results, and must not also reach the chat's
+    // document-wide Esc, which would interrupt a running turn.
+    if (e.key === 'Escape') { e.stopPropagation(); sRes.hidden = true; sIn.blur(); return; }
     if (!sItems.length) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
@@ -296,31 +307,150 @@
     } else if (e.key === 'Enter') { e.preventDefault(); pick(sItems[sSel].it); }
   });
   JV.registerPop(sRes, $('search'));
+  // ------------------------------------------------------------- keyboard shortcuts
+  //   Ctrl+K      search                Ctrl+1-6  the six views in the sidebar, in order
+  //   Ctrl+N      new session           Ctrl+,    settings
+  // Digits are read from e.code, not e.key, so they work on any keyboard layout. None of
+  // these combinations does anything by default in this window (it has no menu), so taking
+  // them costs nothing - including while typing in the composer.
+  const PRIMARY = ['chat', 'command', 'tasks', 'source', 'files', 'memory'];
   document.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); sIn.focus(); sIn.select(); }
+    if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    const key = e.key.toLowerCase();
+    // e.code first (layout-independent); e.key when a synthetic event leaves code empty.
+    const digit = /^Digit([1-6])$/.exec(e.code) || (!e.code && /^([1-6])$/.exec(e.key));
+    if (key === 'k') { e.preventDefault(); closeSettings(); sIn.focus(); sIn.select(); }
+    else if (digit) { e.preventDefault(); closeSettings(); JV.show(PRIMARY[Number(digit[1]) - 1]); }
+    else if (key === 'n') { e.preventDefault(); closeSettings(); JV.show('chat'); JV.chat.newSession(); }
+    else if (key === ',') { e.preventDefault(); if ($('settingsVeil').hidden) openSettings(); else closeSettings(); }
   });
+  // The shortcut is part of each entry's tooltip, so it can be discovered by hovering.
+  PRIMARY.forEach((v, i) => {
+    const b = document.querySelector(`#navList button[data-view="${v}"]`);
+    if (b) b.dataset.key = `Ctrl+${i + 1}`;
+  });
+  $('newSession').title = 'New session (Ctrl+N)';
+  $('settingsBtn').title = 'Settings (Ctrl+,)';
 
   // ------------------------------------------------------------- settings
+  let settingsReturn = null; // where keyboard focus goes back to when Settings closes
   function openSettings() {
     const a = state.account || {};
     const dl = $('settingsInfo');
     dl.replaceChildren();
     const rows = [
       ['Account', a.email || '–'],
-      ['Plan', a.subscriptionType || a.apiProvider || '–'],
-      ['Workspace', state.info?.cwd || '–'],
+      ['Plan', JV.planName(a) || '–'],
       ['JARVIS app', state.info ? `v${state.info.version} · Electron ${state.info.electron}` : '–'],
       ['Claude Code', state.version ? `v${state.version}` : '–'],
     ];
     for (const [k, v] of rows) { dl.appendChild(el('dt', null, k)); dl.appendChild(el('dd', null, v)); }
+    renderWorkspace();
+    renderThemeSeg();
+    JV.loadAlerts?.();
     $('prefNotify').checked = !!JV.prefs.notify;
     $('prefMotion').checked = !!JV.prefs.reduceMotion;
     $('pref24h').checked = !!JV.prefs.h24;
+    loadStartup();
+    if ($('settingsVeil').hidden) settingsReturn = document.activeElement;
     $('settingsVeil').hidden = false;
+    $('settingsClose').focus();
+  }
+  function closeSettings() {
+    if ($('settingsVeil').hidden) return;
+    $('settingsVeil').hidden = true;
+    $('wsConfirm').hidden = true;
+    if (settingsReturn && document.contains(settingsReturn)) settingsReturn.focus();
+    settingsReturn = null;
+  }
+  JV.openSettings = openSettings;
+
+  // ------------------------------------------------------------- workspace folder
+  // Picking a folder only proposes it; the switch happens on "Restart in this folder",
+  // because the session, the file index and every git read are tied to the folder they
+  // started in, so JARVIS restarts into the new one rather than half-switching.
+  let wsPending = null;
+  function renderWorkspace() {
+    const info = state.info || {};
+    $('wsPath').textContent = info.cwd || '–';
+    $('wsPath').title = info.cwd || '';
+    const missing = info.cwd && info.cwdExists === false;
+    $('wsPath').parentElement.classList.toggle('missing', !!missing);
+    $('wsPathNote').textContent = missing
+      ? 'This folder does not exist on this machine - choose the right one.'
+      : 'The folder JARVIS works in: its repos, CLAUDE.md and .claude settings.';
+  }
+  $('wsChange').onclick = async () => {
+    const r = await window.jarvis.pickWorkspace();
+    if (!r?.ok) return;
+    if (r.path === state.info?.cwd) { $('wsConfirm').hidden = true; return; }
+    wsPending = r.path;
+    $('wsNew').textContent = r.path;
+    $('wsConfirm').hidden = false;
+    $('wsGo').focus();
+  };
+  $('wsCancel').onclick = () => { wsPending = null; $('wsConfirm').hidden = true; $('wsChange').focus(); };
+  $('wsGo').onclick = async (e) => {
+    if (!wsPending) return;
+    e.currentTarget.disabled = true;
+    const r = await window.jarvis.setWorkspace(wsPending);
+    if (r?.ok && r.restarting) { $('wsGo').textContent = 'Restarting…'; return; }
+    e.currentTarget.disabled = false;
+    if (r?.unchanged) { $('wsConfirm').hidden = true; return; }
+    JV.notify(r?.error || 'Could not switch to that folder.', { level: 'err', action: openSettings });
+  };
+
+  // ------------------------------------------------------------- appearance
+  // "System" follows Windows; Light and Dark pin one, through data-theme on <html>,
+  // which the stylesheet gives priority over the prefers-color-scheme query.
+  const THEMES = [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']];
+  const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    const t = JV.prefs.theme === 'light' || JV.prefs.theme === 'dark' ? JV.prefs.theme : 'system';
+    if (t === 'system') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = t;
+    // The caption buttons are the system's, not the page's: tell it which theme is showing.
+    const shown = t === 'system' ? (systemDark.matches ? 'dark' : 'light') : t;
+    window.jarvis.titleBar?.(shown).catch?.(() => {});
+  }
+  // Following Windows: when it switches light/dark, so do the caption buttons.
+  systemDark.addEventListener('change', () => { if ((JV.prefs.theme || 'system') === 'system') applyTheme(); });
+  function renderThemeSeg() {
+    const seg = $('themeSeg');
+    seg.replaceChildren();
+    for (const [value, label] of THEMES) {
+      const on = (JV.prefs.theme || 'system') === value;
+      const b = el('button', on ? 'on' : null, label);
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', String(on));
+      b.onclick = () => { JV.prefs.theme = value; JV.savePrefs(); applyTheme(); renderThemeSeg(); seg.querySelector('.on')?.focus(); };
+      seg.appendChild(b);
+    }
   }
   $('settingsBtn').onclick = openSettings;
-  $('settingsClose').onclick = () => { $('settingsVeil').hidden = true; };
-  $('settingsVeil').addEventListener('mousedown', (e) => { if (e.target === $('settingsVeil')) $('settingsVeil').hidden = true; });
+  $('settingsClose').onclick = closeSettings;
+  $('settingsVeil').addEventListener('mousedown', (e) => { if (e.target === $('settingsVeil')) closeSettings(); });
+  // Esc closes Settings - and only that. The chat listens for Esc on the whole document to
+  // interrupt a running turn, so this runs first (capture phase, on window) and stops the
+  // event there: dismissing a dialog must never stop JARVIS mid-task.
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || $('settingsVeil').hidden) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!$('wsConfirm').hidden) { $('wsCancel').click(); return; }
+    closeSettings();
+  }, true);
+  // Tab stays inside the dialog while it is open, as it would in a native one.
+  $('settingsVeil').addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const items = [...$('settingsVeil').querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter((n) => !n.disabled && n.offsetParent !== null);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
   $('prefNotify').onchange = (e) => {
     JV.prefs.notify = e.target.checked;
     JV.savePrefs();
@@ -328,6 +458,21 @@
   };
   $('prefMotion').onchange = (e) => { JV.prefs.reduceMotion = e.target.checked; JV.savePrefs(); applyMotion(); };
   $('pref24h').onchange = (e) => { JV.prefs.h24 = e.target.checked; JV.savePrefs(); tick(); };
+  // Start with Windows lives in the registry, not jarvis.prefs: it is read back each time.
+  async function loadStartup() {
+    const box = $('prefLogin');
+    try {
+      const s = await window.jarvis.startup();
+      box.checked = !!s.atLogin;
+      box.disabled = !s.available;
+      $('prefLoginRow').title = s.available ? '' : 'Only the installed JARVIS.exe can start with Windows, not a development run.';
+    } catch { box.disabled = true; }
+  }
+  $('prefLogin').onchange = async (e) => {
+    const r = await window.jarvis.setStartup(e.target.checked);
+    if (!r?.ok) JV.notify(r?.error || 'Windows did not take the change.', { level: 'err', action: openSettings });
+    loadStartup();
+  };
   $('openLogs').onclick = () => window.jarvis.openLogs();
   function applyMotion() { document.body.classList.toggle('still', !!JV.prefs.reduceMotion); JV.startOrb(); }
 
@@ -347,11 +492,28 @@
     $('navToggle').title = collapsed ? 'Widen the sidebar' : 'Narrow the sidebar';
     try { localStorage.setItem(NAV_KEY, collapsed ? '1' : '0'); } catch { /* storage off */ }
   }
-  for (const b of document.querySelectorAll('#navList button')) {
-    if (!b.title) b.title = b.querySelector('span')?.textContent || '';
+  for (const b of document.querySelectorAll('#navList button[data-view]')) {
+    if (!b.title) b.title = `${b.querySelector('span')?.textContent || ''}${b.dataset.key ? ` (${b.dataset.key})` : ''}`;
   }
   $('navToggle').onclick = () => setNav(!document.body.classList.contains('nav-collapsed'));
   try { if (localStorage.getItem(NAV_KEY) === '1') setNav(true); } catch { /* storage off */ }
+
+  // The "More" group: the six views that are not daily, folded away but remembered open.
+  const MORE_KEY = 'jarvis.navMore';
+  $('navMore').setAttribute('aria-controls', 'navGroup');
+  function setMore(open) {
+    $('navGroup').classList.toggle('open', open);
+    $('navMore').classList.toggle('open', open);
+    $('navMore').setAttribute('aria-expanded', String(open));
+    try { localStorage.setItem(MORE_KEY, open ? '1' : '0'); } catch { /* storage off */ }
+  }
+  $('navMore').onclick = () => setMore(!$('navGroup').classList.contains('open'));
+  try { if (localStorage.getItem(MORE_KEY) === '1') setMore(true); } catch { /* storage off */ }
+  // Navigating to one of them from anywhere (search, a panel link) opens the group, so the
+  // highlighted entry is never hidden.
+  JV.on('view', (v) => {
+    if ($('navGroup').querySelector(`button[data-view="${v}"]`)) setMore(true);
+  });
 
   $('focusBtn').onclick = () => JV.setFocus(!document.body.classList.contains('focus'));
   // The sidebar is hidden in focus mode, so this is the way back that is always visible.
@@ -383,7 +545,7 @@
     $('miniState').textContent = word;
     const running = [...state.agentActive.keys()];
     $('miniSub').textContent = running.length ? `${running.map((n) => JV.agentInfo({ name: n, description: (state.agentList.find((a) => a.name === n) || {}).description || '' }).code).join(', ')} on task` : state.status === 'ready' ? 'Click to talk to JARVIS' : ' ';
-    $('coreMini').className = `core-mini hud-panel s-${state.status}`;
+    $('coreMini').className = `core-mini s-${state.status}`;
   }
 
   // ------------------------------------------------------------- bottom bar
@@ -430,8 +592,9 @@
   // ------------------------------------------------------------- boot
   (async () => {
     JV.fillIcons();
+    applyTheme();
     applyMotion();
-    JV.wave($('miniWave'), 34);
+    JV.wave($('miniWave'));
     JV.renderBell();
     renderSysStatus();
     renderMini();

@@ -3,12 +3,13 @@
 //   node scripts/smoke.mjs B  - a BantuApps session stopped right after "init"
 //                               (proves CLAUDE.md, agents and MCP servers load; no model turn)
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { requireWorkspace } from './workspace.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const exe = path.join(root, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-win32-x64', 'claude.exe');
-const cwd = 'C:\\Users\\bantu\\Downloads\\BantuApps';
+const cwd = requireWorkspace();
 const t0 = Date.now();
 const log = (...a) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s]`, ...a);
 const which = (process.argv[2] || 'A').toUpperCase();

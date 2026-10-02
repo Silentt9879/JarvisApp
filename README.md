@@ -7,6 +7,52 @@ servers, on the signed-in Claude account.
 
 Desktop shortcut **JARVIS** -> `dist\win-unpacked\JARVIS.exe`.
 
+The workspace folder is chosen in **Settings → Workspace** and saved as `cwd` in
+`%APPDATA%\JARVIS\config.json`; until one is chosen it is `DEFAULT_CWD` in `src\main.mjs`.
+Settings marks the path in red when it does not exist on this machine. Switching restarts
+JARVIS into the new folder rather than half-switching: the session, the file index, the
+memory path and every git read are tied to the folder they started in. The restart stops
+everything the app started first (`shutdownChildren`), so no `claude.exe`, `dotnet watch` or
+`flutter run` is left behind working on the old folder.
+
+## Design
+
+Flat, neutral and quiet. One surface family, 1px borders instead of glows, type at its
+natural letter-spacing, and colour reserved for things that mean something: a state, a
+severity, a diff side. Every value is a token in `:root`, and every token is defined twice,
+so the window follows the operating system's light/dark setting. Settings → Appearance pins
+**System**, **Light** or **Dark**; pinning sets `data-theme` on `<html>`, which the
+stylesheet gives priority over `prefers-color-scheme`.
+
+The window opens on **Chat**, because that is what the app is for. Six views sit in the
+sidebar; the six you reach for less often are folded under **More**, which remembers
+whether you left it open (`localStorage`, `jarvis.navMore`) and opens itself whenever you
+navigate to something inside it. **Ctrl+K** still reaches any view by name, so nothing is
+more than one keystroke away.
+
+| Keys | Does |
+|---|---|
+| **Ctrl+1** … **Ctrl+6** | Chat, Overview, Tasks, Source Control, Files, Memory - the sidebar's order |
+| **Ctrl+N** | New session (asks first if JARVIS is mid-turn) |
+| **Ctrl+K** | Search |
+| **Ctrl+,** | Settings (again to close) |
+| **Esc** | Stops a running turn - unless a dialog or the search results are open, which it closes instead |
+
+Digits are read from `KeyboardEvent.code`, so the shortcuts work on any keyboard layout. Each
+sidebar entry shows its shortcut in its tooltip.
+
+Esc used to do both at once: the chat listens for it on the whole document, so closing the
+search results or a dialog while JARVIS worked also stopped the turn. Now the search box
+stops the event itself, and Settings catches Esc in the capture phase on `window`, before
+the chat can see it. A stop you make yourself reads **Stopped by you** - Claude Code reports
+an interrupt as `error_during_execution` with a diagnostic string, which used to be drawn
+as a red error card and a "the turn stopped" notification for something you had just done.
+
+Settings is a proper dialog: focus moves into it, Tab stays inside it, Esc closes it, and
+focus returns to where it was. The sidebar marks the current view with `aria-current`,
+**More** reports `aria-expanded`, Source Control's tabs are a `tablist`, and the theme and
+alert-route switches are radio groups.
+
 ## Views
 
 Every panel shows real data. Nothing is invented; where there is no source (weather,
@@ -14,12 +60,12 @@ location, calendar) there is no panel.
 
 | View | What it shows | Source |
 |---|---|---|
-| **Command Center** | The core orb, the live intelligence feed, active specialists, the mission timeline, CPU / RAM / disk, models and connected systems | session events, `os`, git, knowledge files |
+| **Overview** | The session's state in a line, the activity feed, this machine's CPU / RAM / disk, the specialists, the session's turns and tasks, models and connected systems | session events, `os`, git, knowledge files |
 | **AI Core** | Model, effort, thinking, mode, Claude Code version, account, the context window by category, memory files in context | `getContextUsage`, `initializationResult` |
 | **Agents** | The specialists, lit while working; click for the brief, or hand one a task | `supportedAgents`, `.claude/agents/*.md` |
 | **Tasks** | Your ClickUp board (every sprint, every status), the workspace draft of work not logged yet, this session's task list and turns, the handoff's CURRENT FOCUS | ClickUp MCP (cached), `clickup-task-draft.md`, TodoWrite / TaskCreate / TaskUpdate, `JARVIS_HANDOFF.md` |
 | **Memory** | Memories as a star map (lines are `[[links]]`) and a reader | `~\.claude\projects\...\memory` |
-| **Conversations** | The chat and recent sessions (terminal and VS Code sessions too); hover a session to rename or delete it, hover your message to undo its file changes | Claude Agent SDK |
+| **Chat** (the default) | The chat and recent sessions (terminal and VS Code sessions too); hover a session to rename or delete it, hover your message to undo its file changes | Claude Agent SDK |
 | **Knowledge Base** | Knowledge, rules, agents, skills and commands; stale warning + `/relearn` | `.claude\*`, `scan-status.py --json` |
 | **Tools & Skills** | Slash commands and skills, MCP servers with their tools, built-in tools | `supportedCommands`, `mcpServerStatus` |
 | **Workspace** | The nine repos (branch, ahead/behind, modified/staged/untracked, last commit, open in VS Code), open issues, knowledge freshness | `git --no-optional-locks status`, `open-issues.md` |
@@ -31,10 +77,15 @@ reasons), clock, search (Ctrl+K: views, sessions, agents, commands, repos, docum
 notifications, settings, the signed-in account. Bottom bar: network, session time, context
 and Executive Briefing.
 
-The chevron beside the JARVIS mark narrows the sidebar to a 66px icon rail - labels and the
-Core Status panel go, badges shrink to corner pills, and every button keeps its name as a
+The chevron beside the JARVIS mark narrows the sidebar to a 56px icon rail - labels and the
+status chip's words go, badges shrink to corner pills, and every button keeps its name as a
 tooltip. The chevron moves under the mark so it is still reachable, and the choice is
 remembered in `localStorage` under `jarvis.navCollapsed`.
+
+The identity is kept but quiet: the wordmark, a status dot at the foot of the sidebar, and
+one line on the Overview. The animated core orb is gone - its canvas is still in the page,
+and `drawOrb` still works if it is ever given a size again, but nothing draws while it has
+none, so there is no animation frame being spent on it.
 
 ## The composer
 
@@ -193,9 +244,172 @@ without leaving JARVIS.
 
 ### Phone alerts - a buzz in your pocket when work stops
 
-The strip above the phones: **Alert my phone when work stops**. Pick a phone, turn it on, and
-JARVIS notifies it when a turn finishes or when it is blocked waiting for you, so a long job
-can be started and left.
+**Settings → Phone alerts**: **Alert my phone when work stops**. Turn it on and JARVIS tells
+you when a turn finishes or when it is blocked waiting for you, so a long job can be started
+and left. It used to sit above the phones on the Devices page; it moved beside the desktop
+notification setting, where you would look for it, because the Telegram route has nothing
+to do with the phones plugged in. **Only for turns longer than N seconds** sets
+`minSeconds`; approvals and questions come through whatever it says.
+
+There are two routes, and the strip switches between them. `createPhoneWatcher` decides
+*when* to buzz; the route decides *how*, through the `send` function main.mjs hands it, so
+the rules below about what earns a buzz are identical either way.
+
+| Route | Reaches the phone | Needs | Privacy |
+|---|---|---|---|
+| **This phone** (`adb`) | On the cable, or the same Wi-Fi | Nothing on the phone | The text never leaves this machine |
+| **Telegram** | Anywhere it has signal, including mobile data | A bot you make once, free | The text passes through Telegram |
+
+#### Telegram - the route that works away from the house
+
+Three steps, all in Settings, and no phone number anywhere:
+
+1. In Telegram, message **@BotFather** and send `/newbot`. Paste the token it gives you into
+   the box and press **Check token**. JARVIS asks Telegram whether the token is real
+   (`getMe`) and only then writes it to `config.json`.
+2. Open your new bot in Telegram and send it anything. Press **Find my chat**: JARVIS reads
+   the chat id out of `getUpdates`, so it never has to be looked up by hand. A private chat
+   is preferred over a group, and the newest wins.
+3. **Test**.
+
+- **The token is a credential and is treated as one.** It goes one way - the window posts it
+  to the main process and is never given it back; `phoneConfigForWindow` tells the window
+  only whether a token is set and what the bot is called. It is never logged, and `redact()`
+  in `telegram.mjs` scrubs it out of error text before that text reaches the window or the
+  log (Telegram puts the token in the URL, so `fetch`'s own failure messages carry it).
+- Messages are sent as plain text with no `parse_mode`. A body can contain a file path, a
+  tool name or whatever the model last said, and none of that is written to be safe inside
+  Telegram's Markdown - one unbalanced asterisk would fail the whole send.
+- A `429` is waited out once, for as long as Telegram says. Everything else is reported in
+  Telegram's own words, which are clearer than anything worth writing here.
+- Because the text does leave the machine on this route, the bodies are kept short on detail.
+
+#### Remote control - talk to JARVIS from Telegram
+
+**Settings → Phone alerts → Chat with JARVIS from Telegram.** With it on, your bot's chat is
+a second keyboard: what you send it runs on this PC exactly as if you had typed it, approvals
+and questions come to the chat as buttons, and the reply comes back when the turn ends. The
+desk shows the message too, tagged *via Telegram*, and the feed says a message came in.
+`src/remote.mjs`; tested by `node scripts/remote-test.mjs`.
+
+| In the chat | Does |
+|---|---|
+| any message | Runs it - queued behind a running turn, like typing at the desk |
+| a button on an approval | **Deny**, **Allow once**, or **Allow for this session** where the desk would offer it |
+| a button on a question | That option; for several-answer questions tick them, then **Done**. Or reply with your own words |
+| `/status` | Working, waiting or standing by; how many decisions wait on you; model, mode, folder |
+| `/stop` | Stops the running turn (the desk reads "Stopped by you") |
+| `/new` | New session - refused mid-turn, `/stop` first |
+| `/sessions` | The 8 most recent sessions, the current one marked ▶, a button for each - tap to carry it on |
+| `/switch <n or words>` | Resume session *n* from the last list, or the one whose title matches; says where it left off. Refused mid-turn |
+| `/screen` | A screenshot of every screen, as photos (a file if Telegram refuses the size) |
+| `/diff` | Which repositories have uncommitted, unpushed or unpulled work |
+| `/diff <repo>` | That repo's `git diff --stat` and new files, with the full patch attached as a `.diff` file |
+| `/brief` | The morning brief now. `/brief off`, `/brief on`, `/brief 07:30` change its schedule |
+| a voice note | Transcribed on this PC, shown back as `🎙 "…"`, then handled exactly like typed text |
+| `/help` | The list |
+| other `/commands` | Go to Claude Code as typed (`/compact`, `/context`, `/cost` …) - except `/delete`, which only works at the desk |
+
+**Show the PC's conversation in Telegram** (under remote control, needs it on) mirrors the
+desk too: a message typed at the PC appears in the chat as `💻 PC: …`, then each of JARVIS's
+replies as it is written, so the chat holds the whole conversation. A mirrored turn is
+claimed, so no "finished" alert repeats it; a desk turn that stopped is left to the alerts.
+The text passes through Telegram, which is why it is off until switched on.
+
+**Nudges.** An approval or question on the phone left unanswered for 30 seconds gets one
+more message - "⏰ JARVIS is still waiting for you…", sent as a reply to it, so the phone
+buzzes again and a tap jumps to the buttons. One kept at the desk because the window had
+focus, and not answered there within 30 seconds, is sent on to the phone with its buttons:
+the window can have focus with nobody in front of it. Both only while remote control is on.
+
+**Which turns reach the phone.** A turn you started from the phone sends you everything: its
+approvals, its questions, its reply, and *typing…* while it works (paused while it waits on
+you). A turn started at the desk sends its approvals and questions to the phone only while
+the window does not have focus - you have stepped away - and its ending goes out as the
+usual alert, so you never get an alert and a button for the same thing (remote control
+"claims" what it sends, and `phone.event` stays quiet about a claimed event). A prompt
+answered at the desk loses its buttons on the phone ("answered at the desk"); one answered
+on the phone shows the verdict on the desk's card ("✓ Allowed once from your phone").
+
+**The rules, and why each exists** - this is a way to drive Claude Code on this PC from
+anywhere, so:
+
+- **Off unless switched on**, with a plain-words confirmation, and only once the Telegram
+  route is set up. Switching it on says so in the chat, which also proves the route works.
+- **Only your chat is obeyed**: a private chat whose id is the configured one, from the
+  user with that same id. Telegram sets `from` on its own servers, so it cannot be forged
+  from outside. Anyone else - a stranger who finds the bot, a group it was added to - gets
+  silence, which confirms nothing, and one line in `jarvis.log`.
+- **Nothing runs late.** A message sent while JARVIS was closed, or while remote control was
+  off, is never executed afterwards: Telegram would happily deliver it later, and it was
+  written to a JARVIS that was not listening. The clock restarts every time listening
+  starts - at launch, on switching back on, and after **Find my chat** (so the "hi" you sent
+  to be found is not run either). One note in the chat says what was skipped.
+- **A button counts only on the message it was sent on.** Buttons carry a short local key,
+  and a tap is accepted only if it comes from you *and* from the message id recorded for
+  that prompt - so a look-alike message with forged buttons, from anyone holding the bot
+  token, cannot approve anything. A second tap, or a tap after the desk answered, does
+  nothing: `respond()` takes the first answer for a prompt and ignores the rest.
+- **The desk's gates, unchanged.** Approvals still need approving; there is no bypass mode;
+  *Allow for this session* appears only where the desk offers it, on its own row away from
+  *Allow once*, and means this session - never a settings file.
+- **Screenshot runs never listen** (`JARVIS_CAPTURE`): they start and quit on their own and
+  must not take a real message off the queue. `JARVIS_REMOTE_TEST=1` overrides that for a
+  run that is about remote control.
+- **One reader at a time.** Telegram serves a single `getUpdates` per bot; a second reader
+  (another JARVIS, a bot tool) gets `409 Conflict`, logged once and retried quietly.
+
+JARVIS has to be running for any of this - minimized is fine - and the PC awake. So while
+remote control is on, JARVIS keeps the PC from sleeping (`powerSaveBlocker`,
+`prevent-app-suspension`: the screen may still turn off and lock), and closing the window
+hides it to the tray instead of quitting - the window is what submits a Telegram message, so
+it must stay alive. Quit from the tray icon's menu. Both stop when remote control is switched
+off. **Settings → Preferences → Start JARVIS when Windows starts** registers the packaged
+exe with `--hidden`, so it comes up in the tray at login (not offered in a development run,
+which would register `electron.exe`). Closing a laptop lid can still sleep it, depending on
+Windows' lid setting. Text and
+photos: a photo goes to the model as an image (the largest size Telegram has that fits the
+3.75 MB limit), with its caption as the message - an image sent "as a file" works too if it
+is PNG, JPEG, GIF or WebP. It is downloaded only after the same checks as text (your chat,
+not sent while away), and the log records its size, never the caption. Other files get a
+polite refusal. An album arrives as one message per photo. A turn started from
+the phone sends every update to the chat as it is written, not only the last one when the
+turn ends - a long job used to stay silent on the phone for minutes. Messages are plain text with no
+Markdown, so replies show code as typed. A reply over 6,000 characters arrives as its first
+part plus the whole reply as a `.md` file (if the upload fails, as split messages instead);
+shorter ones over 4,096 are split at paragraph, then line, then word boundaries.
+
+**Voice notes** (`src/voice.mjs`) are transcribed locally, with no audio leaving the PC: the
+Ogg/Opus note is decoded by a WebAssembly Opus decoder (`ogg-opus-decoder`), mixed to 16 kHz
+mono, and read by Whisper small (`onnx-community/whisper-small`, 8-bit) on the CPU via
+`@huggingface/transformers` and onnxruntime. The model, about 250 MB, is downloaded once on
+the first voice note into `%APPDATA%\JARVIS\models`, and loaded on demand; after that a short
+note takes a second or two. The transcript is echoed so you see what was heard, then goes
+through the same path as typing: an answer to an open question, a reply instead of an
+approval, a command, or a message. Silence (Whisper's "you" / "Thank you.") runs nothing;
+notes over 5 minutes are refused before download. The log records duration, never words.
+
+**The morning brief** (`src/reports.mjs`, no model tokens): on weekdays at 08:00, while remote
+control is on, one message with the PC's state, each repository with work in progress, open
+issues, the handoff's current focus, ClickUp in-progress tasks and the last session. Sent once
+a day (`brief.sent` in config.json, so a restart does not repeat it) and only within three
+hours of the set time. `/brief` gets it any time.
+
+**Deploy alerts** (`src/deploys.mjs`): when a Bash or PowerShell command JARVIS runs looks like
+a deploy - anything with `deploy`, `dotnet publish`, `flutter build apk|appbundle|ipa|ios|web|windows`,
+`eas build|submit|update`, `vercel --prod`, `docker push`, `az webapp deploy` and a few more -
+its ending is sent to the phone: 🚀 finished or ❌ failed, how long it took, the command and its
+last five lines. Over Telegram while remote control is on, else through phone alerts if those
+are on. Whoever started the turn. A command sent to the background is not announced. Tested by
+`node scripts/deploy-test.mjs`.
+
+What the bot token can and cannot do matters more now. Whoever holds it can read what you
+send the bot and message you as JARVIS - but cannot make JARVIS act, because commands are
+only taken from your account. Keep it private, and rotate it with @BotFather's `/revoke`
+if it has ever been shown anywhere: paste the new one into **Check token**, and the chat id
+stays.
+
+#### This phone - the local route
 
 - **Nothing is installed on the phone and nothing leaves this machine.** Android's own
   `cmd notification post` runs as the shell user, so adb alone can raise a notification. No
@@ -215,9 +429,11 @@ can be started and left.
 - One notification at a time: they all share a tag, so the newest replaces the last rather than
   stacking. Alerts arriving together are queued, not dropped - an approval request on the heels
   of something else is the one that most needs to be heard.
-- **Test** sends one immediately. If the phone refuses three in a row JARVIS stops trying and
-  says so in `jarvis.log`, until the setting or the phone changes. Every alert that does go
-  out is logged as `phone alert sent`.
+- **Test** sends one immediately, *by the route currently selected* - so what it proves is
+  the route you will be relying on. If three in a row are refused JARVIS stops trying and
+  says so in `jarvis.log`, until the setting changes. Every alert that does go out is logged
+  as `phone alert sent`. A route that is simply not set up yet is skipped silently rather
+  than counted as a failure.
 - **A post is confirmed, not assumed.** `cmd notification post` reports success as soon as it
   has built the notification, which says nothing about the phone showing it - a phone with
   notifications turned off for "Shell" swallows every one in silence. So the tray is read back
@@ -284,7 +500,7 @@ renderer (src/renderer: core, chat, dashboard, pages, devices, webapps, app)
 - Switching sessions stops the old one before its history is drawn, and a late history is
   dropped. Sessions over 16 MB show only their last 6 MB (a 300 MB transcript used to stall
   the app). The transcript keeps the latest 400 messages.
-- Nothing is polled while the window is hidden; stats refresh only on the Command Center.
+- Nothing is polled while the window is hidden; stats refresh only on the Overview.
 - `workspace.mjs` only reads. Git runs with `--no-optional-locks` (and `GIT_OPTIONAL_LOCKS=0`
   for the scripts it runs, such as `scan-status.py`); documents are read
   only from `.claude\{knowledge,jarvis,agents,skills,commands}` and the memory folder, and
@@ -300,6 +516,38 @@ renderer (src/renderer: core, chat, dashboard, pages, devices, webapps, app)
   own icon and name even though the exe itself was branded JARVIS. The Start Menu shortcut
   carries the app id `com.bantuapps.jarvis`, so the taskbar button and notifications resolve
   to JARVIS.
+- **`npm run shortcuts`** makes that shortcut (and the desktop one) on a new machine. Windows'
+  own shortcut tool cannot write an app id, so `scripts/shortcuts.ps1` goes through
+  `IShellLink` and `IPropertyStore`, writes the app id **and the toast activator CLSID**, reads
+  both back to prove they took, removes any Start Menu shortcut a development run made for
+  this repository's `electron.exe`, and refreshes the icon cache.
+- **The identity is fixed in code** (`IDENTITY` in `src/main.mjs`): app id
+  `com.bantuapps.jarvis` and toast activator `{445FDA2C-…}` for the packaged app, and a separate
+  pair (`com.bantuapps.jarvis.dev`) for development. How it went wrong without that: Electron
+  invents a random activator every run, and when a notification finds no Start Menu shortcut
+  carrying the app id and that activator, it writes its own and registers a COM server for
+  it. A screenshot run - `electron.exe`, under the real id - did exactly that, leaving
+  `Start Menu\Programs\Electron.lnk`; Windows then resolved JARVIS's id to "Electron", and the
+  taskbar button, its jump list and every notification showed the name and the atom. The fix
+  is three-sided: dev runs no longer use the real id, the real app always registers the same
+  activator, and the shortcut carries it, so Electron finds what it looks for and writes
+  nothing. Start's name for an id is cached; rewriting the shortcut is what refreshes it.
+  A running JARVIS keeps the identity it started with - restart it after `npm run shortcuts`.
+- **Screenshot runs never notify** - the window's notification permission is refused and
+  `JV.notify` checks again - and never listen to Telegram. They used to put real toasts on the
+  screen, as Electron's.
+- The window's caption buttons (drawn by Windows, not the page) wear the header's colours and
+  follow the theme: the window tells the main process which theme is showing (`jarvis:titleBar`)
+  at start, when Settings changes it, and when Windows switches light/dark. They are 40 px tall,
+  the height of the fullscreen phone's title strip they sit on.
+
+**The Telegram bot is dressed as JARVIS too**: `npm run brand-bot` sets its profile picture,
+description and the `/` command menu (`/status /stop /new /sessions /switch /screen /diff /brief /help`) through the Bot API
+(`setMyProfilePhoto` arrived in Bot API 9.4). The picture is `build/telegram-avatar.jpg` -
+`build/source.png` cropped square around the HUD ring and scaled to 640 px, because Telegram
+shows profile pictures as circles and the whole rounded-square icon would lose its corners;
+a JPEG because a static profile photo must be one. Rotating the token does not undo any of
+it - these belong to the bot.
 
 ## Rebuild after a change
 
@@ -312,6 +560,17 @@ npm run pack         # -> dist\win-unpacked\JARVIS.exe  (the shortcut points her
 Close JARVIS first (the build replaces its files). To update Claude Code inside the app:
 `npm install @anthropic-ai/claude-agent-sdk@latest`, then `npm run pack`.
 
+**`npm run pack` can fail and still exit 0.** If anything holds `dist\win-unpacked` open -
+a running JARVIS.exe, or a shell sitting in that directory - electron-builder stops with
+`⨯ EBUSY: resource busy or locked, rmdir`, prints it, and the exit code is still zero. The
+build then looks successful while the exe on disk is the previous one. Read the last lines
+of the output, not the exit code, and confirm the new code actually landed:
+
+```powershell
+npx asar extract dist\win-unpacked\resources\app.asar tmp-asar
+Compare-Object (Get-Content src\main.mjs) (Get-Content tmp-asar\src\main.mjs)   # no output = identical
+```
+
 ## Develop
 
 ```powershell
@@ -322,9 +581,23 @@ npm start
 Env:ELECTRON_RUN_AS_NODE`) - VS Code sets it for child processes, and Electron then runs as
 plain Node ("electron does not provide an export named BrowserWindow").
 
+- **`npm test`** runs both unit tests below - no network, no window, a second or two.
 - `node scripts/content-test.mjs` - unit test for how text + attachments become a message.
+- `node scripts/remote-test.mjs` - remote control against a fake Telegram: who may speak,
+  nothing running late, forged buttons, questions, the audit trail, the log never claiming to
+  listen when it is not. Each safety rule was also broken on purpose once, to prove its test
+  fails when it should.
+- **Rebuilding while JARVIS is open**: build beside it, then swap when it closes -
+  `npx electron-builder --dir -c.directories.output=dist-next`, and once JARVIS is closed,
+  move `dist-next\win-unpacked` over `dist\win-unpacked`. A plain `npm run pack` would fail
+  on the locked folder (and still exit 0 - see above).
 - `npm run smoke` / `node scripts/smoke.mjs B` - checks the SDK and login without the window.
 - `node scripts/bridge-test.mjs` - one real turn through `JarvisSession`, all prompts allowed.
+- Both run in the same folder as the app (`scripts/workspace.mjs`): `JARVIS_CWD` if set, else
+  `cwd` from `config.json`, else the default - and stop with a clear message if that folder
+  is missing. They used to hardcode the original machine's path and fail anywhere else.
+  Each real turn they run leaves a session in that folder's history; delete them from the
+  session list afterwards (hover → bin) if you would rather not see them.
 - Screenshots: `JARVIS_CAPTURE=<file.png>` (+ `JARVIS_CAPTURE_DELAY` ms, `JARVIS_VIEW=<view>`,
   `JARVIS_CLICK=<id or .class, comma-separated to click several in turn>`,
   `JARVIS_SIZE=<w>x<h>`, `JARVIS_AUTOPROMPT=<text>`).
@@ -338,7 +611,12 @@ plain Node ("electron does not provide an export named BrowserWindow").
   selector may end in `:first-of-type`, `:last-of-type` or `:nth-of-type(n)` to reach a later
   row. `JARVIS_HOVER=<selector>` moves the mouse over an element and `JARVIS_FOCUS=<selector>`
   gives it keyboard focus (with DevTools focus emulation, so the window never takes real
-  focus), 800 ms before the capture.
+  focus), 800 ms before the capture. `JARVIS_KEYS=<combo>;<combo>` presses keys a second
+  apart from `JARVIS_KEYS_AT=<ms>` (default 2.5 s before the capture) - `Ctrl+3`, `Ctrl+,`,
+  `Escape` - as real key events, so a shortcut can be proven, not assumed. Semicolons
+  separate them because a comma can be the key. The Esc fix was proven this way: a turn
+  streaming 1-80, `Ctrl+,` then `Escape` mid-stream, and the turn finished; the control run,
+  `Escape` alone at the same moment, stopped it at 52.
   A page capture never includes the Windows caption buttons - those are window frame, not page. The window opens off-screen,
   never takes focus, screenshots itself and quits. `JARVIS_AUTOPROMPT` sends a real message.
 - Packaged SDK health check: `JARVIS_DIAG_QUERY=<out.json>` runs one minimal query ("Reply
@@ -352,7 +630,11 @@ plain Node ("electron does not provide an export named BrowserWindow").
   `jarvis.log` (not even "JARVIS starting"). Confirm it with `JARVIS.exe --version` - a Node
   version such as `v24.15.0` means the variable is still set. In bash the one-off fix is
   `env -u ELECTRON_RUN_AS_NODE ./JARVIS.exe`.
-- Settings (gear): desktop notifications, reduce motion, 24-hour clock - stored per window.
+- Settings (gear, or **Ctrl+,**): the workspace folder, appearance (System / Light / Dark),
+  phone alerts, desktop notifications, reduce motion, 24-hour clock. Appearance and the
+  window preferences are stored per window in `localStorage` under `jarvis.prefs`; the
+  workspace and phone alerts in `config.json`, because the main process needs them whatever
+  view is open.
 
 ## Not in the app
 

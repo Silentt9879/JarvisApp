@@ -140,7 +140,7 @@
 
   // ------------------------------------------------------------- preferences (this window only)
   const PREF_KEY = 'jarvis.prefs';
-  JV.prefs = { notify: true, reduceMotion: false, h24: false };
+  JV.prefs = { notify: true, reduceMotion: false, h24: false, theme: 'system' };
   try { Object.assign(JV.prefs, JSON.parse(localStorage.getItem(PREF_KEY) || '{}')); } catch { /* storage unavailable */ }
   JV.savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(JV.prefs)); } catch { /* not persisted */ } };
 
@@ -176,8 +176,15 @@
     stats: null,
     memory: [],
     sessions: [],
-    view: 'command',
+    view: 'chat',   // the window opens on the conversation; everything else is a click away
   };
+
+  /**
+   * Did the turn that just ended stop because you stopped it? Set by Esc and the Stop
+   * button, cleared when the next message is sent. The minute's grace covers an interrupt
+   * that takes a while to land; anything later is a different turn's ending.
+   */
+  JV.stoppedByUser = () => !!JV.state.userStopAt && Date.now() - JV.state.userStopAt < 60000;
 
   const handlers = {};
   JV.on = (kind, fn) => { (handlers[kind] = handlers[kind] || []).push(fn); };
@@ -223,7 +230,12 @@
     const sec = JV.$(`view-${view}`);
     if (!sec) return;
     document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v === sec));
-    document.querySelectorAll('#navList button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+    document.querySelectorAll('#navList button[data-view]').forEach((b) => {
+      const on = b.dataset.view === view;
+      b.classList.toggle('active', on);
+      // A screen reader announces the current view as such, not just as one more button.
+      if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
     JV.state.view = view;
     JV.emit('view', view);
   };
@@ -242,7 +254,9 @@
     notes.splice(50);
     unread++;
     renderBell();
-    if (desktop && JV.prefs.notify && !document.hasFocus() && 'Notification' in window) {
+    // Never from a screenshot run (main refuses the permission too): those open and quit on
+    // their own, and their notifications landed on the user's screen as Electron's.
+    if (desktop && JV.prefs.notify && !document.hasFocus() && !JV.state.info?.capture && 'Notification' in window) {
       try {
         const n = new Notification('JARVIS', { body: String(text).slice(0, 180), silent: false });
         n.onclick = () => { window.focus(); if (typeof action === 'string') JV.show(action); };
@@ -285,30 +299,23 @@
     }
   });
 
-  /** A row of animated bars; animation is CSS, paused by the reduce-motion preference. */
-  JV.wave = (container, bars = 28) => {
+  /** The status indicator: a single dot, coloured and animated by CSS from the state. */
+  JV.wave = (container) => {
     container.replaceChildren();
-    for (let i = 0; i < bars; i++) {
-      const s = JV.el('span');
-      s.style.animationDelay = `${((i * 137) % 1000) / 1000 - 1}s`;
-      s.style.setProperty('--h', `${30 + ((i * 53) % 70)}%`);
-      container.appendChild(s);
-    }
+    container.appendChild(JV.el('span'));
   };
 
-  /** Ring gauge (SVG): value 0-100 or null. */
+  /**
+   * A meter: a label, a reading, and a bar. `value` is 0-100 or null for "no reading".
+   * The bar itself is drawn in CSS from --pct, so there is one source of truth for the
+   * colour at each threshold.
+   */
   JV.gauge = (host, label, value, sub) => {
     host.replaceChildren();
-    const r = 38;
-    const c = 2 * Math.PI * r;
-    const s = JV.svg('svg', { viewBox: '0 0 100 100' });
-    s.appendChild(JV.svg('circle', { cx: 50, cy: 50, r: 46, class: 'g-outer' }));
-    s.appendChild(JV.svg('circle', { cx: 50, cy: 50, r, class: 'g-track' }));
-    const arc = JV.svg('circle', { cx: 50, cy: 50, r, class: 'g-arc', 'stroke-dasharray': `${c}`, 'stroke-dashoffset': `${c * (1 - (value == null ? 0 : value) / 100)}` });
-    if (value != null && value >= 90) arc.classList.add('hot');
-    else if (value != null && value >= 75) arc.classList.add('warm');
-    s.appendChild(arc);
-    host.appendChild(s);
+    host.className = `gauge${host.classList.contains('big') ? ' big' : ''}`;
+    if (value != null && value >= 90) host.classList.add('hot');
+    else if (value != null && value >= 75) host.classList.add('warm');
+    host.style.setProperty('--pct', `${value == null ? 0 : Math.max(0, Math.min(100, value))}%`);
     const t = JV.el('div', 'g-text');
     t.appendChild(JV.el('small', null, label));
     t.appendChild(JV.el('b', null, value == null ? '–' : `${value}%`));

@@ -4,6 +4,15 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('jarvis', {
   info: () => ipcRenderer.invoke('jarvis:info'),
+  // The window's caption buttons are drawn by the system; this tells it the theme in use.
+  titleBar: (theme) => ipcRenderer.invoke('jarvis:titleBar', theme),
+  // The workspace folder: pick one (a dialog, nothing saved), then switch to it (saved,
+  // and JARVIS restarts into it).
+  pickWorkspace: () => ipcRenderer.invoke('jarvis:pickWorkspace'),
+  setWorkspace: (dir) => ipcRenderer.invoke('jarvis:setWorkspace', dir),
+  // Start with Windows (to the tray). Packaged JARVIS.exe only.
+  startup: () => ipcRenderer.invoke('jarvis:startup'),
+  setStartup: (on) => ipcRenderer.invoke('jarvis:setStartup', !!on),
   claudeVersion: () => ipcRenderer.invoke('jarvis:claudeVersion'),
   start: (opts) => ipcRenderer.invoke('jarvis:start', opts),
   send: (payload) => ipcRenderer.invoke('jarvis:send', payload),
@@ -23,6 +32,8 @@ contextBridge.exposeInMainWorld('jarvis', {
   pickFiles: () => ipcRenderer.invoke('jarvis:pickFiles'),
   // Drag-and-drop: the path of a dropped file, so it can be named in the message.
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
+  // A clicked attachment: a file from the phone opens; anything else is shown in Explorer.
+  openAttachment: (p) => ipcRenderer.invoke('jarvis:openAttachment', p),
   stats: () => ipcRenderer.invoke('jarvis:stats'),
   online: () => ipcRenderer.invoke('jarvis:online'),
   savedEffort: (model) => ipcRenderer.invoke('jarvis:savedEffort', model),
@@ -106,6 +117,10 @@ contextBridge.exposeInMainWorld('jarvis', {
   phoneSet: (patch) => ipcRenderer.invoke('jarvis:phoneSet', patch),
   phoneWifi: (serial) => ipcRenderer.invoke('jarvis:phoneWifi', serial),
   phoneTest: (serial) => ipcRenderer.invoke('jarvis:phoneTest', serial),
+  // Telegram: the route that reaches the phone on mobile data. The token travels one way
+  // only - the window sends it in and is never given it back.
+  telegramVerify: (token) => ipcRenderer.invoke('jarvis:telegramVerify', token),
+  telegramFindChat: () => ipcRenderer.invoke('jarvis:telegramFindChat'),
   // ASP.NET sites and APIs: dotnet watch run, shown in the window.
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),

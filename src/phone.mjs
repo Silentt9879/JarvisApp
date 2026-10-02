@@ -172,8 +172,14 @@ const MIN_SECONDS = 30; // a turn shorter than this finished while you were stil
  * @param cfg    () => { enabled, serial, minSeconds }  - read fresh, so a settings change applies at once
  * @param atDesk () => boolean - true when the JARVIS window has focus
  * @param log    (...parts) => void
+ * @param send   (item) => { ok, error?, skip? } - how the alert actually travels. The
+ *               watcher decides WHEN to buzz; the caller decides by what route, because
+ *               there is more than one (adb over USB or Wi-Fi, a Telegram bot over the
+ *               internet) and only main.mjs knows which is configured. `skip: true` means
+ *               "that route is not set up" - not a failure, so it does not count towards
+ *               giving up, and it is not worth a line in the log every time.
  */
-export function createPhoneWatcher({ cfg, atDesk, log }) {
+export function createPhoneWatcher({ cfg, atDesk, log, send }) {
   let lastText = '';     // the most recent thing JARVIS said, for the body of a "finished"
   let lastPost = 0;      // the phone is not a log file
   let failures = 0;      // after a few refusals, stop trying until something changes
@@ -185,12 +191,13 @@ export function createPhoneWatcher({ cfg, atDesk, log }) {
     const item = queued;
     queued = null;
     const c = cfg();
-    if (!item || !c.enabled || !c.serial || failures >= 3) return;
+    if (!item || !c.enabled || failures >= 3) return;
     lastPost = Date.now();
-    const r = await postNotification(c.serial, item);
+    const r = await send(item);
     if (r.ok) { failures = 0; log('phone alert sent:', item.title); return; }
+    if (r.skip) return;
     failures += 1;
-    log('phone notification failed:', r.error || '', failures >= 3 ? '(giving up until the phone is set up again)' : '');
+    log('phone alert failed:', r.error || '', failures >= 3 ? '(giving up until alerts are set up again)' : '');
   }
 
   /**
@@ -199,8 +206,7 @@ export function createPhoneWatcher({ cfg, atDesk, log }) {
    * notification carries a single tag, so the newest simply replaces the last in the tray.
    */
   function post(title, body) {
-    const c = cfg();
-    if (!c.enabled || !c.serial) return;
+    if (!cfg().enabled) return;
     queued = { title, body };
     if (timer) return;
     timer = setTimeout(flush, Math.max(0, 3000 - (Date.now() - lastPost)));
@@ -210,9 +216,14 @@ export function createPhoneWatcher({ cfg, atDesk, log }) {
     /** Call when the phone setting or device changes, so a fixed phone is tried again. */
     reset() { failures = 0; },
 
-    /** Every session event passes through here. */
-    event(e) {
+    /**
+     * Every session event passes through here. `claimed` means remote control has already
+     * put this on the phone - an approval as buttons, a reply in the chat - so an alert
+     * about the same thing would only be a second buzz.
+     */
+    event(e, { claimed = false } = {}) {
       if (!e || typeof e !== 'object') return;
+      if (claimed) { if (e.kind === 'result') lastText = ''; return; }
       switch (e.kind) {
         case 'text_final':
           lastText = e.text || '';

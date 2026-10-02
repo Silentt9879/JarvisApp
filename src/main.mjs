@@ -1,7 +1,7 @@
 // JARVIS - Electron main process.
 // Owns the window and the one live JarvisSession; the window talks to it only
 // through the narrow IPC surface exposed in preload.cjs.
-import { app, BrowserWindow, ipcMain, shell, Menu, dialog, net } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Menu, dialog, net, nativeTheme, Tray, powerSaveBlocker, desktopCapturer, screen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -15,6 +15,11 @@ import { readDraft, readClickUp, syncClickUp } from './tasks.mjs';
 import { createGitHub } from './github.mjs';
 import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode } from './files.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
+import { sendTelegram, verifyToken, discoverChat, isToken, isChatId } from './telegram.mjs';
+import { createRemote } from './remote.mjs';
+import { diffReport, morningBrief } from './reports.mjs';
+import { createDeployWatcher } from './deploys.mjs';
+import { createTranscriber } from './voice.mjs';
 import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
 import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
@@ -22,6 +27,27 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.dirname(SRC);
 // Before anything creates a window: this is the name Windows shows for the app.
 app.setName('JARVIS');
+
+// How Windows knows this app: an app id (taskbar grouping, notifications, Start) and a toast
+// activator CLSID (the COM class a notification's click starts). Both are fixed, and the
+// shortcuts made by scripts/shortcuts.ps1 carry the same two values.
+//
+// They were not always fixed, and it showed. Left alone, Electron makes up a random activator
+// every run, and when a notification finds no Start Menu shortcut carrying both, it writes its
+// own and registers a COM server for it. A development run (electron.exe) did exactly that
+// under JARVIS's id - Start Menu\Programs\Electron.lnk - and from then on Windows named the
+// real app "Electron", with the atom, in the taskbar, its jump list and its notifications.
+//
+// So: one id and one activator for the packaged app, and a separate pair for development, so
+// a dev run can never again speak for the installed JARVIS. The packaged activator is the one
+// JARVIS.exe had already registered, adopted rather than replaced.
+const IDENTITY = app.isPackaged
+  ? { appId: 'com.bantuapps.jarvis', toastActivator: '{445FDA2C-DFA5-4369-88E1-B275092CB054}' }
+  : { appId: 'com.bantuapps.jarvis.dev', toastActivator: '{F6832385-8B84-4FD9-B83E-A232C0D7EAAE}' };
+// Early, as Electron asks: before any notification, so it is what gets registered.
+if (process.platform === 'win32' && typeof app.setToastActivatorCLSID === 'function') {
+  try { app.setToastActivatorCLSID(IDENTITY.toastActivator); } catch { /* an older Electron: random, as before */ }
+}
 const DEFAULT_CWD = 'C:\\Users\\bantu\\Downloads\\BantuApps';
 const WINDOW_MODES = ['default', 'acceptEdits', 'plan', 'auto']; // deliberately no bypassPermissions
 
@@ -48,15 +74,56 @@ function saveConfig(patch) {
   return next;
 }
 
-/** Phone alerts: { enabled, serial, address, minSeconds }. */
+/**
+ * Phone alerts: { enabled, route, serial, address, minSeconds, telegram }.
+ *
+ * `route` is how the alert travels. 'adb' is the original: a notification posted straight
+ * into the tray over USB or the same Wi-Fi, with nothing leaving this machine and no app on
+ * the phone. 'telegram' goes out over the internet instead, so it reaches the phone on
+ * mobile data anywhere - at the cost of the text passing through Telegram.
+ */
 function phoneConfig() {
   const p = loadConfig().phone || {};
+  const t = p.telegram && typeof p.telegram === 'object' ? p.telegram : {};
   return {
     enabled: !!p.enabled,
+    // Remote control: messages from your Telegram chat run here. Telegram route only.
+    remote: !!p.remote,
+    // Mirror: what is typed at the desk, and JARVIS's replies to it, appear in the chat too.
+    mirror: !!p.mirror,
+    route: p.route === 'telegram' ? 'telegram' : 'adb',
     serial: isSerial(p.serial) ? p.serial : null,
     address: typeof p.address === 'string' ? p.address : null,
     minSeconds: Number.isFinite(p.minSeconds) ? p.minSeconds : 30,
+    telegram: {
+      token: isToken(t.token) ? t.token : null,
+      chatId: isChatId(t.chatId) ? String(t.chatId) : null,
+      name: typeof t.name === 'string' ? t.name.slice(0, 60) : null,
+    },
   };
+}
+
+/**
+ * The window must never be handed the bot token: it is a credential, and the renderer has
+ * no business holding one. It is told only whether a token is set, and what the bot is
+ * called.
+ */
+function phoneConfigForWindow(c) {
+  return {
+    ...c,
+    telegram: { hasToken: !!c.telegram.token, chatId: c.telegram.chatId, name: c.telegram.name },
+  };
+}
+
+/** Route one alert. Returns { ok } or { ok: false, error, skip? } - never throws. */
+async function sendAlert(item) {
+  const c = phoneConfig();
+  if (c.route === 'telegram') {
+    if (!c.telegram.token || !c.telegram.chatId) return { ok: false, skip: true, error: 'Telegram is not set up yet.' };
+    return sendTelegram(c.telegram, item);
+  }
+  if (!c.serial) return { ok: false, skip: true, error: 'No phone chosen yet.' };
+  return postNotification(c.serial, item);
 }
 
 function log(...parts) {
@@ -95,17 +162,216 @@ const phone = createPhoneWatcher({
   cfg: phoneConfig,
   atDesk: () => !!win && !win.isDestroyed() && win.isFocused(),
   log,
+  send: sendAlert,
+});
+
+// Remote control (remote.mjs): your Telegram chat as a second keyboard. It is fed every
+// session event like the alert watcher, and goes first: an approval or a reply it has put
+// on the phone is "claimed", so the watcher does not send a second message about it.
+const toWindow = (evt) => { if (win && !win.isDestroyed()) win.webContents.send('jarvis:event', evt); };
+const remote = createRemote({
+  cfg: () => {
+    const c = phoneConfig();
+    // Never during a screenshot run: those start and quit by themselves, and must not take
+    // a real message off the queue. JARVIS_REMOTE_TEST=1 allows it for a run that is
+    // about remote control.
+    const allowed = !process.env.JARVIS_CAPTURE || process.env.JARVIS_REMOTE_TEST === '1';
+    return { on: allowed && c.remote && c.route === 'telegram', mirror: c.mirror, token: c.telegram.token, chatId: c.telegram.chatId, name: c.telegram.name };
+  },
+  log,
+  atDesk: () => !!win && !win.isDestroyed() && win.isFocused(),
+  // The window submits it, through the same path as the composer.
+  submit: (text, attachments) => {
+    if (!win || win.isDestroyed()) return false;
+    toWindow({ kind: 'remote_prompt', text, attachments: Array.isArray(attachments) ? attachments : [] });
+    return true;
+  },
+  newSession: () => toWindow({ kind: 'remote_new' }),
+  interrupt: () => { toWindow({ kind: 'remote_stop' }); ensureSession().interrupt(); },
+  respond: (id, decision, verdict) => { toWindow({ kind: 'prompt_remote', id, verdict }); ensureSession().respond(id, decision); },
+  workspace: () => loadConfig().cwd,
+  screens: captureScreens,
+  diff: (query) => diffReport(loadConfig().cwd, query),
+  brief: buildBrief,
+  briefSet: (patch) => { const next = { ...briefConfig(), ...patch }; saveConfig({ brief: next }); log('morning brief:', next.on ? `on at ${next.at}` : 'off'); return next; },
+  sessions: () => listRecent(loadConfig().cwd),
+  currentSession: () => session?.sessionId || null,
+  // Through the window, like /new: it redraws the transcript the same way a click would.
+  switchSession: async (id, title) => {
+    if (!win || win.isDestroyed() || !isSessionId(id)) return { ok: false };
+    toWindow({ kind: 'remote_switch', id, title });
+    let last = null;
+    try { last = (await loadHistory(loadConfig().cwd, id)).filter((h) => h.role === 'assistant').at(-1)?.text || null; } catch { /* the switch still happened */ }
+    return { ok: true, last };
+  },
+  saveIncoming,
+  // A file attached at the desk, so the mirror can send it to the phone. 50 MB is Telegram's upload limit.
+  readAttachment: async (p) => {
+    const st = await fsp.stat(p);
+    return st.isFile() && st.size <= 50 * 1024 * 1024 ? fsp.readFile(p) : null;
+  },
+  transcribe: (buf) => voice.transcribe(buf),
+  voiceReady: () => voice.ready,
+});
+
+// Photos and files sent from the phone are kept here, where you would look for them anyway,
+// and are the only files the window may open directly (jarvis:openAttachment).
+const INBOX = path.join(app.getPath('downloads'), 'JARVIS from phone');
+async function saveIncoming(name, data) {
+  await fsp.mkdir(INBOX, { recursive: true });
+  const clean = String(name || 'file').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^\.+/, '').slice(0, 120) || 'file';
+  const ext = path.extname(clean);
+  const base = clean.slice(0, clean.length - ext.length);
+  let full = path.join(INBOX, clean);
+  for (let i = 2; fs.existsSync(full); i++) full = path.join(INBOX, `${base} (${i})${ext}`);
+  await fsp.writeFile(full, data);
+  return full;
+}
+const inInbox = (p) => {
+  const full = path.resolve(String(p || ''));
+  return full.toLowerCase().startsWith(INBOX.toLowerCase() + path.sep);
+};
+
+// Voice notes are transcribed here, with a model kept beside the config (voice.mjs).
+const voice = createTranscriber({ cacheDir: path.join(userDir, 'models'), log });
+
+/** A JPEG of every screen, at its real resolution (capped at 2560 wide for Telegram). */
+async function captureScreens() {
+  const displays = screen.getAllDisplays();
+  const w = Math.max(...displays.map((d) => d.size.width * d.scaleFactor));
+  const h = Math.max(...displays.map((d) => d.size.height * d.scaleFactor));
+  const k = Math.min(1, 2560 / w); // the thumbnail keeps each screen's shape inside this box
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: Math.round(w * k), height: Math.round(h * k) } });
+  return sources.filter((s) => !s.thumbnail.isEmpty()).map((s, i) => ({ name: s.name || `Screen ${i + 1}`, data: s.thumbnail.toJPEG(85) }));
+}
+
+// ---------------------------------------------------------------- the morning brief
+// On weekdays at the set time (08:00 unless /brief says otherwise), while remote control is
+// on: one message with the repos, open issues, the handoff's focus and ClickUp. No model is
+// involved. Sent once a day - the date is kept in the config, so a restart does not repeat
+// it - and only within three hours of the time: a PC switched on at 3 pm gets no "morning".
+function briefConfig() {
+  let b = {};
+  try { b = JSON.parse(fs.readFileSync(configPath, 'utf8')).brief || {}; } catch { /* defaults */ }
+  return { on: b.on !== false, at: /^\d\d:\d\d$/.test(b.at || '') ? b.at : '08:00', sent: typeof b.sent === 'string' ? b.sent : null };
+}
+async function buildBrief() {
+  const { cwd } = loadConfig();
+  const recent = await listRecent(cwd).catch(() => []);
+  return morningBrief({ cwd, userDir, lastSession: recent[0] || null });
+}
+const localDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+async function briefTick() {
+  const b = briefConfig();
+  const d = new Date();
+  if (!b.on || !remote.ready || d.getDay() === 0 || d.getDay() === 6 || b.sent === localDay(d)) return;
+  const [hh, mm] = b.at.split(':').map(Number);
+  const late = (d.getHours() * 60 + d.getMinutes()) - (hh * 60 + mm);
+  if (late < 0 || late > 180) return;
+  saveConfig({ brief: { on: b.on, at: b.at, sent: localDay(d) } });
+  try { await remote.announce(await buildBrief()); log('morning brief sent'); } catch (e) { log('morning brief failed:', e?.message || e); }
+}
+setInterval(() => { briefTick().catch(() => {}); }, 60000).unref?.();
+
+// ---------------------------------------------------------------- deploy alerts
+// A deploy, release build or publish that JARVIS runs tells the phone when it ends, and
+// whether it worked (deploys.mjs). Over Telegram while remote control is on; otherwise
+// through the phone alerts, if those are on.
+const deploys = createDeployWatcher({
+  enabled: () => remote.ready || phoneConfig().enabled,
+  notify: (item) => {
+    log('deploy alert:', item.title);
+    if (remote.ready) remote.announce(`${item.title}\n${item.body}`);
+    else sendAlert(item).catch(() => {});
+  },
+});
+
+// ---------------------------------------------------------------- running in the background
+// Remote control is only as good as the PC's willingness to answer. A sleeping PC answers
+// nothing, and a closed window cannot submit the message (remote_prompt goes through the
+// window, like the composer). So while remote control is on, two things change:
+//  - the system is kept from sleeping ('prevent-app-suspension': the screen may still turn
+//    off and the PC lock, which is what you want when you walk away), and
+//  - closing the window hides it to the tray instead of quitting.
+// Both end the moment remote control is switched off.
+let tray = null;
+let quitting = false;
+let awakeId = null;
+// Started by Windows at login (see jarvis:setStartup): straight to the tray, no window.
+let launchHidden = process.argv.includes('--hidden');
+let shownOnce = false;
+let trayHinted = false;
+
+function remoteWanted() {
+  const c = phoneConfig();
+  return !process.env.JARVIS_CAPTURE && c.remote && c.route === 'telegram';
+}
+
+/** Bring the window back from the tray, the taskbar or a login start. */
+function showWindow() {
+  launchHidden = false;
+  if (!win || win.isDestroyed()) { createWindow(); return; }
+  if (!win.isVisible()) { if (!shownOnce) win.maximize(); win.show(); shownOnce = true; }
+  if (win.isMinimized()) win.restore();
+  win.focus();
+}
+
+function createTray() {
+  const icon = windowIcon();
+  if (!icon || process.env.JARVIS_CAPTURE) return;
+  try { tray = new Tray(icon); } catch (e) { log('tray failed:', e?.message || e); return; }
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open JARVIS', click: showWindow },
+    { type: 'separator' },
+    { label: 'Quit JARVIS', click: () => app.quit() },
+  ]));
+  tray.on('click', showWindow);
+  syncBackground();
+}
+
+/** Follow the remote-control setting: keep-awake on or off, and the tray tooltip. */
+function syncBackground() {
+  const on = remoteWanted();
+  if (on && awakeId === null) {
+    awakeId = powerSaveBlocker.start('prevent-app-suspension');
+    log('keep awake: on (remote control is on)');
+  } else if (!on && awakeId !== null) {
+    if (powerSaveBlocker.isStarted(awakeId)) powerSaveBlocker.stop(awakeId);
+    awakeId = null;
+    log('keep awake: off');
+  }
+  tray?.setToolTip(on ? 'JARVIS - listening to Telegram' : 'JARVIS');
+}
+
+// Start with Windows. Packaged only: a development run would register electron.exe under
+// the login key, which is the same mistake as the stray Electron.lnk (see IDENTITY).
+const LOGIN_ARGS = ['--hidden'];
+function startAtLogin() {
+  if (!app.isPackaged) return false;
+  return app.getLoginItemSettings({ path: process.execPath, args: LOGIN_ARGS }).openAtLogin;
+}
+ipcMain.handle('jarvis:startup', () => ({ available: app.isPackaged && process.platform === 'win32', atLogin: startAtLogin() }));
+ipcMain.handle('jarvis:setStartup', (_e, on) => {
+  if (!app.isPackaged) return { ok: false, error: 'Only the installed JARVIS.exe can start with Windows.' };
+  app.setLoginItemSettings({ openAtLogin: !!on, path: process.execPath, args: LOGIN_ARGS });
+  const atLogin = startAtLogin();
+  log('start with Windows:', atLogin ? 'on' : 'off');
+  return { ok: atLogin === !!on, atLogin };
 });
 
 function send(evt) {
-  if (win && !win.isDestroyed()) win.webContents.send('jarvis:event', evt);
-  try { phone.event(evt); } catch (e) { log('phone watcher:', e?.message || e); }
+  toWindow(evt);
+  let claimed = false;
+  try { claimed = remote.event(evt); } catch (e) { log('remote:', e?.message || e); }
+  try { phone.event(evt, { claimed }); } catch (e) { log('phone watcher:', e?.message || e); }
+  try { deploys.event(evt); } catch (e) { log('deploy watcher:', e?.message || e); }
 }
 
 function createWindow() {
   const capture = !!process.env.JARVIS_CAPTURE;
   // JARVIS_SIZE=<w>x<h> lets a capture check a state at a particular window size.
   const sized = /^(\d{3,4})x(\d{3,4})$/.exec(process.env.JARVIS_SIZE || '');
+  const dark = nativeTheme.shouldUseDarkColors;
   win = new BrowserWindow({
     width: 1500,
     height: 930,
@@ -113,10 +379,14 @@ function createWindow() {
     minWidth: 380,
     minHeight: 520,
     title: 'JARVIS',
-    backgroundColor: '#020812',
+    // The page's own background, so there is no flash of another colour before it paints.
+    backgroundColor: dark ? '#0d0e10' : '#f7f8f9',
     icon: windowIcon(),
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#030c18', symbolColor: '#7fd4ff', height: 40 },
+    // The caption buttons sit on the header, so they wear its colour. This is a first guess
+    // from the OS theme; the window sends the exact colours once it knows which theme is in
+    // use (Settings can pin one), and again whenever that changes - see jarvis:titleBar.
+    titleBarOverlay: TITLE_BAR[dark ? 'dark' : 'light'],
     show: false,
     webPreferences: {
       preload: path.join(SRC, 'preload.cjs'),
@@ -128,6 +398,15 @@ function createWindow() {
     },
   });
 
+  // A screenshot run is a debug aid that opens and quits on its own: it must not put real
+  // notifications on the user's screen. Today's runs did, as electron.exe, wearing
+  // Electron's icon. Refused here for the whole window, and checked again in JV.notify.
+  if (capture) {
+    const ses = win.webContents.session;
+    ses.setPermissionCheckHandler((_wc, permission) => permission !== 'notifications');
+    ses.setPermissionRequestHandler((_wc, permission, done) => done(permission !== 'notifications'));
+  }
+
   win.loadFile(path.join(SRC, 'renderer', 'index.html'));
   win.once('ready-to-show', () => {
     // Capture runs (a debug aid) stay off-screen and never take focus from the user.
@@ -135,7 +414,19 @@ function createWindow() {
       win.setBounds({ x: -5000, y: 0, width: sized ? Number(sized[1]) : 1600, height: sized ? Number(sized[2]) : 960 });
       win.showInactive();
     }
-    else { win.maximize(); win.show(); }
+    else if (!launchHidden) { win.maximize(); win.show(); shownOnce = true; }
+  });
+
+  // While remote control is on, closing hides to the tray: the window is what submits a
+  // message from Telegram, so it has to stay alive. Quit from the tray menu.
+  win.on('close', (e) => {
+    if (quitting || !tray || !remoteWanted()) return;
+    e.preventDefault();
+    win.hide();
+    if (!trayHinted) {
+      trayHinted = true;
+      tray.displayBalloon?.({ iconType: 'info', title: 'JARVIS is still listening', content: 'Remote control is on, so JARVIS keeps running in the tray. Right-click the icon to quit.' });
+    }
   });
 
   // Links open in the real browser; the app window never navigates away.
@@ -231,6 +522,25 @@ function createWindow() {
         } catch { /* a capture aid only */ }
       }, late));
     }
+    // JARVIS_KEYS=<combo>[;<combo>...] presses keys, a second apart, from JARVIS_KEYS_AT ms
+    // (default: 2.5 s before the capture) - so a keyboard shortcut can be proven in a
+    // screenshot, not just a click. A combo is modifiers and one key: "Ctrl+3", "Ctrl+,",
+    // "Escape". Semicolons separate them, since a comma can be the key itself. They go to the
+    // page as real key events, through the same path as typing.
+    const KEY = /^((?:Ctrl|Shift|Alt)\+){0,3}([A-Za-z0-9,.\/]|Escape|Enter|Tab)$/;
+    const keys = (process.env.JARVIS_KEYS || '').split(';').map((k) => k.trim()).filter((k) => KEY.test(k));
+    if (keys.length) {
+      const keysAt = Number(process.env.JARVIS_KEYS_AT || 0) || Math.max(1500, Number(process.env.JARVIS_CAPTURE_DELAY || 9000) - 2500);
+      win.webContents.once('did-finish-load', () => keys.forEach((combo, i) => setTimeout(() => {
+        const parts = combo.split(/\+(?=.)/);
+        const keyCode = parts.pop();
+        const modifiers = parts.map((m) => m.toLowerCase());
+        for (const type of ['keyDown', 'char', 'keyUp']) {
+          if (type === 'char' && (modifiers.length || keyCode.length > 1)) continue;
+          try { win.webContents.sendInputEvent({ type, keyCode, modifiers }); } catch { /* a capture aid only */ }
+        }
+      }, keysAt + i * 1000)));
+    }
     const focus = (process.env.JARVIS_FOCUS || '').trim();
     if (SEL.test(focus)) {
       const sel = focus.startsWith('.') ? focus : `#${focus}`;
@@ -298,11 +608,76 @@ function claudeVersion() {
 
 ipcMain.handle('jarvis:info', () => {
   const { cwd } = loadConfig();
-  return { cwd, version: app.getVersion(), electron: process.versions.electron, exeFound: fs.existsSync(claudeExe()) };
+  return { cwd, cwdExists: fs.existsSync(cwd), version: app.getVersion(), electron: process.versions.electron, exeFound: fs.existsSync(claudeExe()), capture: !!process.env.JARVIS_CAPTURE };
 });
+
+// The caption buttons' colours, matched to the header (--surface and --text-2 in styles.css).
+// 40 px tall: the fullscreen phone's title strip is the same height, so the buttons sit
+// exactly on it there, and on the 52 px header they sit in the same colour as the header.
+const TITLE_BAR = {
+  dark: { color: '#15171a', symbolColor: '#a4abb3', height: 40 },
+  light: { color: '#ffffff', symbolColor: '#555d66', height: 40 },
+};
+ipcMain.handle('jarvis:titleBar', (_e, theme) => {
+  const t = TITLE_BAR[theme === 'light' ? 'light' : 'dark'];
+  try { if (win && !win.isDestroyed()) win.setTitleBarOverlay(t); } catch { /* not supported here */ }
+  try { if (win && !win.isDestroyed()) win.setBackgroundColor(theme === 'light' ? '#f7f8f9' : '#0d0e10'); } catch { /* cosmetic */ }
+  return true;
+});
+
+// ---------------------------------------------------------------- the workspace folder
+// Chosen in Settings. The session takes its folder when it is created, and so do the file
+// index, the memory path and every git read, so a change cannot be applied in place
+// honestly: the new folder is saved and JARVIS restarts into it. Picking a folder and
+// switching to it are separate calls, so the window can confirm in between.
+ipcMain.handle('jarvis:pickWorkspace', async () => {
+  const cur = loadConfig().cwd;
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Choose the workspace folder',
+    defaultPath: fs.existsSync(cur) ? cur : app.getPath('home'),
+    properties: ['openDirectory'],
+  });
+  if (r.canceled || !r.filePaths?.[0]) return { ok: false, canceled: true };
+  return { ok: true, path: r.filePaths[0] };
+});
+ipcMain.handle('jarvis:setWorkspace', (_e, dir) => {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) return { ok: false, error: 'That is not a full folder path.' };
+  let st = null;
+  try { st = fs.statSync(dir); } catch { /* reported below */ }
+  if (!st || !st.isDirectory()) return { ok: false, error: 'That folder does not exist.' };
+  const resolved = path.resolve(dir);
+  if (resolved === path.resolve(loadConfig().cwd)) return { ok: true, unchanged: true };
+  saveConfig({ cwd: resolved });
+  log('workspace changed to', resolved, '- restarting');
+  // Give the reply a moment to reach the window, then stop everything this app started -
+  // app.exit skips window-all-closed, and claude.exe, a dotnet watch or a flutter run left
+  // behind would keep running against the old folder.
+  setTimeout(async () => { await shutdownChildren(); app.relaunch(); app.exit(0); }, 400);
+  return { ok: true, restarting: true };
+});
+
+/**
+ * Stop everything this app started: the Claude Code session, any web app or API run from
+ * the Devices view, phone mirrors and flutter runs. The apps stay installed on the phones.
+ * Bounded at three seconds, so a phone that never answers cannot hold the app open.
+ */
+async function shutdownChildren() {
+  try { remote.stop(); } catch { /* shutting down */ }
+  try { session?.close(); } catch { /* shutting down */ }
+  try { shutdownWebApps(); } catch { /* shutting down */ }
+  await Promise.race([shutdownDevices().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
+}
 ipcMain.handle('jarvis:claudeVersion', () => (fs.existsSync(claudeExe()) ? claudeVersion() : null));
-ipcMain.handle('jarvis:start', (_e, opts) => { ensureSession().start(opts || {}); return true; });
-ipcMain.handle('jarvis:send', (_e, payload) => ensureSession().send(payload));
+ipcMain.handle('jarvis:start', (_e, opts) => { remote.sessionStarted(); ensureSession().start(opts || {}); return true; });
+ipcMain.handle('jarvis:send', (_e, payload) => {
+  const r = ensureSession().send(payload);
+  // Every message is noted with where it came from, so its reply can go back there.
+  try {
+    const atts = Array.isArray(payload?.attachments) ? payload.attachments : [];
+    remote.noteSend(payload?.origin === 'telegram' ? 'telegram' : 'desk', r, { text: typeof payload?.text === 'string' ? payload.text : '', attachments: atts });
+  } catch (e) { log('remote:', e?.message || e); }
+  return r;
+});
 ipcMain.handle('jarvis:interrupt', () => ensureSession().interrupt());
 ipcMain.handle('jarvis:respond', (_e, id, decision) => { ensureSession().respond(id, decision); return true; });
 ipcMain.handle('jarvis:setModel', (_e, model) => ensureSession().setModel(model));
@@ -386,6 +761,20 @@ ipcMain.handle('jarvis:pickFiles', async () => {
   return out;
 });
 
+/**
+ * An attachment chip clicked in the chat. A file from the phone opens in its own app; any
+ * other attached file is only shown in Explorer - the window never launches arbitrary paths.
+ */
+ipcMain.handle('jarvis:openAttachment', async (_e, p) => {
+  if (typeof p !== 'string' || !p || !path.isAbsolute(p) || !fs.existsSync(p)) return { ok: false, error: 'That file is no longer there.' };
+  if (inInbox(p)) {
+    const err = await shell.openPath(p);
+    if (!err) return { ok: true };
+  }
+  shell.showItemInFolder(p);
+  return { ok: true };
+});
+
 // ---------------------------------------------------------------- IPC: devices (phones)
 /** Video packets go on their own channel: dozens a second, never through the chat event path. */
 function sendVideo(p) {
@@ -432,21 +821,71 @@ ipcMain.handle('jarvis:phoneState', async () => {
     const r = await phoneConnect(cfg.address);
     if (r.ok) { phone.reset(); try { phones = await listPhones(); } catch { /* keep what we had */ } }
   }
-  return { ...cfg, phones, connected: phones.some((p) => p.serial === cfg.serial && p.state === 'device') };
+  return { ...phoneConfigForWindow(cfg), phones, connected: phones.some((p) => p.serial === cfg.serial && p.state === 'device') };
 });
 ipcMain.handle('jarvis:phoneSet', (_e, patch) => {
   const cur = phoneConfig();
   const p = patch && typeof patch === 'object' ? patch : {};
+  const t = p.telegram && typeof p.telegram === 'object' ? p.telegram : {};
   const next = {
     enabled: typeof p.enabled === 'boolean' ? p.enabled : cur.enabled,
+    remote: typeof p.remote === 'boolean' ? p.remote : cur.remote,
+    mirror: typeof p.mirror === 'boolean' ? p.mirror : cur.mirror,
+    route: p.route === 'telegram' || p.route === 'adb' ? p.route : cur.route,
     serial: p.serial === null ? null : (isSerial(p.serial) ? p.serial : cur.serial),
     address: p.address === null ? null : (typeof p.address === 'string' ? p.address : cur.address),
     minSeconds: Number.isFinite(p.minSeconds) ? Math.max(0, Math.min(3600, p.minSeconds)) : cur.minSeconds,
+    telegram: {
+      // A token is only ever replaced by a valid one, or cleared outright with null. A
+      // half-typed token must not wipe a working one out of the config.
+      token: t.token === null ? null : (isToken(t.token) ? t.token.trim() : cur.telegram.token),
+      chatId: t.chatId === null ? null : (isChatId(t.chatId) ? String(t.chatId).trim() : cur.telegram.chatId),
+      name: t.name === null ? null : (typeof t.name === 'string' ? t.name.slice(0, 60) : cur.telegram.name),
+    },
   };
   saveConfig({ phone: next });
   phone.reset();
-  log('phone alerts:', next.enabled ? `on for ${next.serial || 'no phone'}` : 'off');
-  return next;
+  const where = next.route === 'telegram' ? `Telegram ${next.telegram.name || next.telegram.chatId || '(not set up)'}` : (next.serial || 'no phone');
+  log('phone alerts:', next.enabled ? `on via ${where}` : 'off');
+  const remoteBefore = cur.remote && cur.route === 'telegram';
+  const remoteNow = next.remote && next.route === 'telegram';
+  if (remoteNow !== remoteBefore) {
+    log('remote control:', remoteNow ? 'on' : 'off');
+    syncBackground();
+    // Said on the phone too: it is the first thing you will look at, and it proves the
+    // route works in the direction that matters before you rely on it.
+    if (remoteNow) remote.announce('Remote control is on. Send me a task and I will run it on your PC - approvals and questions will come here as buttons. /help lists the commands.');
+  }
+  return phoneConfigForWindow(next);
+});
+
+// Telegram setup. The token arrives from the window, is checked against Telegram, and is
+// only written to the config once Telegram has confirmed it belongs to a real bot.
+ipcMain.handle('jarvis:telegramVerify', async (_e, token) => {
+  const use = isToken(token) ? token.trim() : phoneConfig().telegram.token;
+  if (!use) return { ok: false, error: 'Paste the token @BotFather gave you first.' };
+  const r = await verifyToken(use);
+  if (!r.ok) { log('telegram verify failed:', r.error || ''); return r; }
+  const cur = phoneConfig();
+  saveConfig({ phone: { ...cur, telegram: { ...cur.telegram, token: use, name: r.name } } });
+  phone.reset();
+  log('telegram bot verified:', r.name);
+  return { ok: true, name: r.name };
+});
+
+ipcMain.handle('jarvis:telegramFindChat', async () => {
+  const cur = phoneConfig();
+  if (!cur.telegram.token) return { ok: false, error: 'Add the bot token first.' };
+  // Telegram serves one getUpdates reader at a time: remote control steps aside meanwhile.
+  // Its clock restarts when it resumes, so the "hi" you sent to be found is not run.
+  remote.pause(true);
+  let r;
+  try { r = await discoverChat(cur.telegram.token); } finally { remote.pause(false); }
+  if (!r.ok) return r;
+  saveConfig({ phone: { ...cur, telegram: { ...cur.telegram, chatId: r.chatId } } });
+  phone.reset();
+  log('telegram chat found:', r.name);
+  return { ok: true, chatId: r.chatId, name: r.name };
 });
 ipcMain.handle('jarvis:phoneWifi', async (_e, serial) => {
   const r = await enableWifi(serial);
@@ -665,13 +1104,27 @@ ipcMain.handle('jarvis:gitCommit', async (_e, key, message) => {
   } catch (e) { log('gitCommit failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
 });
 
+// The test goes by whichever route is configured, so what it proves is the route you will
+// actually be relying on - not just that adb can still see a phone.
 ipcMain.handle('jarvis:phoneTest', async (_e, serial) => {
-  const target = isSerial(serial) ? serial : phoneConfig().serial;
-  if (!target) return { ok: false, error: 'No phone chosen yet.' };
-  return postNotification(target, {
+  const item = {
     title: 'JARVIS',
     body: 'Phone alerts are working. You will hear from me when a long turn finishes or I need a decision.',
-  });
+  };
+  const cfg = phoneConfig();
+  let r;
+  if (cfg.route === 'telegram') {
+    if (!cfg.telegram.token) return { ok: false, error: 'Add the bot token first.' };
+    if (!cfg.telegram.chatId) return { ok: false, error: 'Press "Find my chat" first, after sending your bot a message.' };
+    r = await sendTelegram(cfg.telegram, item);
+  } else {
+    const target = isSerial(serial) ? serial : cfg.serial;
+    if (!target) return { ok: false, error: 'No phone chosen yet.' };
+    r = await postNotification(target, item);
+  }
+  // Logged like every real alert, so "did the test go?" has an answer after the fact.
+  log('phone alert test', r.ok ? `sent via ${cfg.route}` : `failed via ${cfg.route}: ${r.error || ''}`);
+  return r;
 });
 
 // ---------------------------------------------------------------- IPC: web apps (ASP.NET)
@@ -830,6 +1283,8 @@ process.on('uncaughtException', (e) => log('uncaught exception:', e?.stack || St
 process.on('unhandledRejection', (e) => log('unhandled rejection:', e?.stack || String(e)));
 app.on('child-process-gone', (_e, d) => log('child process gone:', d.type, d.reason, d.exitCode));
 app.on('will-quit', () => log('JARVIS quitting'));
+// Set before any window is asked to close, so the close-to-tray handler lets them go.
+app.on('before-quit', () => { quitting = true; });
 // Diagnostic only: JARVIS_DIAG_QUERY=<out.json> runs the minimal SDK query in THIS process
 // (the Electron main process, dev or packaged), writes the lifecycle to that file and quits.
 // Nothing else starts - no window, no session. Off in normal use.
@@ -857,21 +1312,29 @@ if (process.env.JARVIS_DIAG_QUERY) {
 if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
-  });
+  // Opening JARVIS again (the shortcut, Start) brings back the one already running,
+  // including from the tray.
+  app.on('second-instance', () => { showWindow(); });
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
-    app.setAppUserModelId('com.bantuapps.jarvis'); // Windows needs this for desktop notifications
+    // See IDENTITY at the top: only the packaged JARVIS.exe answers to the real id.
+    app.setAppUserModelId(IDENTITY.appId);
     log('JARVIS starting; claude.exe at', claudeExe(), 'exists:', fs.existsSync(claudeExe()));
+    if (launchHidden) log('started at login, in the tray');
     createWindow();
+    createTray();
+    // Idle until remote control is switched on; then it listens. See remote.mjs.
+    remote.start();
+    syncBackground();
+    // Restarted by a system update (the updater passes --updated): say so in the chat, so
+    // the phone knows JARVIS is back and listening.
+    if (process.argv.includes('--updated')) {
+      log('started after a system update');
+      remote.announce(`✅ System update installed - JARVIS v${app.getVersion()} is back online and listening.`);
+    }
   });
   app.on('window-all-closed', async () => {
-    try { session?.close(); } catch { /* shutting down */ }
-    // Phone screens, flutter runs and any site started here end with the app; the apps stay
-    // installed on the phones.
-    try { shutdownWebApps(); } catch { /* shutting down */ }
-    await Promise.race([shutdownDevices().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
+    await shutdownChildren();
     app.quit();
   });
 }

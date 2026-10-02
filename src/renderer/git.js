@@ -1036,10 +1036,12 @@
 
   function setTab(which) {
     tab = which;
-    $('scTabChanges').classList.toggle('on', which === 'changes');
-    $('scTabHistory').classList.toggle('on', which === 'history');
-    $('scTabStash').classList.toggle('on', which === 'stash');
-    $('scTabGitHub').classList.toggle('on', which === 'github');
+    for (const [id, name] of [['scTabChanges', 'changes'], ['scTabHistory', 'history'], ['scTabStash', 'stash'], ['scTabGitHub', 'github']]) {
+      const t = $(id);
+      t.classList.toggle('on', which === name);
+      t.setAttribute('role', 'tab');
+      t.setAttribute('aria-selected', String(which === name));
+    }
     $('scFiles').hidden = which !== 'changes';
     $('scCommit').hidden = which !== 'changes';
     $('scHistory').hidden = which !== 'history';

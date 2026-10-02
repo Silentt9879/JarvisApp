@@ -82,7 +82,7 @@
       ['Workspace', state.info?.cwd],
     ]);
     const c = state.context;
-    JV.gauge($('gCtx'), 'CONTEXT', c ? Math.round(c.percentage) : null, c ? `${JV.num(c.totalTokens)} / ${JV.num(c.maxTokens)} tokens` : 'Loads after the first reply');
+    JV.gauge($('gCtx'), 'Context', c ? Math.round(c.percentage) : null, c ? `${JV.num(c.totalTokens)} / ${JV.num(c.maxTokens)} tokens` : 'Loads after the first reply');
     const legend = $('ctxLegend');
     const bar = $('ctxBar');
     legend.replaceChildren();
@@ -163,11 +163,16 @@
     const g = $('agentAll');
     g.replaceChildren();
     const custom = JV.customAgents().slice().sort((a, b) => a.name.localeCompare(b.name));
-    if (!custom.length) { g.appendChild(el('div', 'muted empty', 'Specialists load once the session is connected.')); return; }
+    // No specialists is no reason to hide the built-in agents: they are there either way.
+    if (!custom.length) {
+      const note = el('div', 'muted empty', JV.noSpecialistsText());
+      note.style.gridColumn = '1 / -1';
+      g.appendChild(note);
+    }
     for (const a of custom) g.appendChild(JV.agentCard(a, { big: true, onClick: agentDoc }));
     const bi = JV.builtinAgents();
     if (bi.length) {
-      const h = el('div', 'grid-sep', 'BUILT-IN');
+      const h = el('div', 'grid-sep', 'Built-in');
       g.appendChild(h);
       for (const a of bi) g.appendChild(JV.agentCard(a, { big: true, onClick: agentDoc }));
     }
@@ -177,7 +182,7 @@
   function renderTasks() {
     const k = $('kanban');
     k.replaceChildren();
-    const cols = [['in_progress', 'IN PROGRESS'], ['pending', 'PENDING'], ['completed', 'DONE']];
+    const cols = [['in_progress', 'In progress'], ['pending', 'Pending'], ['completed', 'Done']];
     for (const [st, label] of cols) {
       const col = el('div', `hud-panel kcol s-${st}`);
       const items = state.tasks.filter((t) => t.status === st);
@@ -268,10 +273,13 @@
     host.replaceChildren();
     const k = state.workspace?.knowledge;
     if (!k) { host.appendChild(el('div', 'muted', 'Checking…')); return; }
-    const box = el('div', `kbox s-${k.state}`);
-    const word = { current: 'Knowledge is current', stale: 'Knowledge is stale', 'no-baseline': 'No knowledge baseline', unknown: 'Status unknown' }[k.state] || k.state;
+    // A workspace with no .claude knowledge folder reports no state at all. That used to
+    // draw an empty box: a warning icon, a button, and nothing said.
+    const st = k.state || 'unknown';
+    const box = el('div', `kbox s-${st}`);
+    const word = { current: 'Knowledge is current', stale: 'Knowledge is stale', 'no-baseline': 'No knowledge baseline', unknown: 'Status unknown' }[st] || st;
     const top = el('div', 'kbox-top');
-    top.appendChild(JV.icon(k.state === 'current' ? 'check' : 'alert'));
+    top.appendChild(JV.icon(st === 'current' ? 'check' : 'alert'));
     top.appendChild(el('b', null, word));
     if (k.lastScan) top.appendChild(el('small', null, `baseline ${k.lastScan.replace('T', ' ').replace('Z', ' UTC')}`));
     box.appendChild(top);
@@ -287,7 +295,7 @@
     }
     if (k.unmapped) box.appendChild(el('small', 'kbox-note', `${k.unmapped} changed file${k.unmapped > 1 ? 's' : ''} in areas no knowledge file covers yet.`));
     if (k.error) box.appendChild(el('small', 'kbox-note', k.error));
-    if (k.state !== 'current') {
+    if (st !== 'current') {
       const b = el('button', 'btn btn-primary small', 'Run /relearn');
       b.onclick = () => JV.chat.submit('/relearn');
       box.appendChild(b);

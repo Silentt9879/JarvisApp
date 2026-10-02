@@ -15,7 +15,11 @@
   const AGENT_HUE = ['#39c6ff', '#7c8cff', '#b77dff', '#ffb347', '#3ddc97', '#ff7aa8', '#5eead4', '#f5d76e'];
   JV.agentInfo = (a) => {
     const d = a.description || '';
-    const m = /^([^—–-]+?)\s+[—–-]\s+(.+)$/s.exec(d);
+    // The specialists' convention is "CODENAME — role". Only a short head counts as a
+    // codename: a built-in's description can hold a dash mid-sentence, and splitting there
+    // made half a sentence the agent's title.
+    const raw = /^([^—–-]+?)\s+[—–-]\s+(.+)$/s.exec(d);
+    const m = raw && raw[1].trim().length <= 28 ? raw : null;
     const code = m ? m[1].trim() : a.name;
     const role = JV.clip((m ? m[2] : d).split(/\.\s/)[0].replace(/\.$/, ''), 52);
     let h = 0;
@@ -24,6 +28,14 @@
   };
   JV.customAgents = () => (state.agentList || []).filter((a) => !BUILTIN.has(a.name));
   JV.builtinAgents = () => (state.agentList || []).filter((a) => BUILTIN.has(a.name));
+  /**
+   * What to say when there are no specialists. Two different situations used to share
+   * one sentence: before the session reports its agents, "they load once connected" is
+   * true; after it has reported none, the same sentence is a promise that never comes true.
+   */
+  JV.noSpecialistsText = () => (state.agentsLoaded
+    ? 'No specialists in this workspace. They are defined in .claude/agents, and this folder has none.'
+    : 'Specialists load once the session is connected.');
 
   /** One agent card; `big` adds the description. Clicking runs onClick. */
   JV.agentCard = (a, { big = false, onClick = null } = {}) => {
@@ -57,7 +69,7 @@
       ((state.agentUse.get(y.name) || 0) - (state.agentUse.get(x.name) || 0)) ||
       x.name.localeCompare(y.name));
     g.replaceChildren();
-    if (!list.length) { g.appendChild(el('div', 'muted empty', 'Specialists load once the session is connected.')); return; }
+    if (!list.length) { g.appendChild(el('div', 'muted empty', JV.noSpecialistsText())); return; }
     // Four fills the panel in two neat rows; the rest are a click away on the Agents page.
     for (const a of list.slice(0, 4)) g.appendChild(JV.agentCard(a, { onClick: () => JV.show('agents') }));
   }
@@ -209,9 +221,13 @@
     ctx.fill();
   }
 
+  // The orb is no longer drawn: the Overview states the session's condition in words, with
+  // a dot beside it, and that is the whole of what the canvas was saying. The code is kept
+  // because the canvas is still in the page - if it is ever given a size again, it draws.
   function orbLoop(t) {
     raf = null;
     if (state.view !== 'command' || document.hidden) return;
+    if (!orbCanvas.clientWidth || !orbCanvas.clientHeight) return; // hidden: nothing to draw, and no next frame
     if (t - lastT >= 30 || !lastT) drawOrb(t);
     if (!JV.prefs.reduceMotion) raf = requestAnimationFrame(orbLoop);
   }
@@ -221,7 +237,7 @@
 
   function renderOrbText() {
     $('orbVer').textContent = state.version ? `Claude Code v${state.version}` : '';
-    const s = { starting: 'CONNECTING', ready: 'STANDING BY', working: 'PROCESSING', waiting: 'AWAITING YOUR DECISION', closed: 'OFFLINE', offline: 'OFFLINE' }[state.status] || '';
+    const s = { starting: 'Connecting', ready: 'Standing by', working: 'Working', waiting: 'Awaiting your decision', closed: 'Offline', offline: 'Offline' }[state.status] || '';
     $('orbState').textContent = s;
     $('orbPanel').className = `p-orb s-${state.status}`;
   }
@@ -279,7 +295,7 @@
       if (r.kind === 'task') {
         const k = r.k;
         li.classList.add(`s-${k.status}`);
-        li.appendChild(el('span', 'tl-time', 'TASK'));
+        li.appendChild(el('span', 'tl-time', 'Task'));
         const d = el('div', 'tl-main');
         d.appendChild(el('b', null, k.status === 'in_progress' && k.activeForm ? k.activeForm : k.subject));
         const bar = el('div', 'tl-bar');
@@ -315,7 +331,7 @@
     const s = state.stats;
     JV.gauge($('gCpu'), 'CPU', s?.cpu ?? null, s ? `${s.cores} cores` : '');
     JV.gauge($('gRam'), 'RAM', s?.ram?.pct ?? null, s ? `${JV.bytes(s.ram.used)} / ${JV.bytes(s.ram.total)}` : '');
-    JV.gauge($('gDisk'), `DISK ${s?.disk?.root?.replace('\\', '') || ''}`, s?.disk?.pct ?? null, s?.disk ? `${JV.bytes(s.disk.total - s.disk.used)} free` : '');
+    JV.gauge($('gDisk'), `Disk ${s?.disk?.root?.replace('\\', '') || ''}`.trim(), s?.disk?.pct ?? null, s?.disk ? `${JV.bytes(s.disk.total - s.disk.used)} free` : '');
     $('hostName').textContent = s ? s.host : '';
   }
   async function pollStats() {
