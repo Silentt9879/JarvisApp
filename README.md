@@ -24,6 +24,7 @@ location, calendar) there is no panel.
 | **Tools & Skills** | Slash commands and skills, MCP servers with their tools, built-in tools | `supportedCommands`, `mcpServerStatus` |
 | **Workspace** | The nine repos (branch, ahead/behind, modified/staged/untracked, last commit, open in VS Code), open issues, knowledge freshness | `git --no-optional-locks status`, `open-issues.md` |
 | **Files** | Every text file in the workspace, read-only, with a preview and one click into VS Code | the workspace folder |
+| **Source Control** | One repository at a time: changes and diffs, staging and commits, branches, fetch / pull / push, history, stashes, conflicts - and, for a GitHub repository, its pull requests and workflow runs (read-only) | `git`, the GitHub API on request |
 
 Header: system status (derived: session, MCP, knowledge, pending decisions - hover for
 reasons), clock, search (Ctrl+K: views, sessions, agents, commands, repos, documents),
@@ -106,10 +107,13 @@ leaving the app, then open it where you will actually change it. Nothing here wr
   There is no API key to set up: ClickUp is a remote OAuth MCP server, so the sync borrows
   the connection Claude Code already has. It runs ONE short Claude Code query of its own -
   outside your conversation, on Haiku, with only the read-only `clickup_get/search/filter/
-  find/resolve/list` tools allowed - and asks for JSON. Nothing is ever written back.
-- It takes a minute or two (248 tasks took about three), so the answer is cached in
-  `%APPDATA%\JARVIS\clickup-tasks.json` and the page opens from the cache instantly. Sync
-  again when you want a fresh copy.
+  find/resolve/list` tools allowed. Nothing is ever written back.
+- The model only makes the calls. The tasks are read from the `filter_tasks` results
+  themselves, and the query is stopped the moment the last page (`has_more: false`) is in -
+  248 tasks take 20-55 s. The cache in `%APPDATA%\JARVIS\clickup-tasks.json` is replaced
+  only by a list proven complete: every page from 0 with no gap, closed tasks included, every
+  space covered. Anything less fails with a message and leaves the board as it was. A
+  5-minute limit bounds a remote that never answers. The page opens from the cache instantly.
 - Sprints are collapsible groups, newest first; the current sprint and anything with open
   work starts expanded. Search by code or title, pick one sprint, or show only unfinished.
   The summary tiles are clickable filters, and the few unfinished tasks are listed in full
@@ -118,6 +122,43 @@ leaving the app, then open it where you will actually change it. Nothing here wr
   lists what is waiting to be logged, above what has already gone.
 - The code is split out of the task name (`BE331 - Fix ...`) into its own chip, including the
   `QA-` variants.
+
+## Source Control - git first, GitHub read-only
+
+GitHub Desktop's everyday workflow for the nine repositories and the app's own: Changes,
+History and Stashes tabs beside a diff, the commit box beneath, and one remote button whose
+label comes from refs already on disk. Remote git runs only when you press it. The full
+design, its safety rules and every verification are in the workspace's
+`.claude/jarvis/proposals.md`, P-009.
+
+**GitHub** is a fourth tab, shown only when the repository's `origin` is on github.com
+(HTTPS or SSH; any other host shows no GitHub UI). It is read-only - JARVIS creates,
+comments on, merges or re-runs nothing on GitHub.
+- **Links, no API call:** Repository, Branch and Commit (each "↗" to open in the browser,
+  "Copy" for the address); "GitHub" beside a file's diff; "View on GitHub" in a commit. They
+  are built from local refs, and a link that would 404 because something is not pushed yet
+  is refused with the reason.
+- **Pull requests:** opening the tab loads this branch's pull request and the open ones, 20
+  at a time (Open / Closed, Load more). Choosing one loads its detail; "Changed files"
+  loads its files, 50 at a time; choosing a file shows its patch in the same diff view as
+  Changes. No pull request for your branch? "Open a pull request on GitHub" opens GitHub's
+  page - you create it there.
+- **Checks:** "Check workflow runs" asks GitHub about the latest commit GitHub has from this
+  branch (or a commit from History, or a pull request's head): each workflow run with its
+  status, times and a link, and the commit's checks. Four repositories deploy to dev on a
+  push to `development`, so this answers "did my push deploy?". After a push the window
+  offers the button; it never presses it.
+- **When GitHub is asked:** only when you open the tab, press Refresh, Load more, Check or
+  Try again, or choose a pull request or a file. Never at startup, on choosing a repository
+  or branch, on a timer, or after a commit, fetch, pull or push. The last answer stays,
+  labelled with its time.
+- **Sign-in:** the Git Credential Manager sign-in git already uses, read through git's
+  credential protocol, without any prompt, only when a request needs it. It is held in
+  memory by the main process - never in the window, a file, a log or an error - and never
+  removed, even if GitHub rejects it (fetch or push once in git to renew it).
+- **If GitHub fails** (offline, rate-limited, signed out, slow), the tab says so and offers
+  Try again; everything else in Source Control is unaffected. Requests are logged as
+  operation, repository and status, e.g. `github pulls myInsurAPI 200 (graphql 4998/5000)`.
 
 ## Devices - the phones and the web apps, side by side
 
@@ -287,8 +328,22 @@ plain Node ("electron does not provide an export named BrowserWindow").
 - Screenshots: `JARVIS_CAPTURE=<file.png>` (+ `JARVIS_CAPTURE_DELAY` ms, `JARVIS_VIEW=<view>`,
   `JARVIS_CLICK=<id or .class, comma-separated to click several in turn>`,
   `JARVIS_SIZE=<w>x<h>`, `JARVIS_AUTOPROMPT=<text>`).
+  By default the click lands 1.5 s before the capture, and the app quits right after it - fine
+  for instant UI, fatal for anything slow. For a model query or a sync, set
+  `JARVIS_CLICK_AT=<ms>` to click early and a `JARVIS_CAPTURE_DELAY` long enough to finish.
+  `JARVIS_CLICK_GAP=<ms>` spaces the clicks further apart than 1.2 s, for a flow where each
+  click waits on a request; `JARVIS_FILL_AT=<ms>` types the `JARVIS_FILL` text at that
+  moment, so a later click can submit it. Chromium switches pass through, so
+  `-- --proxy-server=127.0.0.1:9` makes GitHub unreachable without touching git. A click
+  selector may end in `:first-of-type`, `:last-of-type` or `:nth-of-type(n)` to reach a later
+  row. `JARVIS_HOVER=<selector>` moves the mouse over an element and `JARVIS_FOCUS=<selector>`
+  gives it keyboard focus (with DevTools focus emulation, so the window never takes real
+  focus), 800 ms before the capture.
   A page capture never includes the Windows caption buttons - those are window frame, not page. The window opens off-screen,
   never takes focus, screenshots itself and quits. `JARVIS_AUTOPROMPT` sends a real message.
+- Packaged SDK health check: `JARVIS_DIAG_QUERY=<out.json>` runs one minimal query ("Reply
+  exactly: OK", every tool denied, no MCP) with no window, writes its lifecycle and runtime
+  facts to the file, and exits. It never records a credential, a token or real prompt content.
 - Developer tools: **Ctrl+Shift+I**. Log (also crashes, and script errors in the window as
   `[window error]`): `%APPDATA%\JARVIS\jarvis.log`.
 - Every PowerShell or terminal run needs `ELECTRON_RUN_AS_NODE` cleared first - that includes

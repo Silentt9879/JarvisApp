@@ -2,8 +2,9 @@
 //
 // ClickUp is a remote OAuth MCP server, so there is no key to copy: the sync borrows the
 // connection Claude Code already has. It runs ONE short Claude Code query of its own, with
-// only the read-only ClickUp tools allowed and nothing else, and asks for JSON. That keeps
-// it out of your conversation, and the answer is cached so the page opens instantly.
+// only the read-only ClickUp tools allowed. The model only makes the calls; the tasks are
+// read from the tool RESULTS, never retyped by the model. The answer is cached so the page
+// opens instantly.
 import fs from 'node:fs';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -13,23 +14,19 @@ const SYNC_MODEL = 'claude-haiku-4-5-20251001';
 /** Only these may be called during a sync: reading ClickUp, nothing that writes. */
 const READ_ONLY = /^mcp__clickup__clickup_(get|search|filter|find|resolve|list)/;
 
-const PROMPT = `Find every ClickUp task assigned to the member "Jayvian" and report them as JSON.
+const PROMPT = `Fetch every ClickUp task assigned to the member "Jayvian". JARVIS reads the tasks
+straight from the tool results, so do not write any task out yourself.
 
-Steps:
-1. clickup_get_workspace_hierarchy to learn the spaces, folders and lists (sprints).
-2. clickup_find_member_by_name or clickup_resolve_assignees to get Jayvian's member id.
-3. Fetch Jayvian's tasks across EVERY list and EVERY status, closed and archived included
-   (clickup_filter_tasks, or clickup_get_operators then clickup_execute_operator if that
-   covers more). Do not stop at the current sprint.
+1. clickup_get_workspace_hierarchy.
+2. clickup_find_member_by_name for "Jayvian", to get the member id.
+3. clickup_filter_tasks with assignees: [that id], include_closed: true and page: 0, across
+   every space (no space_ids, or every space id from step 1). Call it again with the next
+   page until has_more is false.
 
-Reply with ONE json code block and no other text:
-{"member":"<name>","tasks":[{"id":"<task id>","code":"<custom id such as BE333, else null>",
-"title":"<name>","status":"<status as ClickUp shows it>","statusType":"<open|custom|closed|done>",
-"list":"<list name>","folder":"<folder name or null>","space":"<space name>",
-"url":"<task url>","updated":"<ISO date or null>","priority":"<urgent|high|normal|low|null>"}]}
-
-Every task Jayvian is assigned goes in the list. If a step fails, say so inside the JSON as
-{"error":"..."} instead of guessing.`;
+Then reply with exactly: DONE
+If a step fails, reply with one line: ERROR: <the reason>`;
+/** A healthy sync takes about half a minute. This only bounds a remote that never answers. */
+const SYNC_LIMIT_MS = 5 * 60 * 1000;
 
 // ---------------------------------------------------------------- the local draft
 /** `- [BE333](https://app.clickup.com/t/x) - Title` or `- Title` under a `##` heading. */
@@ -76,32 +73,6 @@ function writeClickUp(userDir, data) {
   try { fs.writeFileSync(cacheFile(userDir), JSON.stringify(data)); } catch { /* cache is optional */ }
 }
 
-/** The first JSON object in the model's reply, fenced or not. */
-function extractJson(text) {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-  const candidates = [fenced && fenced[1], text];
-  for (const c of candidates) {
-    if (!c) continue;
-    const start = c.indexOf('{');
-    if (start < 0) continue;
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    for (let i = start; i < c.length; i++) {
-      const ch = c[i];
-      if (esc) { esc = false; continue; }
-      if (ch === '\\') { esc = true; continue; }
-      if (ch === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (ch === '{') depth++;
-      else if (ch === '}' && --depth === 0) {
-        try { return JSON.parse(c.slice(start, i + 1)); } catch { break; }
-      }
-    }
-  }
-  return null;
-}
-
 const str = (v, max = 300) => (typeof v === 'string' ? v.slice(0, max) : null);
 
 /** Keep only the fields the page shows, and only from tasks that have a title. */
@@ -135,14 +106,136 @@ function clean(list) {
   return out;
 }
 
+// ---------------------------------------------------------------- reading the tool results
 /**
- * One short Claude Code query, outside the window's conversation, that reads ClickUp and
- * returns JSON. Resolves to { ok, tasks, fetchedAt } or { ok: false, error }.
+ * Collects the sync's answer from the ClickUp tool RESULTS.
+ *
+ * The first design had the model retype every task as one JSON reply. With 248 tasks that
+ * reply outgrew a single response: it was cut off mid-task, the model carried on in a fresh
+ * JSON block holding only the rest, and no single block was the whole list. Retyping also
+ * took four minutes after the data had arrived in thirty seconds, and every `updated` date
+ * it wrote was wrong. The pages themselves are exact, so they are the source.
+ *
+ * `complete()` is the guard against a silently shorter board: it is true only once a paging
+ * run has gone from page 0 to `has_more: false` without a gap, with closed tasks included,
+ * for Jayvian, across every space in the workspace.
+ */
+export function createCollector() {
+  const calls = new Map();   // tool_use id -> { name, input }
+  const runs = new Map();    // one filter, all its pages -> { input, pages, last }
+  const found = new Map();   // task id -> the task as ClickUp returned it
+  const lists = new Map();   // list id -> { space, folder }
+  let spaces = null;         // every space id, once the hierarchy has been read
+  let memberId = null;
+  let broken = null;
+  let brokenText = '';
+
+  const short = (name) => String(name || '').replace(/^mcp__clickup__clickup_/, '');
+  const signature = (input) => JSON.stringify(Object.keys(input || {}).filter((k) => k !== 'page').sort()
+    .map((k) => [k, input[k]]));
+  const nonEmpty = (v) => Array.isArray(v) && v.length > 0;
+
+  function readHierarchy(root) {
+    spaces = [];
+    const walk = (node, space, folder) => {
+      for (const c of node?.children || []) {
+        if (c.type === 'space') { spaces.push(String(c.id)); walk(c, c.name, null); }
+        else if (c.type === 'folder') walk(c, space, c.name);
+        else if (c.type === 'list') lists.set(String(c.id), { space, folder });
+        else walk(c, space, folder);
+      }
+    };
+    walk(root, null, null);
+  }
+
+  return {
+    call(id, name, input) { calls.set(id, { name: short(name), input: input || {} }); },
+
+    result(id, text, isError = false) {
+      const call = calls.get(id);
+      // An error result is not a page: the model retries, and nothing is added or lost.
+      if (!call || isError) return;
+      let data;
+      try { data = JSON.parse(text); } catch {
+        // A page that cannot be read means the set cannot be trusted. Other calls failing
+        // (an error message, a lookup) is the model's business, not the board's.
+        if (call.name === 'filter_tasks') { broken = 'A page of ClickUp tasks came back unreadable.'; brokenText = String(text).slice(0, 160); }
+        return;
+      }
+      if (data?.hierarchy?.root) readHierarchy(data.hierarchy.root);
+      if (data?.member?.id != null && /^(find_member_by_name|resolve_assignees)$/.test(call.name)) memberId = String(data.member.id);
+      if (call.name !== 'filter_tasks' || !Array.isArray(data?.tasks)) return;
+      const key = signature(call.input);
+      const run = runs.get(key) || { input: call.input, pages: new Set(), last: null };
+      runs.set(key, run);
+      const page = Number.isInteger(data.page) ? data.page : Number(call.input.page || 0);
+      run.pages.add(page);
+      if (data.has_more === false) run.last = page;
+      for (const t of data.tasks) if (t?.id) found.set(String(t.id), t);
+    },
+
+    complete() {
+      const done = [...runs.values()].filter((r) => r.last !== null
+        && Array.from({ length: r.last + 1 }, (_, p) => p).every((p) => r.pages.has(p))
+        && r.input.include_closed === true && nonEmpty(r.input.assignees));
+      if (!done.length) return false;
+      const scoped = (i) => nonEmpty(i.space_ids) || nonEmpty(i.folder_ids) || nonEmpty(i.list_ids);
+      if (done.some((r) => !scoped(r.input))) return true;          // one workspace-wide run
+      if (!spaces) return false;                                     // nothing to check coverage against
+      const seen = new Set(done.filter((r) => !nonEmpty(r.input.folder_ids) && !nonEmpty(r.input.list_ids))
+        .flatMap((r) => r.input.space_ids || []).map(String));
+      return spaces.every((sp) => seen.has(sp));
+    },
+
+    get broken() { return broken; },
+    get brokenText() { return brokenText; },
+
+    /** Pages read so far, for the log: how far it got, without any task content. */
+    summary() {
+      return [...runs.values()].map((r) => `pages ${[...r.pages].sort((a, b) => a - b).join(',')}${r.last === null ? ' (more)' : ' (end)'}`).join('; ') || 'no task pages';
+    },
+
+    tasks() {
+      const mine = [...found.values()].filter((t) => !memberId || !Array.isArray(t.assignees)
+        || t.assignees.some((a) => String(a?.id) === memberId));
+      return mine.map((t) => {
+        const status = typeof t.status === 'string' ? t.status : t.status?.status;
+        const where = lists.get(String(t.list?.id)) || {};
+        const ms = Number(t.date_updated);
+        return {
+          id: t.id,
+          code: t.custom_id || null,
+          title: t.name,
+          status,
+          // ClickUp stamps date_closed when a task reaches a done or closed status.
+          statusType: t.date_closed ? 'done' : /^(open|to do|todo|backlog)$/i.test(status || '') ? 'open' : 'custom',
+          list: t.list?.name,
+          folder: where.folder ?? null,
+          space: where.space ?? null,
+          url: t.url,
+          updated: ms > 0 ? new Date(ms).toISOString() : null,
+          priority: typeof t.priority === 'string' ? t.priority : t.priority?.priority ?? null,
+        };
+      });
+    },
+  };
+}
+
+const textOf = (content) => (Array.isArray(content)
+  ? content.filter((p) => p?.type === 'text').map((p) => p.text).join('')
+  : String(content ?? ''));
+
+/**
+ * One short Claude Code query, outside the window's conversation, that reads ClickUp.
+ * Resolves to { ok, tasks, fetchedAt } or { ok: false, error }. The cache is only replaced
+ * by a list proven complete; anything less leaves the board as it was.
  */
 export async function syncClickUp({ cwd, exe, userDir, log }) {
   const started = Date.now();
-  let text = '';
+  const col = createCollector();
+  let reply = '';
   let denied = null;
+  let timedOut = false;
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   const q = query({
@@ -153,40 +246,60 @@ export async function syncClickUp({ cwd, exe, userDir, log }) {
       model: SYNC_MODEL,
       // 'user' brings the user-scope ClickUp server in; no project hooks or agents run.
       settingSources: ['user'],
-      systemPrompt: 'You read ClickUp through its MCP tools and answer with JSON only.',
+      systemPrompt: 'You fetch ClickUp data through its read-only MCP tools.',
       permissionMode: 'default',
       env,
-      canUseTool: async (name) => {
-        if (READ_ONLY.test(name)) return { behavior: 'allow', updatedInput: {} };
+      canUseTool: async (name, input) => {
+        if (READ_ONLY.test(name)) return { behavior: 'allow', updatedInput: input };
         denied = denied || name;
         return { behavior: 'deny', message: 'Only read-only ClickUp tools are allowed here.' };
       },
       stderr: (d) => log?.('[clickup sync]', String(d).trim().slice(0, 300)),
     },
   });
+  const timer = setTimeout(() => { timedOut = true; try { q.close(); } catch { /* already closed */ } }, SYNC_LIMIT_MS);
+  let early = false;
   try {
     for await (const m of q) {
       if (m.type === 'assistant') {
-        for (const b of m.message?.content || []) if (b.type === 'text') text += b.text;
+        for (const b of m.message?.content || []) {
+          if (b.type === 'tool_use') col.call(b.id, b.name, b.input);
+          else if (b.type === 'text') reply += b.text;
+        }
+      } else if (m.type === 'user' && Array.isArray(m.message?.content)) {
+        for (const b of m.message.content) if (b.type === 'tool_result') col.result(b.tool_use_id, textOf(b.content), b.is_error === true);
+        // Everything is in hand. Stop here, before the model spends minutes repeating it.
+        if (col.complete()) { early = true; break; }
       } else if (m.type === 'result') break;
     }
   } catch (e) {
-    log?.('clickup sync failed', e?.message || e);
-    return { ok: false, error: String(e?.message || e) };
+    if (!timedOut) {
+      log?.('clickup sync failed', e?.message || e);
+      return { ok: false, error: String(e?.message || e) };
+    }
   } finally {
+    clearTimeout(timer);
     try { q.close(); } catch { /* already closed */ }
   }
 
-  const data = extractJson(text);
-  if (!data) {
-    log?.('[clickup sync] no JSON in the reply:', (text || '(nothing)').slice(0, 600).replace(/\s+/g, ' '));
-    return { ok: false, error: denied ? `The sync tried to use ${denied}, which is not allowed here.` : 'ClickUp did not answer with usable data. The details are in the log.' };
+  if (col.broken) {
+    log?.(`[clickup sync] unreadable task page: ${col.brokenText.replace(/\s+/g, ' ')}`);
+    return { ok: false, error: `${col.broken} The board was left as it was.` };
   }
-  if (data.error) return { ok: false, error: String(data.error).slice(0, 300) };
-  const tasks = clean(data.tasks);
+  if (!col.complete()) {
+    log?.(`[clickup sync] incomplete after ${Math.round((Date.now() - started) / 1000)}s: ${col.summary()}`);
+    const said = /ERROR:\s*(.+)/.exec(reply)?.[1]?.trim().slice(0, 300);
+    const error = timedOut ? `ClickUp did not finish within ${SYNC_LIMIT_MS / 60000} minutes. The board was left as it was.`
+      : said ? `ClickUp: ${said}`
+      : denied ? `The sync tried to use ${denied}, which is not allowed here.`
+      : 'ClickUp did not return the full task list, so the board was left as it was. The details are in the log.';
+    return { ok: false, error };
+  }
+  const tasks = clean(col.tasks());
+  if (!tasks.length) log?.(`[clickup sync] complete but no tasks kept: ${col.summary()}`);
   if (!tasks.length) return { ok: false, error: 'No tasks came back for Jayvian. Check that ClickUp is connected in Tools & Skills.' };
-  const out = { tasks, member: str(data.member, 80) || 'Jayvian', fetchedAt: new Date().toISOString(), tookMs: Date.now() - started };
+  const out = { tasks, member: 'Jayvian', fetchedAt: new Date().toISOString(), tookMs: Date.now() - started };
   writeClickUp(userDir, out);
-  log?.(`clickup sync: ${tasks.length} tasks in ${Math.round(out.tookMs / 1000)}s`);
+  log?.(`clickup sync: ${tasks.length} tasks in ${Math.round(out.tookMs / 1000)}s (${col.summary()}${early ? ', stopped once complete' : ''})`);
   return { ok: true, ...out };
 }

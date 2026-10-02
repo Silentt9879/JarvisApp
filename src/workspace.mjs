@@ -23,15 +23,74 @@ export const NICKNAMES = {
   myInsurAPI: 'Insurance API',
 };
 
-function run(cmd, args, { cwd, timeout = 12000 } = {}) {
+/**
+ * Run a command and collect its output.
+ *
+ * The options beyond `cwd` and `timeout` exist for operations that talk to a network and
+ * so may need to be watched or stopped. They are all optional, and every existing caller
+ * behaves exactly as before:
+ *
+ *   signal      an AbortSignal; aborting it kills the child and resolves `cancelled: true`
+ *   onChild     receives the ChildProcess, so a caller can kill a whole process tree -
+ *               on Windows `git fetch` spawns helpers that outlive a kill of git itself
+ *   onLine      called with each line of stderr as it arrives, for live progress; git
+ *               reports progress on stderr, not stdout
+ *
+ * A cancelled or timed-out run is NEVER reported as success: `ok` is false and the reason
+ * is distinguishable, because "the user stopped it" and "it failed" are different things.
+ */
+export function run(cmd, args, { cwd, timeout = 12000, signal, onChild, onLine } = {}) {
   return new Promise((resolve) => {
     // GIT_OPTIONAL_LOCKS=0 reaches git run by child scripts too (scan-status.py): a status
     // refresh must never hold index.lock while the user or an agent commits.
+    // GIT_TERMINAL_PROMPT=0 keeps a missing credential a clean failure instead of a
+    // hidden prompt nobody can answer.
     const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', PYTHONIOENCODING: 'utf-8' };
     delete env.ELECTRON_RUN_AS_NODE;
-    execFile(cmd, args, { cwd, timeout, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env }, (err, stdout, stderr) =>
-      resolve({ ok: !err, code: err?.code ?? 0, out: String(stdout || ''), err: String(stderr || err?.message || '') }));
+
+    const opts = { cwd, timeout, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env };
+    if (signal) opts.signal = signal;
+
+    const child = execFile(cmd, args, opts, (err, stdout, stderr) => {
+      const cancelled = !!(signal?.aborted) || err?.name === 'AbortError' || err?.code === 'ABORT_ERR';
+      const timedOut = !cancelled && !!err?.killed;
+      resolve({
+        ok: !err,
+        code: typeof err?.code === 'number' ? err.code : (err ? 1 : 0),
+        out: String(stdout || ''),
+        err: String(stderr || err?.message || ''),
+        cancelled,
+        timedOut,
+      });
+    });
+
+    if (onLine && child.stderr) {
+      let buf = '';
+      child.stderr.on('data', (d) => {
+        buf += String(d);
+        // git draws progress with \r; treat both as line ends.
+        const parts = buf.split(/\r\n|\r|\n/);
+        buf = parts.pop() || '';
+        for (const line of parts) { const t = line.trim(); if (t) { try { onLine(t); } catch { /* reporting must not break the run */ } } }
+      });
+    }
+    if (onChild) { try { onChild(child); } catch { /* the caller's problem, not the run's */ } }
   });
+}
+
+/**
+ * Kill a process and everything it started. `child.kill()` on Windows leaves git's helper
+ * processes (git-remote-https and friends) running, which can hold a lock or a connection
+ * open long after the user pressed Stop.
+ */
+export function killTree(child) {
+  if (!child || child.killed || typeof child.pid !== 'number') return;
+  if (process.platform === 'win32') {
+    try { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); }
+    catch { try { child.kill(); } catch { /* already gone */ } }
+  } else {
+    try { child.kill('SIGTERM'); } catch { /* already gone */ }
+  }
 }
 
 // ------------------------------------------------------------------ machine
@@ -87,8 +146,13 @@ export function listRepos(cwd) {
   } catch { return []; }
 }
 
-async function repoState(cwd, name) {
-  const dir = path.join(cwd, name);
+/**
+ * The state of one repository, given its directory. Source Control needs this for a repo
+ * that is NOT a child of the workspace - the app's own - so the path-based form is the
+ * real one and `repoState` below is the workspace-relative convenience over it. One
+ * implementation, so the Workspace view and Source Control can never disagree.
+ */
+export async function repoStateAt(dir, name = path.basename(dir)) {
   const [st, lg] = await Promise.all([
     run('git', ['--no-optional-locks', '-C', dir, 'status', '--porcelain=v1', '-b']),
     run('git', ['--no-optional-locks', '-C', dir, 'log', '-1', '--format=%cr%x1f%s%x1f%ct']),
@@ -123,7 +187,7 @@ async function repoState(cwd, name) {
 }
 
 export async function gitStatus(cwd) {
-  return Promise.all(listRepos(cwd).map((n) => repoState(cwd, n)));
+  return Promise.all(listRepos(cwd).map((n) => repoStateAt(path.join(cwd, n), n)));
 }
 
 // ------------------------------------------------------------------ knowledge

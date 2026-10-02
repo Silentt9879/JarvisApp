@@ -12,8 +12,11 @@ import { systemStats, gitStatus, knowledgeStatus, openIssues, handoffFocus, list
 import { FLUTTER_APPS, isSerial, listDevices, startMirror, stopMirror, resetVideo, sendInput, flutterRun, flutterCommandFor, flutterLog, shutdownDevices } from './devices.mjs';
 import { listWebApps, webRun, webStop, webLog, shutdownWebApps } from './webapps.mjs';
 import { readDraft, readClickUp, syncClickUp } from './tasks.mjs';
+import { createGitHub } from './github.mjs';
 import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode } from './files.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
+import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
+import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.dirname(SRC);
@@ -173,21 +176,92 @@ function createWindow() {
         win.webContents.executeJavaScript(`window.__jarvisAutoprompt && window.__jarvisAutoprompt(${JSON.stringify(process.env.JARVIS_AUTOPROMPT)});`);
       }, 3500));
     }
+    // JARVIS_STORE=key=value seeds one localStorage item before the view opens, so a
+    // capture can be pointed at a particular saved state (which repository Source Control
+    // reopens, say) without clicking through the UI or disturbing the real settings.
+    const store = /^([\w.]{1,60})=(.{0,200})$/.exec(process.env.JARVIS_STORE || '');
+    if (store) {
+      win.webContents.once('did-finish-load', () => {
+        win.webContents.executeJavaScript(
+          `try { localStorage.setItem(${JSON.stringify(store[1])}, ${JSON.stringify(store[2])}); } catch {}`,
+        );
+      });
+    }
     if (view) {
       win.webContents.once('did-finish-load', () => setTimeout(() => {
         win.webContents.executeJavaScript(`window.__jarvisShow && window.__jarvisShow(${JSON.stringify(view)});`);
       }, 1500));
     }
+    // JARVIS_FILL=<id>=<text> types into one field before the clicks run, so a capture can
+    // exercise a form end to end. The input event is dispatched too, since the window
+    // reacts to typing, not to the value appearing.
+    const fill = /^([A-Za-z][\w-]{0,40})=([\s\S]{0,200})$/.exec(process.env.JARVIS_FILL || '');
+    if (fill) {
+      // Late enough that a form opened by an earlier JARVIS_CLICK already exists - or, with
+      // JARVIS_FILL_AT=<ms>, at that moment, so a later click can submit what was typed.
+      const fillAt = Number(process.env.JARVIS_FILL_AT || 0);
+      const delay = fillAt > 0 ? fillAt : Number(process.env.JARVIS_CAPTURE_DELAY || 9000) - 1800;
+      win.webContents.once('did-finish-load', () => setTimeout(() => {
+        win.webContents.executeJavaScript(
+          `(() => { const n = document.getElementById(${JSON.stringify(fill[1])});
+             if (!n) return; n.value = ${JSON.stringify(fill[2])};
+             n.dispatchEvent(new Event('input', { bubbles: true })); })();`,
+        );
+      }, Math.max(1500, delay)));
+    }
     // JARVIS_CLICK=<id or .class>, comma-separated to click several in turn before the capture.
+    // A class may end in :first-of-type, :last-of-type or :nth-of-type(n), to reach a row that
+    // is not the first - the middle or last file of a commit, say.
+    const SEL = /^[.#]?[A-Za-z][\w.#-]*(?::(?:first-of-type|last-of-type|nth-of-type\(\d{1,3}\)))?$/;
     const clicks = (process.env.JARVIS_CLICK || '').split(',').map((c) => c.trim())
-      .filter((c) => /^[.#]?[A-Za-z][\w.#-]*$/.test(c));
+      .filter((c) => SEL.test(c));
+    // JARVIS_HOVER=<selector> puts the mouse over an element, and JARVIS_FOCUS=<selector> gives
+    // one keyboard-style focus, 800 ms before the capture - so :hover and :focus-visible can be
+    // seen in a screenshot. The pointer is a synthetic event into this window only.
+    const late = Math.max(1500, Number(process.env.JARVIS_CAPTURE_DELAY || 9000) - 800);
+    const hover = (process.env.JARVIS_HOVER || '').trim();
+    if (SEL.test(hover)) {
+      const sel = hover.startsWith('.') ? hover : `#${hover}`;
+      win.webContents.once('did-finish-load', () => setTimeout(async () => {
+        try {
+          const at = await win.webContents.executeJavaScript(`(() => { const n = document.querySelector(${JSON.stringify(sel)});
+            if (!n) return null; const b = n.getBoundingClientRect();
+            return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) }; })();`);
+          if (at) win.webContents.sendInputEvent({ type: 'mouseMove', x: at.x, y: at.y });
+        } catch { /* a capture aid only */ }
+      }, late));
+    }
+    const focus = (process.env.JARVIS_FOCUS || '').trim();
+    if (SEL.test(focus)) {
+      const sel = focus.startsWith('.') ? focus : `#${focus}`;
+      win.webContents.once('did-finish-load', () => setTimeout(async () => {
+        // The capture window never takes real focus, and an unfocused page matches no :focus
+        // at all. DevTools' focus emulation makes the page behave as focused - without
+        // activating the window or taking focus from whatever the user is doing.
+        try {
+          win.webContents.debugger.attach('1.3');
+          await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
+        } catch { /* a capture aid only */ }
+        win.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(sel)})?.focus({ focusVisible: true });`).catch(() => {});
+      }, late));
+    }
     if (clicks.length) {
-      const start = Number(process.env.JARVIS_CAPTURE_DELAY || 9000) - 1500 - (clicks.length - 1) * 1200;
+      // By default the clicks land just before the capture, which suits anything instant.
+      // JARVIS_CLICK_AT=<ms> fires the first click at that moment instead. Anything that
+      // takes time after a click - a model query, a sync - needs it: otherwise the app is
+      // screenshotted and QUIT 1.5 s after the click, and the work is killed mid-flight. That
+      // is exactly what made Phase 8's assistance and the ClickUp sync look like they hung.
+      const clickAt = Number(process.env.JARVIS_CLICK_AT || 0);
+      // JARVIS_CLICK_GAP=<ms> spaces the clicks further apart than the default 1.2 s, for a
+      // flow where each click waits on the answer to the one before (a GitHub request, say).
+      const gap = Math.max(300, Number(process.env.JARVIS_CLICK_GAP || 1200));
+      const start = clickAt > 0 ? clickAt
+        : Number(process.env.JARVIS_CAPTURE_DELAY || 9000) - 1500 - (clicks.length - 1) * gap;
       clicks.forEach((click, i) => {
         win.webContents.once('did-finish-load', () => setTimeout(() => {
           const sel = click.startsWith('.') ? click : `#${click}`;
           win.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(sel)})?.click();`);
-        }, Math.max(1500, start + i * 1200)));
+        }, Math.max(1500, start + i * gap)));
       });
     }
     win.webContents.once('did-finish-load', () => setTimeout(async () => {
@@ -380,6 +454,217 @@ ipcMain.handle('jarvis:phoneWifi', async (_e, serial) => {
   else log('phone wifi setup failed:', r.error || '');
   return r;
 });
+// ---------------------------------------------------------------- IPC: Source Control
+// Phase 1 is read-only. Every call names its repository by key and git.mjs resolves that
+// key afresh, so a reply can never belong to a repository other than the one asked about.
+// No model is involved: a status costs zero tokens.
+ipcMain.handle('jarvis:gitRepos', async () => {
+  try { return { ok: true, list: await allRepoStates(loadConfig().cwd) }; }
+  catch (e) { log('gitRepos failed', e?.message || e); return { ok: false, error: String(e?.message || e), list: [] }; }
+});
+ipcMain.handle('jarvis:gitDetail', async (_e, key) => {
+  try { return await repoDetail(loadConfig().cwd, key); }
+  catch (e) { log('gitDetail failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitChanges', async (_e, key) => {
+  try { return await changedFiles(loadConfig().cwd, key); }
+  catch (e) { log('gitChanges failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitDiff', async (_e, key, file, which) => {
+  try { return await fileDiff(loadConfig().cwd, key, file, { which: which || 'auto' }); }
+  catch (e) { log('gitDiff failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+// Mutations. Local only - none of these contacts a remote, and a commit never leads to one.
+ipcMain.handle('jarvis:gitStage', async (_e, key, paths) => {
+  try { return await stageFiles(loadConfig().cwd, key, paths); }
+  catch (e) { log('gitStage failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitUnstage', async (_e, key, paths) => {
+  try { return await unstageFiles(loadConfig().cwd, key, paths); }
+  catch (e) { log('gitUnstage failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitStageAll', async (_e, key) => {
+  try { return await stageAll(loadConfig().cwd, key); }
+  catch (e) { log('gitStageAll failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitUnstageAll', async (_e, key) => {
+  try { return await unstageAll(loadConfig().cwd, key); }
+  catch (e) { log('gitUnstageAll failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+// Optional JARVIS assistance. EVERY handler here exists because a person pressed an
+// assistance button; nothing in Phases 1-7 calls them, so normal Source Control still
+// costs zero model tokens. An assistance failure never touches git - these only return text.
+ipcMain.handle('jarvis:gitAssistScope', async (_e, key, action, opts) => {
+  try { return await assistContext(loadConfig().cwd, key, action, opts || {}); }
+  catch (e) { log('gitAssistScope failed', key, action, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitAssist', async (_e, key, action, opts, id) => {
+  const { cwd } = loadConfig();
+  try {
+    const context = await assistContext(cwd, key, action, opts || {});
+    if (!context.ok) return context;
+    if (context.tooLarge && !(opts || {}).allowLarge) {
+      return { ok: false, tooLarge: true, scope: context, key,
+        error: `That is ${context.lines} lines across ${context.files} files. Confirm before sending something that large.` };
+    }
+    log('git assist requested by the user', key, action, `${context.files} file(s) ${context.lines} line(s)`,
+      context.secrets.length ? `[redacted: ${context.secrets.join(', ')}]` : '');
+    const r = await assist({
+      cwd, exe: claudeExe(), log, id: id || null, action, context,
+      extra: { repoName: context.repo.name, path: (opts || {}).path, meta: context.meta },
+    });
+    log('git assist finished', key, action, r.ok ? `ok (${(r.text || '').length} chars)` : `failed: ${(r.error || '').slice(0, 160)}`);
+    return { ...r, key, scopeInfo: { files: context.files, lines: context.lines, label: context.scope, secrets: context.secrets } };
+  } catch (e) {
+    log('gitAssist failed', key, action, e?.message || e);
+    return { ok: false, key, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('jarvis:gitAssistCancel', (_e, id) => {
+  try { return cancelAssist(id); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitParseMessage', (_e, text) => {
+  try { return { ok: true, ...parseCommitMessage(text) }; } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+
+// Stash and conflicts. Local only; destructive paths go through the shared risk policy.
+ipcMain.handle('jarvis:gitStashes', async (_e, key) => {
+  try { return await listStashes(loadConfig().cwd, key); }
+  catch (e) { log('gitStashes failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitStashCreate', async (_e, key, opts) => {
+  try {
+    const r = await createStash(loadConfig().cwd, key, opts || {});
+    if (r.ok) log('git stash created', key, r.created?.ref, opts?.includeUntracked ? '(with untracked)' : '(tracked only)');
+    return r;
+  } catch (e) { log('gitStashCreate failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitStashDetail', async (_e, key, sha) => {
+  try { return await stashDetail(loadConfig().cwd, key, sha); }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitStashDiff', async (_e, key, sha, file) => {
+  try { return await stashFileDiff(loadConfig().cwd, key, sha, file); }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitStashApply', async (_e, key, sha, pop) => {
+  try {
+    const r = await applyStash(loadConfig().cwd, key, sha, { pop: !!pop });
+    log('git stash ' + (pop ? 'pop' : 'apply'), key, r.ok ? 'ok' : 'failed: ' + String(r.error || '').slice(0, 100));
+    return r;
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitStashDrop', async (_e, key, sha, confirmed) => {
+  try {
+    const r = await dropStash(loadConfig().cwd, key, sha, { confirmed: !!confirmed });
+    if (r.ok) log('git stash dropped', key, r.dropped?.ref);
+    return r;
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitConflicts', async (_e, key) => {
+  try { return await conflictState(loadConfig().cwd, key); }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitConflictDetail', async (_e, key, file) => {
+  try { return await conflictDetail(loadConfig().cwd, key, file); }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitResolveConflict', async (_e, key, file, choice) => {
+  try {
+    const r = await resolveConflict(loadConfig().cwd, key, file, choice);
+    if (r.ok) log('git conflict resolved', key, file, '(' + choice + ')');
+    return r;
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+
+// History. Local objects and refs only; lazy, so nothing reads a diff nobody opened.
+ipcMain.handle('jarvis:gitHistory', async (_e, key, opts) => {
+  try { return await commitHistory(loadConfig().cwd, key, opts || {}); }
+  catch (e) { log('gitHistory failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitCommitDetail', async (_e, key, sha) => {
+  try { return await commitDetail(loadConfig().cwd, key, sha); }
+  catch (e) { log('gitCommitDetail failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitCommitDiff', async (_e, key, sha, file) => {
+  try { return await commitFileDiff(loadConfig().cwd, key, sha, file); }
+  catch (e) { log('gitCommitDiff failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+
+// Remote operations. THE ONLY NETWORK PATH IN THE APP, and every one of these handlers
+// exists because the user pressed a button or asked for it. Nothing calls them on a timer,
+// at startup, on repository selection, or after a commit.
+function remoteProgress(evt) {
+  send({ kind: 'git_remote', ...evt });
+}
+ipcMain.handle('jarvis:gitRemoteState', (_e, key) => {
+  try { return remoteState(loadConfig().cwd, key); }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitRemoteCancel', (_e, key) => {
+  try { log('git remote cancel requested', key); return cancelRemote(loadConfig().cwd, key); }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+for (const [channel, fn, label] of [
+  ['jarvis:gitFetch', fetchRemote, 'fetch'],
+  ['jarvis:gitPull', pullRemote, 'pull'],
+  ['jarvis:gitPush', pushRemote, 'push'],
+  ['jarvis:gitPublish', publishBranch, 'publish'],
+]) {
+  ipcMain.handle(channel, async (_e, key) => {
+    try {
+      log(`git ${label} requested by the user`, key);
+      const r = await fn(loadConfig().cwd, key, { onProgress: remoteProgress });
+      log(`git ${label}`, key, r.ok ? 'ok' : `failed: ${(r.error || '').slice(0, 120)}`);
+      return r;
+    } catch (e) {
+      log(`git ${label} threw`, key, e?.message || e);
+      return { ok: false, key, error: String(e?.message || e) };
+    }
+  });
+}
+
+// Branches. Local refs only - nothing here contacts a remote, including the picker.
+ipcMain.handle('jarvis:gitBranches', async (_e, key) => {
+  try { return await listBranches(loadConfig().cwd, key); }
+  catch (e) { log('gitBranches failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitCreateBranch', async (_e, key, name, opts) => {
+  try {
+    const r = await createBranch(loadConfig().cwd, key, name, opts || {});
+    if (r.ok) log('git branch created', key, r.created, r.switched ? '(switched)' : '');
+    return r;
+  } catch (e) { log('gitCreateBranch failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitSwitchBranch', async (_e, key, name) => {
+  try {
+    const r = await switchBranch(loadConfig().cwd, key, name);
+    if (r.ok) log('git switch', key, '->', r.current);
+    return r;
+  } catch (e) { log('gitSwitchBranch failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitRenameBranch', async (_e, key, from, to) => {
+  try {
+    const r = await renameBranch(loadConfig().cwd, key, from, to);
+    if (r.ok) log('git branch renamed', key, from, '->', to);
+    return r;
+  } catch (e) { log('gitRenameBranch failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitDeleteBranch', async (_e, key, name, opts) => {
+  try {
+    const r = await deleteBranch(loadConfig().cwd, key, name, opts || {});
+    if (r.ok) log('git branch deleted', key, name, r.forced ? '(forced)' : '');
+    return r;
+  } catch (e) { log('gitDeleteBranch failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitCommit', async (_e, key, message) => {
+  try {
+    const r = await gitCommit(loadConfig().cwd, key, message || {});
+    if (r.ok) log('git commit', key, r.commit.sha, '->', r.commit.branch, `(${r.commit.count} file(s))`);
+    return r;
+  } catch (e) { log('gitCommit failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+
 ipcMain.handle('jarvis:phoneTest', async (_e, serial) => {
   const target = isSerial(serial) ? serial : phoneConfig().serial;
   if (!target) return { ok: false, error: 'No phone chosen yet.' };
@@ -404,6 +689,40 @@ ipcMain.handle('jarvis:openUrl', (_e, url) => {
 });
 ipcMain.handle('jarvis:webLog', (_e, key) => webLog(key));
 
+// ---------------------------------------------------------------- IPC: GitHub (Phase 9, read-only)
+// github.mjs is a separate service: git.mjs never imports it, so nothing here can affect
+// staging, commits, branches, stashes, history or fetch / pull / push. Every handler names
+// one read operation and takes a repository KEY plus a number, a cursor or a SHA - never a
+// URL, an API path, an owner or a repository name. Each exists because the user opened the
+// GitHub tab or pressed something in it; nothing calls them at startup, on repository or
+// branch selection, on a timer, or after a commit or push. No model is involved.
+const github = createGitHub({
+  cwd: () => loadConfig().cwd,
+  fetch: (url, init) => net.fetch(url, init),
+  online: () => net.isOnline(),
+  log,
+});
+// Local only: GitHub identity from the origin remote, and links built from local refs.
+ipcMain.handle('jarvis:ghInfo', (_e, key) => github.info(key));
+ipcMain.handle('jarvis:ghLink', (_e, key, which, arg) => github.link(key, which, arg));
+ipcMain.handle('jarvis:ghOpen', async (_e, key, which, arg) => {
+  const r = await github.link(key, which, arg);
+  if (!r.ok) return r;
+  if (!/^https:\/\/github\.com\//.test(r.url)) { log('refused to open a non-GitHub link'); return { ok: false, error: 'Not a GitHub link.' }; }
+  shell.openExternal(r.url);
+  log('github page opened', which, key);
+  return { ok: true, key: r.key };
+});
+// The GitHub API. Read-only: github.mjs sends GETs from a fixed route table and checked
+// GraphQL queries, and nothing else.
+ipcMain.handle('jarvis:ghPulls', (_e, key, opts) => github.pulls(key, opts));
+ipcMain.handle('jarvis:ghPull', (_e, key, number) => github.pull(key, number));
+ipcMain.handle('jarvis:ghPullFiles', (_e, key, number, page) => github.pullFiles(key, number, page));
+ipcMain.handle('jarvis:ghPullPatch', (_e, key, number, path) => github.pullPatch(key, number, path));
+ipcMain.handle('jarvis:ghChecks', (_e, key, sha) => github.checks(key, sha ?? null));
+ipcMain.handle('jarvis:ghRuns', (_e, key, sha) => github.runs(key, sha ?? null));
+ipcMain.handle('jarvis:ghCancel', (_e, key) => github.cancel(key));
+
 // ---------------------------------------------------------------- IPC: tasks (ClickUp + draft)
 ipcMain.handle('jarvis:clickup', () => readClickUp(userDir));
 ipcMain.handle('jarvis:draftTasks', () => {
@@ -414,6 +733,7 @@ let syncing = null;
 ipcMain.handle('jarvis:clickupSync', () => {
   // One sync at a time; a second click joins the one already running.
   if (!syncing) {
+    log('clickup sync requested');
     syncing = syncClickUp({ cwd: loadConfig().cwd, exe: claudeExe(), userDir, log })
       .finally(() => { syncing = null; });
   }
@@ -510,6 +830,29 @@ process.on('uncaughtException', (e) => log('uncaught exception:', e?.stack || St
 process.on('unhandledRejection', (e) => log('unhandled rejection:', e?.stack || String(e)));
 app.on('child-process-gone', (_e, d) => log('child process gone:', d.type, d.reason, d.exitCode));
 app.on('will-quit', () => log('JARVIS quitting'));
+// Diagnostic only: JARVIS_DIAG_QUERY=<out.json> runs the minimal SDK query in THIS process
+// (the Electron main process, dev or packaged), writes the lifecycle to that file and quits.
+// Nothing else starts - no window, no session. Off in normal use.
+if (process.env.JARVIS_DIAG_QUERY) {
+  app.whenReady().then(async () => {
+    const out = process.env.JARVIS_DIAG_QUERY;
+    try {
+      const { runDiag } = await import('./diag-query.mjs');
+      const r = await runDiag({
+        exe: claudeExe(),
+        cwd: process.env.JARVIS_DIAG_CWD || loadConfig().cwd,
+        mode: process.env.JARVIS_DIAG_MODE || 'string',
+        settingSources: (process.env.JARVIS_DIAG_SOURCES || 'user').split(',').filter(Boolean),
+      });
+      r.runtime.appPath = app.getAppPath();
+      r.runtime.packaged = app.isPackaged;
+      fs.writeFileSync(out, JSON.stringify(r, null, 2));
+    } catch (e) {
+      fs.writeFileSync(out, JSON.stringify({ ok: false, fatal: String(e?.stack || e).slice(0, 600) }, null, 2));
+    }
+    app.exit(0);
+  });
+} else
 // Capture runs (debug aid) skip the lock so they work beside an open JARVIS window.
 if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
   app.quit();

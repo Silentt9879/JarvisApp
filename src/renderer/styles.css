@@ -782,6 +782,349 @@ body.focus #view-chat { padding: 10px 10vw; }
 }
 
 /* ---------------------------------------------------------------- toolbar */
+/* ---------------------------------------------------- Source Control
+   GitHub Desktop's information architecture - repository and branch in the header with one
+   remote action, Changes beside a diff - drawn in the JARVIS language. The repository is
+   named in the header at all times, because every operation targets exactly one and the
+   cost of being wrong about which is high. */
+/* Sized from the viewport, not from a chain of flex parents - that chain is what
+   collapsed the phone row in the Devices view, and the same trap applies here. */
+.sc-page { display: flex; flex-direction: column; }
+
+.sc-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 12px;
+  border: 1px solid var(--line); border-radius: 12px; background: rgba(6, 22, 40, .55);
+}
+.sc-pick { position: relative; }
+.sc-drop {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  min-width: 170px; padding: 6px 12px; cursor: pointer; text-align: left;
+  border: 1px solid var(--line-2); border-radius: 9px; background: rgba(4, 16, 30, .7); color: var(--text);
+  font: inherit; transition: border-color .15s, background .15s;
+}
+.sc-drop:hover:not(:disabled) { border-color: var(--accent); background: rgba(10, 36, 62, .8); }
+.sc-drop:disabled { opacity: .55; cursor: default; }
+.sc-drop-label { font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.sc-drop b { font-size: 13px; font-weight: 600; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-drop .ic { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 13px; height: 13px; color: var(--muted); }
+.sc-pop { top: calc(100% + 8px); left: 0; width: 320px; max-height: 60vh; overflow: auto; padding: 8px; }
+.sc-remote-wrap { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.sc-remote.busy { opacity: 1; border-color: var(--accent); box-shadow: var(--glow); }
+.sc-remote.busy .ic { animation: sc-spin 1.1s linear infinite; }
+@keyframes sc-spin { to { transform: rotate(360deg); } }
+.sc-remote-stop { flex: 0 0 auto; }
+.sc-remote-msg { font-size: 11.5px; line-height: 1.5; color: var(--muted); margin: -4px 0 10px; min-height: 16px; }
+.sc-remote-msg.ok { color: var(--ok); }
+.sc-remote-msg.err { color: var(--err); }
+.sc-remote-msg.warn { color: var(--warn); }
+.sc-remote-msg.live { color: var(--accent); }
+.sc-bar-note { font-size: 11.5px; color: var(--err); }
+
+.sc-work { display: grid; grid-template-columns: 320px 1fr; gap: 14px; height: calc(100vh - 300px); min-height: 420px; }
+.sc-side { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--line); border-radius: 12px; background: rgba(6, 22, 40, .45); overflow: hidden; }
+.sc-tabs { display: flex; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.sc-tab {
+  flex: 1; padding: 10px 8px; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600;
+  background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted);
+}
+.sc-tab.on { color: var(--text); border-bottom-color: var(--accent); }
+.sc-tab:disabled { opacity: .45; cursor: default; }
+.sc-tab em { font-style: normal; font-size: 10.5px; padding: 1px 6px; margin-left: 4px; border-radius: 999px; background: rgba(56, 200, 255, .18); color: var(--accent); }
+.sc-tab em:empty { display: none; }
+
+.sc-files { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
+.sc-files-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 8px; flex-wrap: wrap; }
+.sc-files-head b { font-size: 12px; color: var(--text-2); font-weight: 600; }
+.sc-files-tags { display: flex; gap: 5px; }
+.sc-file {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; cursor: pointer;
+  padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; background: none;
+  color: var(--text); font: inherit; transition: background .12s;
+}
+.sc-file:hover { background: rgba(10, 36, 62, .6); }
+.sc-file.on { background: rgba(56, 200, 255, .13); border-color: var(--accent); }
+.sc-mark {
+  flex: 0 0 18px; height: 18px; display: grid; place-items: center; border-radius: 5px;
+  font-size: 10.5px; font-weight: 700; font-style: normal;
+  background: rgba(255, 180, 70, .16); color: var(--warn);
+}
+.sc-file.added .sc-mark, .sc-file.untracked .sc-mark { background: rgba(70, 220, 150, .16); color: var(--ok); }
+.sc-file.deleted .sc-mark { background: rgba(255, 110, 110, .16); color: var(--err); }
+.sc-file.renamed .sc-mark, .sc-file.copied .sc-mark { background: rgba(56, 200, 255, .16); color: var(--accent); }
+.sc-file.conflicted .sc-mark { background: rgba(255, 110, 110, .25); color: #ff9b9b; }
+.sc-file-name { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.sc-file-name b { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-file-name small { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.sc-dot { font-style: normal; font-size: 10px; color: var(--ok); }
+.sc-dot.part { color: var(--warn); }
+
+
+
+
+/* JARVIS assistance. Deliberately secondary: git controls stay primary, and every one of
+   these is a button nobody presses by accident. */
+.sc-ai-row { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 2px 2px; }
+.sc-scope { display: flex; align-items: center; gap: 4px; padding: 8px 2px 0; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+.sc-scope span { margin-right: 4px; }
+.sc-scope-opt { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); background: none; color: var(--text-2); font: inherit; font-size: 11px; cursor: pointer; }
+.sc-scope-opt.on { border-color: #c89bff; color: #c89bff; background: rgba(200, 155, 255, .1); }
+.sc-ai { border-color: rgba(200, 155, 255, .3) !important; color: #c89bff !important; }
+.sc-ai:hover { border-color: #c89bff !important; background: rgba(200, 155, 255, .1) !important; }
+.sc-ai-dot { font-style: normal; font-size: 10px; margin-right: 1px; }
+.sc-gen-msg { justify-content: center; }
+
+.sc-assist { margin-top: 12px; border: 1px solid rgba(200, 155, 255, .3); border-radius: 12px; background: rgba(26, 14, 44, .5); }
+.sc-assist.ok { border-color: rgba(200, 155, 255, .45); }
+.sc-assist.err { border-color: rgba(255, 110, 110, .45); }
+.sc-assist.warn { border-color: rgba(255, 180, 70, .45); }
+.sc-assist-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.sc-assist-head b { font-size: 13px; color: #c89bff; }
+.sc-assist-right { display: flex; align-items: center; gap: 10px; }
+.sc-assist-body { padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: var(--text-2); }
+.sc-assist-body p { margin: 0 0 8px; }
+.sc-assist-body p.warn { color: var(--warn); }
+.sc-assist-scope { font-size: 11px; color: var(--muted); }
+.sc-assist-text { white-space: pre-wrap; word-break: break-word; max-height: 44vh; overflow: auto; color: var(--text); }
+
+/* Stashes and conflicts. A stash is identified by its sha everywhere, never by stash@{N},
+   because those indices shift the moment anything else is stashed or dropped. */
+.sc-stashes { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.sc-stash-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+.sc-stash-row {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 9px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--text); font: inherit;
+}
+.sc-stash-row:hover { background: rgba(10, 36, 62, .6); }
+.sc-stash-row.on { background: rgba(56, 200, 255, .12); border-color: var(--accent); }
+.sc-stash-row b { font-size: 12.5px; font-weight: 500; }
+/* The row's open button. The row used to BE this button; when it became a container for
+   the button and Apply / Pop / Drop, the button kept no style of its own and fell back to
+   the browser's light default. It takes the row's look instead, as History's rows do: the
+   row draws the hover and the selection, a long name ends in an ellipsis (the full name is
+   the stash's heading when it is opened), and keyboard focus rings the whole row. */
+.sc-stash-open {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; min-width: 0; padding: 0;
+  text-align: left; cursor: pointer; border: 0; border-radius: 6px; background: none;
+  color: inherit; font: inherit;
+}
+.sc-stash-open b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-stash-open:focus-visible { outline: none; }
+.sc-stash-row:has(.sc-stash-open:focus-visible) { border-color: var(--accent); box-shadow: var(--glow); }
+.sc-stash-open:disabled { opacity: .55; cursor: default; }
+.sc-stash-meta { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--muted); }
+.sc-stash-meta code { color: var(--accent); opacity: .8; }
+.sc-stash-acts { display: flex; gap: 6px; margin-top: 4px; }
+.sc-stash-msg { font-size: 11px; line-height: 1.5; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+.sc-stash-msg:empty { display: none; }
+.sc-stash-msg.ok { color: var(--ok); }
+.sc-stash-msg.err { color: var(--err); }
+.sc-stash-msg.warn { color: var(--warn); }
+.sc-stash-btn { justify-content: center; }
+.sc-stash-form { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--line-2); background: rgba(4, 16, 30, .6); }
+.sc-stash-form label { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-2); }
+.sc-stash-form .sc-stash-what { font-size: 11px; color: var(--muted); line-height: 1.45; }
+
+.sc-conflict-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px;
+  padding: 9px 12px; border-radius: 10px; border: 1px solid rgba(255, 110, 110, .4); background: rgba(255, 110, 110, .08);
+}
+.sc-conflict-banner b { font-size: 12.5px; color: var(--err); }
+.sc-conflict-banner small { font-size: 11px; color: var(--text-2); }
+.sc-file.conflicted { border-color: rgba(255, 110, 110, .35); }
+.sc-conflict-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+.sc-conflict-head h3 { margin: 0 0 4px; font-size: 16px; }
+.sc-conflict-kind { font-size: 12px; color: var(--err); font-weight: 600; }
+.sc-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; padding: 12px 18px; }
+.sc-side-box { border: 1px solid var(--line); border-radius: 10px; background: rgba(4, 16, 30, .5); overflow: hidden; }
+.sc-side-box h4 { margin: 0; padding: 8px 11px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; }
+.sc-side-box h4 em { font-style: normal; text-transform: none; letter-spacing: 0; font-size: 10.5px; }
+.sc-side-box pre { margin: 0; padding: 10px 11px; max-height: 240px; overflow: auto; font-size: 11.5px; line-height: 1.5;
+  font-family: var(--mono, ui-monospace, monospace); white-space: pre-wrap; word-break: break-word; }
+.sc-side-box.missing pre { color: var(--muted); font-style: italic; }
+.sc-side-explain { padding: 0 18px 12px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.sc-side-explain .warn { color: var(--warn); }
+.sc-resolve { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 18px 16px; }
+
+/* History: a commit list beside the commit it selects. Lazily loaded - a page at a time,
+   details on selection, a diff only when a file is opened. */
+.sc-history { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.sc-hist-search { flex: 0 0 auto; }
+.sc-hist-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.sc-hist-more { flex: 0 0 auto; justify-content: center; }
+.sc-commit-row {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 9px; border-radius: 8px; border: 1px solid transparent; background: none;
+  color: var(--text); font: inherit;
+}
+.sc-commit-row:hover { background: rgba(10, 36, 62, .6); }
+.sc-commit-row.on { background: rgba(56, 200, 255, .12); border-color: var(--accent); }
+.sc-commit-top b { font-size: 12.5px; font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-commit-meta { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--muted); }
+.sc-commit-meta code { color: var(--accent); opacity: .85; }
+.sc-commit-meta .sc-when { margin-left: auto; }
+.sc-commit-refs { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 1px; }
+.sc-ref { font-style: normal; font-size: 9.5px; padding: 1px 6px; border-radius: 999px; background: rgba(109, 127, 144, .18); color: var(--text-2); }
+.sc-ref.head { background: rgba(56, 200, 255, .18); color: var(--accent); }
+.sc-ref.tag { background: rgba(200, 155, 255, .18); color: #c89bff; }
+.sc-ref.remote { background: rgba(70, 220, 150, .14); color: var(--ok); }
+
+.sc-commit-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+.sc-commit-head h3 { margin: 0 0 6px; font-size: 16px; }
+.sc-commit-body { margin: 0 0 12px; font-size: 12px; color: var(--text-2); white-space: pre-wrap; line-height: 1.5; }
+/* The commit's metadata table. These rules existed for the Phase 1 detail panel, were
+   removed with it, and are needed again here - a label and its value must not run together. */
+.sc-rows { display: flex; flex-direction: column; gap: 1px; border-radius: 8px; overflow: hidden; }
+.sc-row { display: flex; gap: 14px; padding: 6px 10px; background: rgba(4, 16, 30, .45); font-size: 12px; }
+.sc-row span { flex: 0 0 86px; color: var(--muted); }
+.sc-row b { font-weight: 500; word-break: break-all; font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
+.sc-merge-note { margin-top: 10px; padding: 8px 11px; border-radius: 8px; font-size: 11.5px; line-height: 1.45;
+  border: 1px solid rgba(255, 180, 70, .3); background: rgba(255, 180, 70, .07); color: var(--warn); }
+.sc-commit-files { padding: 8px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.sc-commit-counts { display: flex; gap: 7px; font-size: 10.5px; flex: 0 0 auto; }
+.sc-commit-counts .plus { color: var(--ok); font-style: normal; }
+.sc-commit-counts .minus { color: var(--err); font-style: normal; }
+.sc-commit-counts .side { color: var(--muted); font-style: normal; }
+.sc-diff-inline .sc-diff-head { position: static; }
+
+/* Staging. The checkbox mirrors git's index - checked is staged, indeterminate is a file
+   that is partly staged, which is a real state and is shown as one rather than guessed. */
+.sc-check-all { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.sc-check-all input, .sc-check { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; flex: 0 0 auto; }
+.sc-check:disabled, .sc-check-all input:disabled { cursor: default; opacity: .45; }
+.sc-file.mixed { border-color: rgba(255, 180, 70, .3); }
+.sc-file .sc-file-name { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: left; }
+.sc-dot.part { font-size: 9.5px; letter-spacing: .04em; color: var(--warn); white-space: nowrap; }
+
+
+/* The branch picker. Local branches, then what the last fetch left on disk - nothing in
+   here reaches a network, so the remote list is labelled as the snapshot it is. */
+.sc-branch-pop { width: 380px; display: flex; flex-direction: column; gap: 8px; }
+.sc-branch-list { max-height: 46vh; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.sc-branch-row { display: flex; align-items: center; gap: 4px; border-radius: 8px; }
+.sc-branch-row:hover { background: rgba(10, 36, 62, .6); }
+.sc-branch-row.on { background: rgba(56, 200, 255, .1); }
+.sc-branch-go {
+  flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 9px; background: none; border: 0; color: var(--text); font: inherit; cursor: pointer; text-align: left;
+}
+.sc-branch-go:disabled { cursor: default; }
+.sc-branch-name { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.sc-branch-name b { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-branch-tick { font-style: normal; font-size: 10px; color: var(--accent); white-space: nowrap; }
+.sc-branch-meta { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; font-size: 10.5px; }
+.sc-branch-meta small { color: var(--muted); }
+.sc-branch-meta .ahead { color: var(--ok); font-style: normal; }
+.sc-branch-meta .behind { color: var(--warn); font-style: normal; }
+.sc-branch-acts { display: flex; gap: 2px; padding-right: 6px; opacity: 0; transition: opacity .12s; }
+.sc-branch-row:hover .sc-branch-acts { opacity: 1; }
+.sc-branch-act {
+  padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line-2); background: rgba(4, 16, 30, .8);
+  color: var(--muted); font: inherit; font-size: 10px; cursor: pointer;
+}
+.sc-branch-act:hover { color: #fff; border-color: var(--accent); }
+.sc-branch-act.danger:hover { color: #ff9b9b; border-color: var(--err); }
+.sc-branch-act:disabled { opacity: .35; cursor: default; }
+.sc-branch-act i { font-style: normal; }
+
+.sc-detached { padding: 9px 11px; margin-bottom: 4px; border-radius: 8px; border: 1px solid rgba(255, 180, 70, .35); background: rgba(255, 180, 70, .08); display: flex; flex-direction: column; gap: 2px; }
+.sc-detached b { font-size: 12.5px; color: var(--warn); }
+.sc-detached code { font-size: 11px; color: var(--text-2); }
+.sc-detached small { font-size: 10.5px; color: var(--muted); }
+
+.sc-branch-foot { border-top: 1px solid var(--line); padding-top: 8px; }
+.sc-newbranch { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.sc-newbranch-from { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
+.sc-newbranch-from span { flex: 0 0 34px; }
+.sc-newbranch-act { display: flex; gap: 8px; justify-content: flex-end; }
+.sc-rename-row { display: flex; align-items: center; gap: 6px; padding: 5px 6px; }
+.sc-rename-row .field { flex: 1; }
+.sc-rename-act { display: flex; gap: 6px; }
+.sc-branch-msg { font-size: 11px; line-height: 1.5; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+.sc-branch-msg:empty { display: none; }
+.sc-branch-msg.ok { color: var(--ok); }
+.sc-branch-msg.err { color: var(--err); }
+.sc-branch-msg b { color: inherit; }
+.sc-force-act { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+
+/* The commit box, beneath the files as in GitHub Desktop. */
+.sc-commit { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-top: 1px solid var(--line); background: rgba(4, 16, 30, .5); }
+.sc-commit .field { width: 100%; }
+.sc-commit textarea { resize: vertical; min-height: 54px; font: inherit; line-height: 1.45; }
+.sc-commit-btn { justify-content: center; }
+.sc-commit-msg { font-size: 11px; line-height: 1.45; color: var(--muted); }
+.sc-commit-msg:empty { display: none; }
+.sc-commit-msg.ok { color: var(--ok); }
+.sc-commit-msg.err { color: var(--err); }
+
+.sc-diff { min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: rgba(4, 16, 30, .55); }
+.sc-diff-head {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; padding: 11px 16px; border-bottom: 1px solid var(--line);
+  background: rgba(6, 22, 40, .97); backdrop-filter: blur(6px);
+}
+.sc-diff-id { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.sc-diff-id b { font-size: 13.5px; }
+.sc-diff-id code { font-size: 11px; color: var(--muted); }
+.sc-renamed { color: var(--accent) !important; }
+.sc-diff-meta { display: flex; align-items: center; gap: 10px; font-size: 11.5px; }
+.sc-diff-meta em { font-style: normal; font-weight: 600; }
+.sc-diff-meta .plus { color: var(--ok); }
+.sc-diff-meta .minus { color: var(--err); }
+.sc-diff-meta .side { color: var(--muted); font-weight: 500; }
+.sc-diff-empty { padding: 48px 20px; text-align: center; color: var(--muted); font-size: 12.5px; }
+.sc-diff-empty.err { color: var(--err); }
+
+.sc-hunks { font-family: var(--mono, ui-monospace, "Cascadia Mono", Consolas, monospace); font-size: 12px; line-height: 1.55; }
+.sc-hunk-head { display: flex; gap: 12px; padding: 5px 16px; color: var(--muted); background: rgba(56, 200, 255, .06); border-top: 1px solid var(--line); font-size: 11px; }
+.sc-hunk-head code { color: var(--accent); opacity: .75; }
+.sc-line { display: flex; white-space: pre; }
+.sc-line.add { background: rgba(70, 220, 150, .1); }
+.sc-line.del { background: rgba(255, 110, 110, .1); }
+.sc-line.meta { color: var(--muted); font-style: italic; }
+.sc-ln { flex: 0 0 46px; padding: 0 6px; text-align: right; color: var(--muted); opacity: .65; user-select: none; }
+.sc-sign { flex: 0 0 14px; text-align: center; user-select: none; }
+.sc-line.add .sc-sign { color: var(--ok); }
+.sc-line.del .sc-sign { color: var(--err); }
+.sc-code { flex: 1; padding-right: 16px; white-space: pre-wrap; word-break: break-word; }
+.sc-note { padding: 10px 14px; font-size: 11.5px; color: var(--muted); }
+.sc-note.err { color: var(--err); }
+
+.sc-group {
+  margin: 12px 0 4px; padding: 0 4px; font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700;
+}
+.sc-group:first-child { margin-top: 0; }
+.sc-item {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; cursor: pointer;
+  padding: 9px 11px; border-radius: 10px; border: 1px solid transparent; background: rgba(6, 22, 40, .45);
+  color: var(--text); font: inherit; transition: background .15s, border-color .15s;
+}
+.sc-item:hover { background: rgba(10, 36, 62, .6); border-color: var(--line-2); }
+.sc-item.on { border-color: var(--accent); background: rgba(56, 200, 255, .12); box-shadow: var(--glow); }
+.sc-item-top { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.sc-item-top b { font-size: 13px; font-weight: 600; }
+.sc-item-sub { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); font-style: normal; }
+.sc-sub-branch { font-style: normal; font-family: var(--mono, ui-monospace, monospace); }
+.sc-item-sub .ahead { color: var(--ok); font-style: normal; }
+.sc-item-sub .behind { color: var(--warn); font-style: normal; }
+.sc-pill { font-size: 10px; font-style: normal; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.sc-pill.ok { color: var(--ok); background: rgba(70, 220, 150, .12); }
+.sc-pill.dirty { color: var(--warn); background: rgba(255, 180, 70, .14); }
+.sc-pill.err { color: var(--err); background: rgba(255, 110, 110, .14); }
+.sc-pill.new { color: var(--accent); background: rgba(56, 200, 255, .14); }
+
+.sc-empty { padding: 60px 20px; text-align: center; color: var(--muted); font-size: 13px; }
+
+  display: flex; flex-direction: column; gap: 2px; min-width: 92px; padding: 10px 14px;
+  border-radius: 10px; border: 1px solid var(--line); background: rgba(4, 16, 30, .55);
+}
+
+
+@media (max-width: 900px) { .sc-layout { grid-template-columns: 1fr; } }
+
 /* Phone alerts: one quiet strip above the phones, not a panel competing with them. */
 .alert-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -1209,3 +1552,71 @@ body.nav-collapsed .core-mini h4, body.nav-collapsed .core-mini-state, body.nav-
 body.nav-collapsed .core-mini .wave { height: 26px; }
 body.nav-collapsed .focus-btn { padding: 10px 0; }
 body.nav-collapsed .focus-btn span { display: none; }
+
+/* ============================================================ SOURCE CONTROL: GitHub (Phase 9)
+   Read-only, and secondary to git: a fourth tab, compact navigation, and links that open
+   GitHub in the browser. Nothing here is drawn until the tab is opened. */
+.sc-github { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 9px; padding: 9px; }
+.gh-nav { display: flex; gap: 4px; }
+.gh-nav-btn { flex: 1; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: none; color: var(--text-2); font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.gh-nav-btn:hover { border-color: var(--accent); }
+.gh-nav-btn.on { border-color: var(--accent); color: var(--text); background: rgba(56, 200, 255, .1); }
+.gh-repo { font-size: 11px; color: var(--muted); font-family: var(--mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+.gh-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.gh-link { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; flex: 0 0 auto; }
+.gh-link button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 0; background: none; color: var(--text-2); font: inherit; font-size: 11px; cursor: pointer; }
+.gh-link button + button { border-left: 1px solid var(--line-2); color: var(--muted); }
+.gh-link button:hover { color: var(--accent); background: rgba(56, 200, 255, .08); }
+.gh-link .ic { width: 11px; height: 11px; }
+.gh-msg { font-size: 11px; line-height: 1.45; color: var(--muted); }
+.gh-msg:empty { display: none; }
+.gh-msg.ok, .gh-inline.ok { color: var(--ok); }
+.gh-msg.warn, .gh-inline.warn { color: var(--warn); }
+.gh-inline { font-style: normal; font-size: 10.5px; line-height: 1.4; color: var(--muted); }
+.gh-inline:empty { display: none; }
+.gh-card { display: flex; flex-direction: column; gap: 6px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 10px; background: rgba(4, 16, 30, .5); }
+.gh-card h4, .gh-section h4 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.gh-card .btn { align-self: flex-start; }
+.gh-card .btn .ic { width: 12px; height: 12px; }
+.gh-note { font-size: 11px; line-height: 1.45; color: var(--muted); }
+.gh-note.warn { color: var(--warn); }
+.gh-target { font-size: 11.5px; color: var(--text-2); }
+.gh-state { padding-top: 0; }
+.gh-list { display: flex; flex-direction: column; gap: 2px; }
+.gh-more, .gh-files-more { align-self: center; margin-top: 4px; }
+.gh-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.gh-branches { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.gh-foot { margin-top: auto; padding-top: 7px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; line-height: 1.4; color: var(--muted); }
+.gh-foot .warn { color: var(--warn); }
+.gh-foot-line { display: flex; align-items: center; gap: 8px; }
+.gh-foot .link-btn { font-size: 10.5px; padding: 0; }
+.sc-pill.merged { color: #c89bff; background: rgba(200, 155, 255, .14); }
+.sc-pill.muted { color: var(--text-2); background: rgba(109, 127, 144, .18); }
+.gh-pr-head h3 .gh-num { font-size: 13px; color: var(--muted); font-weight: 500; }
+.gh-pills { display: flex; flex-wrap: wrap; gap: 5px; margin: 2px 0 10px; }
+.gh-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.gh-commit-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.gh-body { padding: 14px 18px; border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.55; color: var(--text-2); overflow-wrap: anywhere; }
+.gh-body > :first-child { margin-top: 0; }
+.gh-body > :last-child { margin-bottom: 0; }
+.gh-body pre { overflow: auto; }
+.gh-img { font-size: 11px; color: var(--muted); border: 1px dashed var(--line-2); border-radius: 6px; padding: 1px 6px; }
+.gh-pr-files .gh-files-btn { align-self: flex-start; }
+.gh-section { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.gh-section h4 { margin-bottom: 4px; }
+.gh-run { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 9px; text-align: left; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--text); font: inherit; }
+button.gh-run { cursor: pointer; }
+button.gh-run:hover { background: rgba(10, 36, 62, .6); }
+.gh-run-icon { flex: 0 0 18px; text-align: center; font-style: normal; font-weight: 700; font-size: 12px; line-height: 1.6; }
+.gh-run-icon.ok { color: var(--ok); }
+.gh-run-icon.err { color: var(--err); }
+.gh-run-icon.live { color: var(--accent); }
+.gh-run-icon.warn { color: var(--warn); }
+.gh-run-icon.muted { color: var(--muted); }
+.gh-run-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gh-run-main b { font-size: 12.5px; font-weight: 500; }
+.gh-run-main small { font-size: 10.5px; color: var(--muted); overflow-wrap: anywhere; }
+.gh-run-time { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 10.5px; color: var(--muted); }
+.sc-diff-meta .gh-link button { font-size: 10.5px; padding: 2px 7px; }
+
+@media (max-width: 1000px) { .sc-work { grid-template-columns: 1fr; height: auto; } }

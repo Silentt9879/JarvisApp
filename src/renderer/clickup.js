@@ -72,7 +72,7 @@
     if (!tasks.length) {
       box.appendChild(emptyBox(
         'Nothing here yet',
-        'Press Sync to read your ClickUp board. It takes a minute or two and nothing is written back - JARVIS only reads.',
+        'Press Sync to read your ClickUp board. It takes about half a minute and nothing is written back - JARVIS only reads.',
       ));
       return;
     }
@@ -158,7 +158,7 @@
     $('cuCount').textContent = String(tasks.length);
     $('cuWho').textContent = tasks.length ? 'assigned to Jayvian' : '';
     const s = $('cuSynced');
-    if (syncing) s.textContent = 'Syncing… this takes a minute or two';
+    if (syncing) s.textContent = 'Syncing… this takes about half a minute';
     else s.textContent = fetchedAt ? `synced ${JV.ago(new Date(fetchedAt).getTime())}` : 'not synced yet';
     s.className = `h-note${syncing ? ' busy' : ''}`;
     const b = $('cuSync');
@@ -228,11 +228,13 @@
       open.clear();
       renderSprints();
       JV.notify(`ClickUp: ${tasks.length} tasks for ${r.member}.`, { level: 'ok', action: 'tasks' });
+      apply();
     } else {
       JV.notify(r?.error || 'The ClickUp sync did not finish.', { level: 'err', action: 'tasks' });
+      // After apply(): re-rendering the groups clears the box, and with it this message.
+      apply();
       $('cuGroups').prepend(emptyBox('The sync did not finish', r?.error || 'Unknown error. Check that ClickUp is connected under Tools & Skills, then try again.'));
     }
-    apply();
   }
 
   let booted = false;

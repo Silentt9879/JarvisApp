@@ -29,6 +29,7 @@
       <button id="navTools" data-view="tools"><i data-icon="tools"></i><span>Tools &amp; Skills</span><em class="nbadge" id="nbTools"></em></button>
       <button id="navWorkspace" data-view="workspace"><i data-icon="repo"></i><span>Workspace</span><em class="nbadge" id="nbRepos"></em></button>
       <button id="navDevices" data-view="devices"><i data-icon="phone"></i><span>Devices</span><em class="nbadge" id="nbDevices" hidden></em></button>
+      <button id="navSource" data-view="source"><i data-icon="branch"></i><span>Source Control</span><em class="nbadge" id="nbSource" hidden></em></button>
       <button id="navFiles" data-view="files"><i data-icon="code"></i><span>Files</span></button>
     </nav>
 
@@ -326,6 +327,116 @@
         </div>
       </section>
 
+      <!-- ===================================================== SOURCE CONTROL -->
+      <section class="view" id="view-source">
+        <div class="page">
+          <div class="page-head">
+            <h2>Source Control</h2>
+            <p>One repository at a time, so there is never any doubt which one you are working in.</p>
+          </div>
+
+          <header class="sc-bar">
+            <div class="sc-pick">
+              <button class="sc-drop" id="scRepoBtn">
+                <span class="sc-drop-label">Repository</span>
+                <b id="scRepoName">Pick one</b>
+                <i data-icon="chevron"></i>
+              </button>
+              <div class="pop sc-pop" id="scRepoPop" hidden></div>
+            </div>
+
+            <div class="sc-pick">
+              <button class="sc-drop" id="scBranchBtn">
+                <span class="sc-drop-label">Current branch</span>
+                <b id="scBranchName">—</b>
+                <i data-icon="chevron"></i>
+              </button>
+              <div class="pop sc-pop sc-branch-pop" id="scBranchPop" hidden>
+                <input class="field" id="scBranchSearch" type="text" autocomplete="off" placeholder="Filter branches…" />
+                <div class="sc-branch-list" id="scBranchList"></div>
+                <div class="sc-branch-foot">
+                  <button class="btn btn-ghost small" id="scNewBranchBtn" type="button">
+                    <i data-icon="plus"></i> New branch
+                  </button>
+                </div>
+                <form class="sc-newbranch" id="scNewBranch" hidden>
+                  <input class="field" id="scNewName" type="text" autocomplete="off" placeholder="Branch name" />
+                  <label class="sc-newbranch-from">
+                    <span>From</span>
+                    <select class="field" id="scNewFrom"></select>
+                  </label>
+                  <div class="sc-newbranch-act">
+                    <button class="btn small" id="scNewCancel" type="button">Cancel</button>
+                    <button class="btn btn-primary small" id="scNewGo" type="submit">Create and switch</button>
+                  </div>
+                </form>
+                <div class="sc-branch-msg" id="scBranchMsg"></div>
+              </div>
+            </div>
+
+            <div class="sc-remote-wrap">
+              <button class="btn sc-remote" id="scRemoteBtn" disabled>
+                <i data-icon="refresh"></i><span id="scRemoteLabel">—</span>
+              </button>
+              <button class="btn btn-danger small sc-remote-stop" id="scRemoteStop" hidden type="button">Stop</button>
+            </div>
+
+            <span class="sc-bar-note" id="scNote"></span>
+            <button class="panel-link inline" id="scRefresh">Refresh ›</button>
+          </header>
+
+          <div class="sc-remote-msg" id="scRemoteMsg"></div>
+
+          <div class="sc-work" id="scWork" hidden>
+            <aside class="sc-side">
+              <div class="sc-tabs">
+                <button class="sc-tab on" id="scTabChanges">Changes <em id="scChangeCount"></em></button>
+                <button class="sc-tab" id="scTabHistory">History</button>
+                <button class="sc-tab" id="scTabStash">Stashes <em id="scStashCount"></em></button>
+                <button class="sc-tab" id="scTabGitHub" hidden title="Pull requests and checks on GitHub. Read-only; nothing loads until you open it.">GitHub</button>
+              </div>
+              <div class="sc-files" id="scFiles"></div>
+
+              <div class="sc-history" id="scHistory" hidden>
+                <input class="field sc-hist-search" id="scHistSearch" type="text" autocomplete="off"
+                  placeholder="Search summary, author or SHA…" />
+                <div class="sc-hist-list" id="scHistList"></div>
+                <button class="btn btn-ghost small sc-hist-more" id="scHistMore" type="button" hidden>Load more</button>
+              </div>
+
+              <div class="sc-stashes" id="scStashes" hidden>
+                <!-- Above the list, not below it: the bottom of this panel sits behind the status
+                     bar, so a result shown there - "applied, and the stash is kept" - went unseen. -->
+                <div class="sc-stash-msg" id="scStashMsg"></div>
+                <div class="sc-stash-list" id="scStashList"></div>
+              </div>
+
+              <div class="sc-github" id="scGitHub" hidden></div>
+
+              <form class="sc-commit" id="scCommit">
+                <button class="btn btn-ghost small sc-stash-btn" id="scStashBtn" type="button">Stash changes…</button>
+                <input class="field" id="scSummary" type="text" maxlength="120" autocomplete="off"
+                  placeholder="Summary (required)" />
+                <textarea class="field" id="scDescription" rows="3" maxlength="2000"
+                  placeholder="Description (optional)"></textarea>
+                <button class="btn btn-ghost small sc-ai sc-gen-msg" id="scGenMsg" type="button"
+                  title="Asks JARVIS to draft a message from the staged diff. It fills the boxes; it never commits.">
+                  <i class="sc-ai-dot">&#10022;</i><span>Generate message</span>
+                </button>
+                <div class="sc-commit-msg" id="scCommitMsg"></div>
+                <button class="btn btn-primary sc-commit-btn" id="scCommitBtn" type="submit" disabled>
+                  Commit
+                </button>
+              </form>
+            </aside>
+
+            <section class="sc-diff" id="scDiff"></section>
+          </div>
+
+          <div class="sc-empty" id="scEmpty">Pick a repository to see its changes.</div>
+        </div>
+      </section>
+
       <!-- ========================================================== DEVICES -->
       <section class="view" id="view-devices">
         <div class="page">
@@ -397,6 +508,7 @@
 <script src="../../node_modules/marked/lib/marked.umd.js"></script>
 <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
 <script src="core.js"></script>
+<script src="paths.js"></script>
 <script src="chat.js"></script>
 <script src="dashboard.js"></script>
 <script src="pages.js"></script>
@@ -404,6 +516,8 @@
 <script src="webapps.js"></script>
 <script src="clickup.js"></script>
 <script src="files.js"></script>
+<script src="git.js"></script>
+<script src="github.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
