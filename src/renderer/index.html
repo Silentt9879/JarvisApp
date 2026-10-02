@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'" />
+  <title>JARVIS</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============================================================ navigation -->
+  <aside class="nav" id="nav">
+    <div class="brand">
+      <div class="brand-mark"><img src="../../build/icon.png" alt="" /></div>
+      <div class="brand-text"><b>JARVIS</b><small>COMMAND CENTER</small></div>
+      <button class="nav-toggle" id="navToggle" title="Narrow the sidebar"><i data-icon="chevron"></i></button>
+    </div>
+
+    <nav class="nav-list" id="navList">
+      <button id="navCommand" data-view="command" class="active"><i data-icon="grid"></i><span>Command Center</span></button>
+      <button id="navCore" data-view="core"><i data-icon="core"></i><span>AI Core</span></button>
+      <button id="navAgents" data-view="agents"><i data-icon="agents"></i><span>Agents</span><em class="nbadge" id="nbAgents"></em></button>
+      <button id="navTasks" data-view="tasks"><i data-icon="tasks"></i><span>Tasks</span><em class="nbadge" id="nbTasks"></em></button>
+      <button id="navMemory" data-view="memory"><i data-icon="memory"></i><span>Memory</span><em class="nbadge" id="nbMemory"></em></button>
+      <button id="navChat" data-view="chat"><i data-icon="chat"></i><span>Conversations</span><em class="nbadge" id="nbChat"></em></button>
+      <button id="navKnowledge" data-view="knowledge"><i data-icon="book"></i><span>Knowledge Base</span><em class="nbadge warn" id="nbKnowledge"></em></button>
+      <button id="navTools" data-view="tools"><i data-icon="tools"></i><span>Tools &amp; Skills</span><em class="nbadge" id="nbTools"></em></button>
+      <button id="navWorkspace" data-view="workspace"><i data-icon="repo"></i><span>Workspace</span><em class="nbadge" id="nbRepos"></em></button>
+      <button id="navDevices" data-view="devices"><i data-icon="phone"></i><span>Devices</span><em class="nbadge" id="nbDevices" hidden></em></button>
+      <button id="navFiles" data-view="files"><i data-icon="code"></i><span>Files</span></button>
+    </nav>
+
+    <section class="core-mini hud-panel" id="coreMini">
+      <h4>CORE STATUS <i data-icon="chevron"></i></h4>
+      <div class="wave" id="miniWave"></div>
+      <div class="core-mini-state" id="miniState">Offline</div>
+      <div class="core-mini-sub" id="miniSub">&nbsp;</div>
+    </section>
+
+    <button class="focus-btn" id="focusBtn" title="Focus Mode"><i data-icon="focus"></i><span>Focus Mode</span></button>
+  </aside>
+
+  <!-- ============================================================ main column -->
+  <div class="col">
+    <header class="top" id="top">
+      <div class="sys-status" id="sysStatus" title="">
+        <span>SYSTEM STATUS</span><b><i></i><em id="sysStatusText">STARTING</em></b>
+      </div>
+      <div class="clock">
+        <div class="clock-date" id="clockDate">&nbsp;</div>
+        <div class="clock-time" id="clockTime">&nbsp;</div>
+      </div>
+      <div class="top-right">
+        <div class="search" id="search">
+          <i data-icon="search"></i>
+          <input id="searchInput" placeholder="Search sessions, memory, knowledge…" autocomplete="off" spellcheck="false" />
+          <kbd>Ctrl K</kbd>
+          <div class="search-results pop" id="searchResults" hidden></div>
+        </div>
+        <button class="top-btn" id="bellBtn" title="Notifications"><i data-icon="bell"></i><em class="dot-badge" id="bellBadge" hidden></em></button>
+        <button class="top-btn" id="settingsBtn" title="Settings"><i data-icon="settings"></i></button>
+        <button class="operator" id="operator" title="Signed-in account">
+          <span class="op-text"><b id="opName">Operator</b><small id="opPlan">Connecting…</small></span>
+          <span class="op-avatar"><i data-icon="user"></i></span>
+        </button>
+        <div class="notif-panel pop" id="notifPanel" hidden>
+          <div class="pop-head"><b>Notifications</b><button class="link-btn" id="notifClear">Clear</button></div>
+          <ul id="notifList"></ul>
+        </div>
+      </div>
+    </header>
+
+    <button class="focus-exit" id="focusExit" title="Leave focus mode"><i data-icon="collapse"></i> Leave focus <kbd>Esc</kbd></button>
+    <main class="views" id="views">
+
+      <!-- ========================================================== COMMAND CENTER -->
+      <section class="view active" id="view-command">
+        <div class="cc-grid">
+          <div class="p-orb" id="orbPanel">
+            <canvas id="orb"></canvas>
+            <div class="orb-text">
+              <div class="orb-title">JARVIS</div>
+              <div class="orb-sub">AI CORE</div>
+              <div class="orb-ver" id="orbVer">&nbsp;</div>
+            </div>
+            <div class="orb-state" id="orbState">&nbsp;</div>
+          </div>
+
+          <div class="hud-panel p-feed">
+            <h3>LIVE INTELLIGENCE FEED <span class="live-tag"><i></i>LIVE</span></h3>
+            <ul class="feed" id="feed"></ul>
+            <button class="panel-link" data-goto="workspace">View workspace intelligence ›</button>
+          </div>
+
+          <div class="hud-panel p-agents">
+            <h3>ACTIVE AGENTS <button class="panel-link inline" data-goto="agents">View all ›</button></h3>
+            <div class="agent-grid" id="agentGrid"></div>
+          </div>
+
+          <div class="hud-panel p-timeline">
+            <h3>MISSION TIMELINE <span class="h-note">this session</span></h3>
+            <ul class="timeline" id="timeline"></ul>
+            <button class="panel-link" data-goto="tasks">View all tasks ›</button>
+          </div>
+
+          <div class="hud-panel p-monitor">
+            <h3>SYSTEM MONITOR <span class="h-note" id="hostName"></span></h3>
+            <div class="gauges">
+              <div class="gauge" id="gCpu"></div>
+              <div class="gauge" id="gRam"></div>
+              <div class="gauge" id="gDisk"></div>
+            </div>
+          </div>
+
+          <div class="hud-panel p-llm">
+            <h3>MODELS &amp; SYSTEMS <span class="h-note ok" id="llmCount"></span></h3>
+            <div class="llm-grid" id="llmGrid"></div>
+            <button class="panel-link" data-goto="tools">Manage tools &amp; systems ›</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================== CONVERSATIONS -->
+      <section class="view" id="view-chat">
+        <div class="chat-layout">
+          <aside class="chat-side hud-panel">
+            <button id="newSession" class="btn btn-primary btn-block"><i data-icon="plus"></i> New session</button>
+            <input id="sessionFilter" class="field" placeholder="Filter sessions…" />
+            <h3>RECENT SESSIONS <button id="refreshSessions" class="icon-btn" title="Refresh"><i data-icon="refresh"></i></button></h3>
+            <ul id="sessions" class="list sessions"><li class="muted">Loading…</li></ul>
+          </aside>
+
+          <div class="chat-main" id="chatMain">
+            <div id="transcript" class="transcript">
+              <div id="welcome" class="welcome">
+                <img src="../../build/icon.png" alt="" />
+                <h1>Good day, sir.</h1>
+                <p>JARVIS is ready in the BantuApps workspace, with all specialists standing by.</p>
+                <div class="suggestions">
+                  <button class="chip" data-prompt="What's the current status of the workspace?">Workspace status</button>
+                  <button class="chip" data-prompt="What should I work on next for the referral wheel?">Next on the wheel</button>
+                  <button class="chip" data-prompt="Check the knowledge base is current and list open issues.">Open issues</button>
+                </div>
+              </div>
+            </div>
+
+            <footer class="composer" id="composer">
+              <div class="composer-box" id="composerBox">
+                <div class="attach-row" id="attachRow" hidden></div>
+                <textarea id="input" rows="1" placeholder="Message JARVIS…   / for commands · Enter to send · Shift+Enter for a new line"></textarea>
+                <div class="cbar">
+                  <button class="cbtn" id="attachBtn" title="Attach files or images (you can also paste or drop them)"><i data-icon="plus"></i></button>
+                  <button class="cbtn" id="slashBtn" title="Commands and skills"><i data-icon="slash"></i></button>
+                  <span class="ctx" id="ctx" title="Context window used"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="14" class="ctx-bg"/><circle cx="18" cy="18" r="14" class="ctx-fg" id="ctxArc"/></svg><em id="ctxPct">–</em></span>
+                  <span class="timer" id="sessTimer" title="Session time"><i data-icon="clock"></i><em>0m</em></span>
+                  <button class="cbtn toggle" id="thinkBtn" title="Extended thinking"><i data-icon="bulb"></i><span class="tdot"></span></button>
+                  <button class="pill" id="modelBtn" title="Model and effort"><b id="modelName">Model</b><em id="effortName"></em></button>
+                  <span class="spacer"></span>
+                  <button class="pill mode" id="modeBtn" title="How JARVIS asks before acting"><i data-icon="shield"></i><b id="modeName">Ask</b></button>
+                  <button class="send stop" id="stop" hidden title="Stop (Esc)"><i data-icon="stop"></i></button>
+                  <button class="send" id="send" title="Send (Enter)"><i data-icon="send"></i></button>
+                </div>
+
+                <div class="pop menu slash-pop" id="slashPop" hidden>
+                  <input id="slashFilter" class="field" placeholder="Filter commands…" autocomplete="off" />
+                  <ul id="slashList"></ul>
+                </div>
+                <div class="pop menu model-pop" id="modelPop" hidden>
+                  <div class="pop-sec">MODEL</div>
+                  <ul id="modelList"></ul>
+                  <div class="pop-sec">EFFORT</div>
+                  <div class="seg" id="effortSeg"></div>
+                  <div class="pop-note" id="effortNote"></div>
+                </div>
+                <div class="pop menu mode-pop" id="modePop" hidden>
+                  <ul id="modeList"></ul>
+                </div>
+              </div>
+              <div class="composer-hint" id="hint"></div>
+            </footer>
+            <div class="drop-veil" id="dropVeil" hidden><div>Drop files to attach</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================== AI CORE -->
+      <section class="view" id="view-core">
+        <div class="page">
+          <div class="page-head"><h2>AI Core</h2><p>The live Claude Code session behind JARVIS.</p></div>
+          <div class="core-grid">
+            <div class="hud-panel"><h3>SESSION</h3><dl class="kv" id="coreSession"></dl></div>
+            <div class="hud-panel core-ctx">
+              <h3>CONTEXT WINDOW <button class="panel-link inline" id="ctxPrecise">Precise count ›</button></h3>
+              <div class="ctx-big">
+                <div class="gauge big" id="gCtx"></div>
+                <div class="ctx-legend" id="ctxLegend"></div>
+              </div>
+              <div class="ctx-bar" id="ctxBar"></div>
+            </div>
+            <div class="hud-panel"><h3>ACTIVITY</h3><dl class="kv" id="coreStats"></dl></div>
+            <div class="hud-panel"><h3>MEMORY FILES IN CONTEXT</h3><ul class="rows" id="ctxMemory"></ul></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================== AGENTS -->
+      <section class="view" id="view-agents">
+        <div class="page">
+          <div class="page-head"><h2>Agents</h2><p>JARVIS's specialists. They light up while working; click one to read its brief or hand it a task.</p></div>
+          <div class="agent-grid big" id="agentAll"></div>
+          <div class="hud-panel doc-drawer" id="agentDoc" hidden></div>
+        </div>
+      </section>
+
+      <!-- ========================================================== TASKS -->
+      <section class="view" id="view-tasks">
+        <div class="page">
+          <div class="page-head"><h2>Tasks</h2><p>Your ClickUp board, the work not logged yet, and what JARVIS is doing in this session.</p></div>
+
+          <section class="dev-section cu">
+            <h3>
+              ClickUp <span class="count" id="cuCount">0</span>
+              <span class="h-note" id="cuWho"></span>
+              <span class="cu-head-right">
+                <span class="h-note" id="cuSynced">not synced yet</span>
+                <button class="btn btn-primary" id="cuSync"><i data-icon="refresh"></i> Sync</button>
+              </span>
+            </h3>
+            <div class="cu-stats" id="cuStats"></div>
+            <div class="cu-filters">
+              <input class="field" id="cuSearch" placeholder="Search by code or title…" autocomplete="off" spellcheck="false" />
+              <select class="field" id="cuSprint" aria-label="Sprint"></select>
+              <label class="switch"><input type="checkbox" id="cuOpenOnly" /><span class="track"></span><span>Only unfinished</span></label>
+              <span class="h-note" id="cuShowing"></span>
+            </div>
+            <div class="cu-groups" id="cuGroups"></div>
+          </section>
+
+          <div class="two-col">
+            <div class="hud-panel"><h3>NOT IN CLICKUP YET <span class="h-note" id="draftNote"></span></h3><div id="draftList"></div></div>
+            <div class="hud-panel"><h3>THIS SESSION</h3><div class="kanban mini" id="kanban"></div><ul class="timeline tall" id="turnList"></ul></div>
+          </div>
+          <div class="hud-panel"><h3>CURRENT FOCUS <span class="h-note" id="focusAsOf"></span></h3><ul class="rows" id="focusList"></ul></div>
+        </div>
+      </section>
+
+      <!-- ========================================================== MEMORY -->
+      <section class="view" id="view-memory">
+        <div class="page split">
+          <div class="split-left">
+            <div class="page-head"><h2>Memory</h2><p>What JARVIS remembers about you and this workspace. Lines are the links between memories.</p></div>
+            <div class="hud-panel"><svg class="constellation big" id="memMap" viewBox="0 0 520 300"></svg></div>
+            <div class="doc-list" id="memList"></div>
+          </div>
+          <article class="hud-panel reader" id="memReader"><div class="reader-empty">Select a memory to read it.</div></article>
+        </div>
+      </section>
+
+      <!-- ========================================================== KNOWLEDGE -->
+      <section class="view" id="view-knowledge">
+        <div class="page split">
+          <div class="split-left">
+            <div class="page-head"><h2>Knowledge Base</h2><p>What JARVIS knows about the codebase, and the rules it works by.</p></div>
+            <div class="kstatus" id="kStatus"></div>
+            <div class="tabs" id="kTabs"></div>
+            <div class="doc-list" id="kList"></div>
+          </div>
+          <article class="hud-panel reader" id="kReader"><div class="reader-empty">Select a document to read it.</div></article>
+        </div>
+      </section>
+
+      <!-- ========================================================== TOOLS -->
+      <section class="view" id="view-tools">
+        <div class="page">
+          <div class="page-head"><h2>Tools &amp; Skills</h2><p>Everything this session can use. Click a command to put it in the composer.</p></div>
+          <div class="tools-grid">
+            <div class="hud-panel">
+              <h3>COMMANDS &amp; SKILLS <span class="h-note" id="cmdCount"></span></h3>
+              <input class="field" id="cmdFilter" placeholder="Filter…" />
+              <ul class="rows cmds" id="cmdList"></ul>
+            </div>
+            <div class="hud-panel">
+              <h3>CONNECTED SYSTEMS (MCP)</h3>
+              <div id="mcpList"></div>
+            </div>
+            <div class="hud-panel">
+              <h3>BUILT-IN TOOLS <span class="h-note" id="toolCount"></span></h3>
+              <div class="tagcloud" id="toolList"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================== WORKSPACE -->
+      <section class="view" id="view-workspace">
+        <div class="page">
+          <div class="page-head"><h2>Workspace</h2><p>The nine repos, knowledge freshness and known issues. Read-only: nothing here changes a repo. <button class="panel-link inline" id="wsRefresh">Refresh ›</button></p></div>
+          <div class="repo-grid" id="repoGrid"></div>
+          <div class="two-col">
+            <div class="hud-panel"><h3>OPEN ISSUES <span class="h-note" id="issueCount"></span></h3><ul class="rows" id="issueList"></ul></div>
+            <div class="hud-panel"><h3>KNOWLEDGE</h3><div id="wsKnowledge"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================== FILES -->
+      <section class="view" id="view-files">
+        <div class="page">
+          <div class="page-head">
+            <h2>Files</h2>
+            <p>Everything in the workspace, read to look at and one click from VS Code to change. <span class="muted" id="fileNote"></span></p>
+          </div>
+          <div class="files-layout">
+            <aside class="files-side">
+              <input class="field" id="fileSearch" placeholder="Search by name or folder…" autocomplete="off" spellcheck="false" />
+              <div class="file-kinds" id="fileKinds"></div>
+              <ul class="file-list" id="fileList"></ul>
+            </aside>
+            <div class="file-view">
+              <div class="file-head" id="fileHead"></div>
+              <div class="file-body" id="fileBody"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================== DEVICES -->
+      <section class="view" id="view-devices">
+        <div class="page">
+          <div class="page-head">
+            <h2>Devices</h2>
+            <p>Your phones and the workspace's web projects, in one place. <span class="muted" id="devNote"></span> <button class="panel-link inline" id="devRefresh">Refresh ›</button></p>
+          </div>
+
+          <div class="dev-layout">
+          <section class="dev-section phones">
+            <h3>Phones <span class="count" id="phoneCount">0</span> <span class="h-note">mirrored live, each running its own app</span></h3>
+
+            <div class="alert-bar" id="phoneAlert">
+              <label class="switch" title="Notify this phone when a long turn finishes or JARVIS needs a decision">
+                <input type="checkbox" id="paOn" /><span class="track"></span>
+              </label>
+              <div class="alert-text">
+                <b>Alert my phone when work stops</b>
+                <small id="paSub">Looking for a phone…</small>
+              </div>
+              <select class="field slim" id="paPhone" aria-label="Phone to alert"></select>
+              <button class="btn btn-ghost small" id="paWifi" title="Switch this phone to Wi-Fi so the cable can come out">
+                <i data-icon="wifi"></i> Over Wi-Fi
+              </button>
+              <button class="btn btn-ghost small" id="paTest" title="Send one notification now">Test</button>
+            </div>
+
+            <div class="dev-toolbar">
+              <select class="field" id="devAllApp" aria-label="App to run on every phone"></select>
+              <button class="btn" id="devRunAll"><i data-icon="play"></i> Run on every phone</button>
+              <button class="btn" id="devSbs" title="Lay the phones out in one row, with a draggable divider between them"><i data-icon="columns"></i> Side by side</button>
+            </div>
+            <div class="device-grid" id="deviceGrid"></div>
+          </section>
+
+          <section class="dev-section web">
+            <h3>Web apps &amp; APIs <span class="h-note">run here, open in your browser</span></h3>
+            <div class="web-grid" id="webGrid"></div>
+          </section>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ============================================================ bottom bar -->
+    <footer class="bottom">
+      <div class="bcell"><i data-icon="wifi"></i><div><small>Network</small><b id="bNet">–</b></div></div>
+      <div class="bcell"><i data-icon="clock"></i><div><small>Session</small><b id="bSess">–</b></div></div>
+      <div class="bcell"><i data-icon="gauge"></i><div><small>Context</small><b id="bCtx">–</b></div></div>
+      <div class="bspacer"></div>
+      <button class="brief-btn" id="briefBtn"><i data-icon="briefing"></i> Executive Briefing</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============================================================ settings -->
+<div class="modal-veil" id="settingsVeil" hidden>
+  <div class="modal hud-panel" role="dialog" aria-label="Settings">
+    <h3>SETTINGS <button class="icon-btn" id="settingsClose" title="Close"><i data-icon="x"></i></button></h3>
+    <dl class="kv" id="settingsInfo"></dl>
+    <div class="pop-sec">PREFERENCES</div>
+    <label class="check"><input type="checkbox" id="prefNotify" /> Desktop notification when a reply finishes or JARVIS needs you, while the window is in the background</label>
+    <label class="check"><input type="checkbox" id="prefMotion" /> Reduce motion (stops the core and waveform animations)</label>
+    <label class="check"><input type="checkbox" id="pref24h" /> 24-hour clock</label>
+    <div class="modal-foot"><button class="btn" id="openLogs">Open log folder</button></div>
+  </div>
+</div>
+
+<script src="../../node_modules/marked/lib/marked.umd.js"></script>
+<script src="../../node_modules/dompurify/dist/purify.min.js"></script>
+<script src="core.js"></script>
+<script src="chat.js"></script>
+<script src="dashboard.js"></script>
+<script src="pages.js"></script>
+<script src="devices.js"></script>
+<script src="webapps.js"></script>
+<script src="clickup.js"></script>
+<script src="files.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

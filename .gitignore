@@ -1,0 +1,45 @@
+# Build output. electron-builder writes an unpacked app and a 220 MB+ JARVIS.exe here;
+# it is produced by `npm run pack` and never belongs in history.
+dist/
+out/
+release/
+
+# Dependencies. Restored with `npm ci` from package-lock.json, which IS tracked.
+node_modules/
+
+# Logs, caches, temporary files
+*.log
+npm-debug.log*
+yarn-error.log*
+.npm/
+.cache/
+*.tmp
+*.temp
+
+# Local and machine-specific configuration
+.env
+.env.*
+*.local.json
+settings.local.json
+
+# Credentials. Nothing of the sort belongs in this repository; this is here so that an
+# accident is caught by git rather than by a person.
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# The app's own runtime state - config.json (which holds the phone-alert settings) and
+# jarvis.log - lives in %APPDATA%\JARVIS, outside this repository. Nothing to ignore here.
+#
+# Deliberately TRACKED, because the app cannot be built or run without them:
+#   build/     icon.ico, icon.png and the source artwork the icons are generated from
+#   vendor/    scrcpy-server-v3.3.3, pushed to a phone for screen mirroring (90 KB)
+#   scripts/   the smoke, bridge and content tests

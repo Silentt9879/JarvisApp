@@ -1,0 +1,53 @@
+{
+  "name": "jarvis-app",
+  "productName": "JARVIS",
+  "version": "1.0.0",
+  "description": "JARVIS - a desktop app for Claude Code in the BantuApps workspace",
+  "main": "src/main.mjs",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.284",
+    "@yume-chan/adb": "^2.6.4",
+    "@yume-chan/adb-scrcpy": "^2.3.2",
+    "@yume-chan/adb-server-node-tcp": "^2.5.2",
+    "@yume-chan/scrcpy": "^2.3.0",
+    "@yume-chan/stream-extra": "^2.6.1",
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14"
+  },
+  "devDependencies": {
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3"
+  },
+  "author": "BantuApps",
+  "build": {
+    "appId": "com.bantuapps.jarvis",
+    "productName": "JARVIS",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**",
+      "build/icon.png",
+      "build/icon.ico",
+      "package.json",
+      "vendor/**"
+    ],
+    "asarUnpack": [
+      "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**",
+      "build/icon.*"
+    ],
+    "win": {
+      "target": "dir",
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": true
+    }
+  }
+}
