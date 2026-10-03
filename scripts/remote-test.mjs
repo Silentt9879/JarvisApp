@@ -2,7 +2,7 @@
 // bot, no session. Every safety rule in remote.mjs has a case here, including the attacks:
 // a stranger, a group, a message sent while JARVIS was away, and a forged button.
 //   node scripts/remote-test.mjs
-import { createRemote, chunk, greeting, isPowerDown } from '../src/remote.mjs';
+import { createRemote, chunk, greeting, isPowerDown, controlWord } from '../src/remote.mjs';
 import { toTelegramHtml, balanceFences } from '../src/tgformat.mjs';
 
 const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw';
@@ -29,7 +29,7 @@ function fakeTelegram() {
       return { ok: true, result: [] };
     }
     if (method === 'sendMessage' && body.parse_mode && body.text.includes('UNPARSEABLE')) return { ok: false, error: "Bad Request: can't parse entities" };
-    if (method === 'sendMessage') return { ok: true, result: { message_id: nextMsg++, text: body.text } };
+    if (method === 'sendMessage') { const id = nextMsg++; calls[calls.length - 1].id = id; return { ok: true, result: { message_id: id, text: body.text } }; }
     return { ok: true, result: true };
   };
   const upload = async (token, method, fields, file) => {
@@ -48,8 +48,8 @@ function fakeTelegram() {
     message(text, { from = ME, chat = ME, type = 'private', date = Math.floor(Date.now() / 1000) + 5, extra = {} } = {}) {
       queue.push({ update_id: nextUpdate++, message: { message_id: 9000 + nextUpdate, date, ...(text != null ? { text } : {}), ...extra, from: { id: from }, chat: { id: chat, type } } });
     },
-    tap(data, messageId, { from = ME } = {}) {
-      queue.push({ update_id: nextUpdate++, callback_query: { id: `cq${nextUpdate}`, from: { id: from }, data, message: { message_id: messageId } } });
+    tap(data, messageId, { from = ME, chat = null } = {}) {
+      queue.push({ update_id: nextUpdate++, callback_query: { id: `cq${nextUpdate}`, from: { id: from }, data, message: { message_id: messageId, ...(chat ? { chat: { id: chat } } : {}) } } });
     },
   };
 }
@@ -60,11 +60,11 @@ const SESSIONS = [
   { id: '33333333-3333-4333-8333-333333333333', title: 'Panel web invoices', lastModified: Date.now() - 2 * 86400000 },
 ];
 
-function rig({ on = true, atDesk = false, remindMs } = {}) {
+function rig({ on = true, atDesk = false, remindMs, groupId = null, pcName = null } = {}) {
   const tg = fakeTelegram();
-  const cfg = { on, token: TOKEN, chatId: String(ME), name: '@test' };
-  const seen = { submitted: [], attached: [], downloads: [], saved: [], responded: [], interrupts: 0, fresh: 0, logs: [], switched: [], transcribed: 0, poweredDown: [], brief: { on: true, at: '08:00' } };
-  const desk = { at: atDesk, current: SESSIONS[0].id, transcript: 'run the tests please', voiceReady: true, screens: 1 };
+  const cfg = { on, token: TOKEN, chatId: String(ME), name: '@test', groupId, pcName };
+  const seen = { submitted: [], attached: [], downloads: [], saved: [], responded: [], interrupts: 0, fresh: 0, logs: [], switched: [], transcribed: 0, poweredDown: [], woken: [], moved: [], brief: { on: true, at: '08:00' } };
+  const desk = { at: atDesk, current: SESSIONS[0].id, transcript: 'run the tests please', voiceReady: true, screens: 1, asleep: false, peers: [] };
   const r = createRemote({
     cfg: () => cfg,
     log: (...a) => seen.logs.push(a.join(' ')),
@@ -94,7 +94,11 @@ function rig({ on = true, atDesk = false, remindMs } = {}) {
     readAttachment: async (p) => (/huge/.test(p) ? null : Buffer.from(`contents of ${p}`)),
     transcribe: async () => { seen.transcribed++; return { ok: true, text: desk.transcript }; },
     voiceReady: () => desk.voiceReady,
-    powerDown: (from) => { seen.poweredDown.push(from); },
+    powerDown: (from) => { seen.poweredDown.push(from); desk.asleep = true; },
+    wakeUp: (from) => { seen.woken.push(from); desk.asleep = false; },
+    asleep: () => desk.asleep,
+    peers: async () => desk.peers,
+    groupMoved: (id) => { seen.moved.push(id); },
     remindMs,
   });
   return { tg, cfg, seen, r, desk };
@@ -726,7 +730,7 @@ const settle = () => sleep(120); // let the poll loop take what is queued
   ok(['Power down', 'power down', 'POWER DOWN!', 'Power down.', 'powerdown', 'JARVIS, power down', ' jarvis power down '].every(isPowerDown), 'power down: the phrase, in any case, with or without "JARVIS"');
   ok(!['how do I power down the server?', 'power down the phone', 'power', 'down', ''].some(isPowerDown), 'power down: a sentence that only mentions it is not one');
 
-  const { tg, seen, r } = rig();
+  const { tg, seen, r, desk } = rig();
   r.start();
   await sleep(30);
   // An open question must not swallow it as an answer.
@@ -737,9 +741,106 @@ const settle = () => sleep(120); // let the poll loop take what is queued
   ok(seen.poweredDown.length === 1 && seen.poweredDown[0] === 'phone', 'power down from the phone closes JARVIS');
   ok(!seen.submitted.includes('Power down') && !seen.responded.length, 'power down is never run as a prompt or taken as an answer');
   r.event({ kind: 'prompt_done', id: 'q9' });
+  desk.asleep = false;
   tg.message('please power down the test server');
   await settle();
   ok(seen.poweredDown.length === 1 && seen.submitted.includes('please power down the test server'), 'power down: a sentence mentioning it runs as a normal message');
+  r.stop();
+}
+
+// ------------------------------------------------------------------ sleep and wake, your own chat
+{
+  const cw = (t) => JSON.stringify(controlWord(t));
+  ok(cw('Wake up') === '{"cmd":"wake","target":null}' && cw('wakeup!') === '{"cmd":"wake","target":null}', 'wake up: the phrase alone');
+  ok(cw('Wake up Work-PC1') === '{"cmd":"wake","target":"Work-PC1"}' && cw('Home-PC, power down') === '{"cmd":"power","target":"Home-PC"}', 'wake up / power down: a name before or after');
+  ok(cw('JARVIS, wake up') === '{"cmd":"wake","target":null}', 'wake up: "JARVIS" is not a PC name');
+  ok(isPowerDown('Power down Home-PC', 'Home-PC') && isPowerDown('power down home pc', 'Home-PC') && !isPowerDown('Power down Work-PC', 'Home-PC'), 'power down: names match loosely, other PCs do not match');
+  ok(!controlWord('wake up the team at 9 and tell them about the release'), 'wake up: a long sentence is not a command');
+
+  const { tg, seen, r, desk } = rig();
+  r.start();
+  await sleep(30);
+  tg.message('Power down');
+  await settle();
+  ok(seen.poweredDown.length === 1 && desk.asleep && tg.sent().some((m) => /powered down. Say "Wake up"/.test(m.text)), 'power down: asleep, and the phone is told how to wake it');
+  tg.clear();
+  tg.message('run the tests');
+  await settle();
+  ok(!seen.submitted.includes('run the tests') && tg.sent().some((m) => /asleep. Say "Wake up" first/.test(m.text)), 'asleep: a task is not run, and says why');
+  tg.clear();
+  tg.message('/status');
+  await settle();
+  ok(tg.sent().some((m) => /^Asleep/.test(m.text)), 'asleep: /status says so');
+  tg.clear();
+  tg.message('Wake up');
+  await settle();
+  ok(seen.woken.length === 1 && !desk.asleep && tg.sent().some((m) => /^☀️ Good (morning|afternoon|evening)\. JARVIS is online on your PC/.test(m.text)), 'wake up: awake again, with a greeting');
+  tg.clear();
+  tg.message('Wake up');
+  await settle();
+  ok(seen.woken.length === 1 && tg.sent().some((m) => /already awake/.test(m.text)), 'wake up while awake: says so, does nothing');
+  r.stop();
+}
+
+// ------------------------------------------------------------------ the group shared by several PCs
+{
+  const GROUP = -100777;
+  const g = (opts = {}) => ({ chat: GROUP, type: 'supergroup', ...opts });
+  const { tg, seen, r, desk } = rig({ groupId: String(GROUP), pcName: 'Home-PC' });
+  r.start();
+  await sleep(30);
+
+  // Asleep, and the only PC asleep: wakes at once, says so in the group.
+  desk.asleep = true;
+  desk.peers = [{ name: 'Work-PC', state: 'awake' }];
+  tg.message('Wake up', g());
+  await settle();
+  ok(seen.woken.length === 1 && tg.sent().some((m) => m.chat_id === String(GROUP) && /Home-PC/.test(m.text)), 'group: the only sleeping PC wakes straight away, and says so in the group');
+
+  // Two awake: "Power down" asks with a button for this PC instead of acting.
+  tg.clear();
+  tg.message('Power down', g());
+  await settle();
+  const ask = tg.sent().find((m) => m.reply_markup);
+  ok(seen.poweredDown.length === 0 && ask && ask.chat_id === String(GROUP) && ask.reply_markup.inline_keyboard[0][0].text === '💤 Power down Home-PC', 'group: two PCs could answer - a button for this one, nothing done yet');
+  const askId = tg.calls.find((c) => c.body === ask).id;
+  const key = ask.reply_markup.inline_keyboard[0][0].callback_data;
+  tg.tap(key, askId, { chat: GROUP, from: STRANGER });
+  await settle();
+  ok(seen.poweredDown.length === 0, 'group: a stranger tapping the button does nothing');
+  tg.tap(key, askId, { chat: GROUP });
+  await settle();
+  ok(seen.poweredDown.length === 1 && seen.poweredDown[0] === 'group', 'group: tapping this PC\'s button powers it down');
+
+  // Named for another PC: this one stays silent.
+  tg.clear();
+  tg.message('Wake up Work-PC1', g());
+  await settle();
+  ok(seen.woken.length === 1 && !tg.sent().length, 'group: a command for another PC is left to it');
+  // Named for this one: acts even with others asleep.
+  desk.peers = [{ name: 'Work-PC', state: 'asleep' }];
+  tg.message('Wake up home-pc', g());
+  await settle();
+  ok(seen.woken.length === 2, 'group: a command naming this PC acts at once');
+
+  // Not a control word: never run - every PC would run it.
+  tg.clear();
+  tg.message('deploy the API', g());
+  await settle();
+  ok(!seen.submitted.includes('deploy the API') && tg.sent().some((m) => /only "Wake up", "Power down" and \/status/.test(m.text)), 'group: a task is not run there, and the first PC by name says why');
+  tg.clear();
+  desk.peers = [{ name: 'Alpha-PC', state: 'awake' }];
+  tg.message('deploy the API', g());
+  await settle();
+  ok(!tg.sent().length, 'group: only one PC gives that hint');
+
+  // Strangers in the group, and the group moving to a new id.
+  tg.message('Power down', g({ from: STRANGER }));
+  await settle();
+  ok(seen.poweredDown.length === 1, 'group: a stranger\'s "Power down" is ignored');
+  tg.message(null, g({ extra: { migrate_to_chat_id: -100999 } }));
+  await settle();
+  ok(seen.moved[0] === '-100999', 'group: a move to a supergroup is followed');
   r.stop();
 }
 

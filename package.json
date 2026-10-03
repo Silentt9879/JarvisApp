@@ -12,7 +12,7 @@
     "smoke": "node scripts/smoke.mjs",
     "shortcuts": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/shortcuts.ps1",
     "brand-bot": "node scripts/telegram-brand.mjs",
-    "test": "node scripts/content-test.mjs && node scripts/remote-test.mjs && node scripts/deploy-test.mjs"
+    "test": "node scripts/content-test.mjs && node scripts/remote-test.mjs && node scripts/presence-test.mjs && node scripts/deploy-test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.284",

@@ -559,6 +559,14 @@
               <small id="paRemoteSub"></small>
             </div>
           </div>
+          <!-- More than one PC: this PC's name, and the group shared with the others' bots -->
+          <div class="alert-row alert-setup" id="paGroupRow" hidden>
+            <input class="field slim" id="paPcName" type="text" maxlength="24" placeholder="PC name, e.g. Home-PC"
+                   autocomplete="off" spellcheck="false" aria-label="This PC's name" title="What this PC is called in Telegram - &quot;Wake up Home-PC&quot;" />
+            <button class="btn btn-ghost small" id="paGroupFind" title="Read the group from the messages your bot has received">Find my group</button>
+            <button class="btn btn-ghost small" id="paGroupLeave" title="Stop using the group on this PC" hidden>Leave group</button>
+            <span class="alert-note" id="paGroupNote"></span>
+          </div>
           <div class="alert-row alert-setup" id="paMirrorRow" hidden>
             <label class="switch" title="Show what is typed at this PC, and JARVIS's replies, in your Telegram chat">
               <input type="checkbox" id="paMirror" aria-label="Show the PC's conversation in Telegram" /><span class="track"></span>

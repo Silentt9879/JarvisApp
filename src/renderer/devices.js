@@ -505,6 +505,19 @@
       : alerts.remote ? 'On. What you send your bot runs on this PC, and approvals and questions come to the chat as buttons. Only your chat is obeyed. Send /help there for the commands. While it is on, the PC is kept from sleeping and closing the window keeps JARVIS in the tray.'
         : 'Off. Turn it on to send JARVIS tasks from your phone and answer its approvals there.';
 
+    // More than one PC: this one's name, and the group all their bots share (presence.mjs).
+    $('paGroupRow').hidden = !tg;
+    const t = alerts.telegram || {};
+    const pcBox = $('paPcName');
+    if (document.activeElement !== pcBox) pcBox.value = t.pcName || '';
+    $('paGroupFind').disabled = !step.ready;
+    $('paGroupLeave').hidden = !t.groupId;
+    const gNote = $('paGroupNote');
+    gNote.className = `alert-note${t.groupId ? ' ok' : ''}`;
+    gNote.textContent = !step.ready ? 'More than one PC? Set up the bot above first.'
+      : t.groupId ? `In ${t.groupName || 'your group'} as ${t.pcName}. "Wake up" and "Power down" there ask which PC when more than one could answer - or add the name: "Wake up ${t.pcName}".`
+        : 'More than one PC with JARVIS? Give each its own bot and name, put all the bots in one Telegram group with you, make each an admin with "Change group info", send "hi" there, then press Find my group.';
+
     // The mirror rides on remote control: it uses the same chat, and only while that is on.
     $('paMirrorRow').hidden = !tg;
     const mir = $('paMirror');
@@ -718,6 +731,26 @@
         note.className = 'alert-note err';
       }
     };
+    $('paPcName').onchange = (e) => { if (e.target.value.trim()) setAlerts({ telegram: { pcName: e.target.value.trim() } }); else renderAlerts(); };
+    $('paPcName').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } };
+    $('paGroupFind').onclick = async (e) => {
+      const b = e.currentTarget;
+      const note = $('paGroupNote');
+      b.disabled = true;
+      note.textContent = 'Reading your bot’s messages…';
+      note.className = 'alert-note busy';
+      const r = await window.jarvis.telegramFindGroup();
+      b.disabled = false;
+      if (r?.ok) {
+        await loadAlerts();
+        if (r.admin) JV.notify(`Joined ${r.name}. Try "Wake up" or /status there.`, { level: 'ok', action: () => JV.openSettings?.() });
+        else JV.notify(`Found ${r.name}, but the bot is not an admin with "Change group info" yet - it cannot see the group's messages or keep the status board until it is.`, { level: 'err', action: () => JV.openSettings?.() });
+      } else {
+        note.textContent = r?.error || 'Could not find a group.';
+        note.className = 'alert-note err';
+      }
+    };
+    $('paGroupLeave').onclick = () => setAlerts({ telegram: { groupId: null } });
     $('paWifi').onclick = async (e) => {
       const b = e.currentTarget;
       const serial = $('paPhone').value;

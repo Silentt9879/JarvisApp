@@ -121,6 +121,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   // only - the window sends it in and is never given it back.
   telegramVerify: (token) => ipcRenderer.invoke('jarvis:telegramVerify', token),
   telegramFindChat: () => ipcRenderer.invoke('jarvis:telegramFindChat'),
+  telegramFindGroup: () => ipcRenderer.invoke('jarvis:telegramFindGroup'),
   // ASP.NET sites and APIs: dotnet watch run, shown in the window.
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),

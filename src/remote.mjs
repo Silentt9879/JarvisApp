@@ -64,7 +64,7 @@ const HELP = [
   '/diff - what has changed in the repos; /diff <repo> for the patch',
   '/brief - the morning brief now; /brief off, /brief on, /brief 07:30',
   '/help - this list',
-  'Power down - close JARVIS on the PC (switch it on again there to carry on)',
+  'Power down - put JARVIS on the PC to sleep; Wake up brings it back',
   '',
   'Other slash commands (/compact, /context, /cost …) go to Claude Code as they are.',
 ].join('\n');
@@ -85,26 +85,47 @@ export function chunk(text, max = MAX_TEXT) {
   return out;
 }
 
-/** The phone's hello when JARVIS opens on the PC: morning before noon, afternoon until 17:00, evening after. */
-export function greeting(date = new Date()) {
+/**
+ * The phone's hello when JARVIS opens or wakes on the PC: morning before noon, afternoon until
+ * 17:00, evening after. `pc` names the PC once there is more than one.
+ */
+export function greeting(date = new Date(), pc = null) {
   const h = date.getHours();
   const part = h >= 5 && h < 12 ? 'morning' : h >= 12 && h < 17 ? 'afternoon' : 'evening';
-  return `Good ${part}. JARVIS is online on your PC and standing by - send me anything and I will run it there.`;
+  return `Good ${part}. JARVIS is online on ${pc || 'your PC'} and standing by - send me anything and I will run it there.`;
 }
+/** Said when JARVIS goes to sleep: the window is closed, only the Telegram listener is left. */
+export const sleepNotice = (pc = null) => `💤 JARVIS on ${pc || 'the PC'} has powered down. Say "Wake up" to bring it back.`;
+/** Said when JARVIS is quit outright (the tray's Quit): nothing is listening any more. */
+export const offlineNotice = (pc = null) => `🔌 JARVIS on ${pc || 'the PC'} has shut down and is offline. Switch it on again at the PC to resume talking.`;
+
+const sameName = (a, b) => {
+  const n = (s) => String(s || '').toLowerCase().replace(/[\s_.-]+/g, '');
+  return !!n(a) && n(a) === n(b);
+};
 
 /**
- * "Power down" on its own (or "JARVIS, power down") closes JARVIS on the PC. Only the whole
- * message counts, so a sentence that merely mentions it is sent on as usual.
+ * "Wake up" and "Power down", alone or with a PC's name before or after ("Wake up PC2",
+ * "PC2, power down", "JARVIS, wake up"). Only a whole message of that shape counts.
+ * Returns { cmd: 'wake' | 'power', target: name | null }, or null.
  */
-export function isPowerDown(text) {
-  return /^(jarvis[\s,.!]+)?power\s*down[\s.!]*$/i.test(String(text || '').trim());
+export function controlWord(text) {
+  const m = /^(?:([\w .-]{1,24}?)[\s,:]+)?(?:jarvis[\s,.!]+)?(wake\s*up|power\s*down)(?:[\s,]+([\w .-]{1,24}?))?[\s.!]*$/i.exec(String(text || '').trim());
+  if (!m) return null;
+  const target = [m[1], m[3]].map((s) => (s || '').trim()).find((s) => s && !/^jarvis$/i.test(s)) || null;
+  return { cmd: /^wake/i.test(m[2]) ? 'wake' : 'power', target };
 }
-export const POWER_DOWN_NOTICE = '🔌 JARVIS on the PC has powered down and is now offline. Switch it on again at the PC to resume talking.';
+/** "Power down" meant for this PC: no name, or this PC's name. */
+export function isPowerDown(text, me = null) {
+  const c = controlWord(text);
+  return !!c && c.cmd === 'power' && (!c.target || sameName(c.target, me));
+}
 
 const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 
 /**
- * @param o.cfg           () => { on, token, chatId, name } - read fresh on every use
+ * @param o.cfg           () => { on, token, chatId, name, pcName, groupId } - read fresh on every use;
+ *                        groupId is the group shared with your other PCs, if any
  * @param o.log           (...parts) => void
  * @param o.atDesk        () => boolean - the window has focus
  * @param o.submit        (text, attachments?) => boolean - hand a message to the window to send; false if no window
@@ -126,7 +147,11 @@ const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.s
  * @param o.readAttachment (path) => Promise<Buffer|null> - a file attached at the desk, for the mirror; null if too big
  * @param o.transcribe    (oggBuffer) => Promise<{ ok, text, error }> - voice notes
  * @param o.voiceReady    () => boolean - the speech model is loaded (no first-time download)
- * @param o.powerDown     (from) => void - "Power down" was sent: close JARVIS on the PC
+ * @param o.powerDown     (from) => void - "Power down" was sent: put JARVIS on the PC to sleep
+ * @param o.wakeUp        (from) => void - "Wake up" was sent: open JARVIS again
+ * @param o.asleep        () => boolean - powered down: the window is closed, only this listener is left
+ * @param o.peers         () => Promise<[{ name, state }]> - the other PCs in the group (presence.mjs)
+ * @param o.groupMoved    (newId) => void - Telegram turned the group into a supergroup, with a new id
  * @param o.now           () => ms - injectable clock
  * @param o.remindMs      ms before an unanswered decision is nudged - injectable for tests
  */
@@ -169,12 +194,16 @@ export function createRemote(o) {
   };
 
   // ---------------------------------------------------------------- outbound
+  /** A plain message - to your chat, or to the group with `extra.chat_id`. */
   async function say(text, extra = {}) {
     const c = o.cfg();
     if (!ready()) return null;
+    const { chat_id: to, ...rest } = extra;
+    const chat = String(to ?? c.chatId);
+    extra = rest;
     let last = null;
     for (const part of chunk(text)) {
-      const r = await api(c.token, 'sendMessage', { chat_id: String(c.chatId), text: part, disable_web_page_preview: true, ...extra });
+      const r = await api(c.token, 'sendMessage', { chat_id: chat, text: part, disable_web_page_preview: true, ...extra });
       if (!r.ok) { log('remote: send failed:', r.error || ''); return null; }
       last = r.result;
       extra = {}; // buttons ride on the first part only
@@ -202,11 +231,11 @@ export function createRemote(o) {
     }
     return last;
   }
-  async function edit(messageId, text, keyboard = null) {
+  async function edit(messageId, text, keyboard = null, chat = null) {
     const c = o.cfg();
     if (!ready() || !messageId) return;
     const r = await api(c.token, 'editMessageText', {
-      chat_id: String(c.chatId), message_id: messageId, text: clip(text, MAX_TEXT), disable_web_page_preview: true,
+      chat_id: String(chat ?? c.chatId), message_id: messageId, text: clip(text, MAX_TEXT), disable_web_page_preview: true,
       ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {}),
     });
     // "message is not modified" is Telegram saying it already looks like that - not a fault.
@@ -412,6 +441,17 @@ export function createRemote(o) {
     const ack = (text) => api(c.token, 'answerCallbackQuery', { callback_query_id: cq.id, ...(text ? { text } : {}) });
     if (String(cq.from?.id) !== String(c.chatId)) { stranger(cq.from); await ack(); return; }
     const [verb, rawKey, a1, a2] = String(cq.data || '').split(':');
+    // "Which PC?" in the group: only on the very message this PC posted for it.
+    if (verb === 'g') {
+      const g = groupAsks.get(Number(rawKey));
+      if (!g || cq.message?.message_id !== g.messageId || String(cq.message?.chat?.id) !== String(g.chat)) { await ack('That choice is no longer open.'); return; }
+      groupAsks.delete(Number(rawKey));
+      clearTimeout(g.expire);
+      await ack(g.cmd === 'wake' ? `Waking ${me()}` : `Powering down ${me()}`);
+      await edit(g.messageId, g.cmd === 'wake' ? `☀️ ${me()} chosen.` : `🔌 ${me()} chosen.`, null, g.chat);
+      await act(g.cmd, g.chat);
+      return;
+    }
     // A session from /sessions: only on that very list, like any other button.
     if (verb === 'w') {
       const s = shownSessions.list[Number(rawKey)];
@@ -473,6 +513,15 @@ export function createRemote(o) {
 
   async function onMessage(m) {
     const c = o.cfg();
+    // The group shared with your other PCs: still only your own messages, and only the
+    // control words (onGroupText). Its id changes if Telegram makes it a supergroup.
+    const inGroup = !!c.groupId && String(m.chat?.id) === String(c.groupId) && /group/.test(m.chat?.type || '');
+    if (inGroup && m.migrate_to_chat_id) { log('remote: the group became a supergroup - following it'); o.groupMoved?.(String(m.migrate_to_chat_id)); return; }
+    if (inGroup && String(m.from?.id) === String(c.chatId)) {
+      // Sent while this PC was not listening: dropped without a word - every PC would say it.
+      if (Number(m.date) >= startedAt && typeof m.text === 'string') await onGroupText(m.text.trim(), m);
+      return;
+    }
     if (m.chat?.type !== 'private' || String(m.chat?.id) !== String(c.chatId) || String(m.from?.id) !== String(c.chatId)) {
       stranger(m.from);
       return;
@@ -496,8 +545,15 @@ export function createRemote(o) {
 
   /** Typed text, or a voice note's transcript: an answer, a reply instead, a command or a message. */
   async function onText(text) {
-    // Before anything else, even an open question: "Power down" is never taken as an answer.
-    if (isPowerDown(text) && o.powerDown) { log('remote: power down from the phone'); o.powerDown('phone'); return; }
+    // Before anything else, even an open question: "Wake up" and "Power down" are never
+    // taken as an answer. This chat is this PC's alone, so there is nobody to choose between.
+    const cw = controlWord(text);
+    if (cw && (!cw.target || sameName(cw.target, me()))) { await control(cw.cmd, null); return; }
+    if (cw && (await o.peers?.().catch(() => []) || []).some((p) => sameName(p.name, cw.target))) {
+      await say(`That is for ${cw.target} - this chat is ${me()}. Say it in your JARVIS group, or in ${cw.target}'s own chat.`);
+      return;
+    }
+    if (o.asleep?.() && !/^\/(status|help|start)\b/i.test(text)) { await say(`💤 JARVIS on ${me()} is asleep. Say "Wake up" first.`); return; }
     // A typed reply to a question answers it ("Other").
     const q = openQuestion();
     if (q && !text.startsWith('/')) { await answerQuestion(q, text); return; }
@@ -567,6 +623,7 @@ export function createRemote(o) {
    * in as an image; anything else is named by its path, like a file attached at the desk.
    */
   async function onIncoming(f, caption) {
+    if (o.asleep?.()) { await say(`💤 JARVIS on ${me()} is asleep. Say "Wake up", then send that again.`); return; }
     if (f.size > MAX_DOWNLOAD) { await say('That is over 20 MB, the most Telegram lets me fetch. Send it a smaller way.'); return; }
     action('upload_document');
     const c = o.cfg();
@@ -608,6 +665,79 @@ export function createRemote(o) {
     log('remote: voice note transcribed,', Number(v.duration) || '?', 's');
     await say(`🎙 "${clip(t.text, 3500)}"`);
     await onText(t.text);
+  }
+
+  // ---------------------------------------------------------------- power: sleep, wake, the group
+  // Your own chat with this PC's bot is this PC's alone: "Wake up" and "Power down" there act
+  // at once. The group holds every PC's bot, and each of them hears every message - so there
+  // each PC asks the board (presence.mjs) who else could answer. Nobody: it acts. Somebody:
+  // every PC that could answer posts one button for itself, and you tap the one you mean.
+  const me = () => o.cfg().pcName || 'this PC';
+  let nextAsk = 1;
+  const groupAsks = new Map(); // key -> { cmd, chat, messageId, expire }
+  const ASK_OPEN_MS = 2 * 60 * 1000;
+
+  /** Wake or sleep this PC, and say so where it was asked: your chat (null) or the group. */
+  async function act(cmd, chat) {
+    const to = chat ? { chat_id: chat } : {};
+    if (cmd === 'wake') {
+      log('remote: wake up from the', chat ? 'group' : 'phone');
+      await o.wakeUp?.(chat ? 'group' : 'phone');
+      await say(`☀️ ${greeting(new Date(now()), o.cfg().pcName || null)}`, to);
+    } else {
+      log('remote: power down from the', chat ? 'group' : 'phone');
+      await say(sleepNotice(o.cfg().pcName || null), to);
+      await o.powerDown?.(chat ? 'group' : 'phone');
+    }
+  }
+
+  /** "Wake up" / "Power down" in your own chat: there is only this PC to mean. */
+  async function control(cmd, chat) {
+    const asleep = !!o.asleep?.();
+    if (cmd === 'wake' && !asleep) { await say(`JARVIS on ${me()} is already awake.`); return; }
+    if (cmd === 'power' && asleep) { await say(`JARVIS on ${me()} is already asleep. Say "Wake up" to bring it back.`); return; }
+    await act(cmd, chat);
+  }
+
+  /** This PC speaks for all of them (a hint, "all awake"): the first name on the board that is still there. */
+  function leader(peers) {
+    const names = [me(), ...peers.map((p) => p.name)];
+    names.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    return sameName(names[0], me());
+  }
+
+  async function onGroupText(text, m) {
+    const chat = String(m.chat.id);
+    const to = { chat_id: chat };
+    const asleep = !!o.asleep?.();
+    if (/^\/status\b/i.test(text)) { await say(`${asleep ? '💤' : '🟢'} ${me()} - ${asleep ? 'asleep' : statusWord()}`, to); return; }
+    const cw = controlWord(text);
+    const peers = await o.peers?.().catch(() => []) || [];
+    if (!cw) {
+      // Anything else is not taken here - every PC would run it. One of them says so.
+      if (leader(peers)) await say('In this group I take only "Wake up", "Power down" and /status - add a name to pick a PC ("Wake up PC2"). For tasks, message a PC\'s own bot.', { ...to, reply_to_message_id: m.message_id });
+      return;
+    }
+    if (cw.target && !sameName(cw.target, me())) return;            // for another PC
+    const want = cw.cmd === 'wake' ? 'asleep' : 'awake';             // who can answer
+    if ((asleep ? 'asleep' : 'awake') !== want) {
+      if (cw.target) await say(`${me()} is already ${asleep ? 'asleep' : 'awake'}.`, to);
+      else if (!peers.some((p) => p.state === want) && leader(peers)) await say(cw.cmd === 'wake' ? 'Every PC is already awake.' : 'Every PC is already asleep.', to);
+      return;
+    }
+    // Named, or the only PC that could answer: act now.
+    if (cw.target || !peers.some((p) => p.state === want)) { await act(cw.cmd, chat); return; }
+    // More than one could: this PC offers itself, as each of the others does.
+    const key = nextAsk++;
+    const label = cw.cmd === 'wake' ? `☀️ Wake ${me()}` : `💤 Power down ${me()}`;
+    const sent = await say(`${asleep ? '💤' : '🟢'} ${me()} is ${asleep ? 'asleep' : 'awake'}. Which PC do you mean?`, {
+      ...to, reply_to_message_id: m.message_id, reply_markup: { inline_keyboard: [[{ text: label, callback_data: `g:${key}` }]] },
+    });
+    if (!sent) return;
+    const g = { cmd: cw.cmd, chat, messageId: sent.message_id, expire: null };
+    g.expire = setTimeout(() => { if (groupAsks.delete(key)) edit(g.messageId, `${me()} - not chosen.`, null, chat); }, ASK_OPEN_MS);
+    g.expire.unref?.();
+    groupAsks.set(key, g);
   }
 
   // ---------------------------------------------------------------- inbound: reports
@@ -708,15 +838,19 @@ export function createRemote(o) {
     return h < 36 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
   }
 
+  function statusWord() {
+    if (o.asleep?.()) return 'Asleep - say "Wake up" to bring it back';
+    return { starting: 'Starting up', ready: 'Standing by', working: 'Working', waiting: 'Waiting for you', closed: 'Offline', offline: 'Offline' }[status] || status;
+  }
   function statusLine() {
-    const word = { starting: 'Starting up', ready: 'Standing by', working: 'Working', waiting: 'Waiting for you', closed: 'Offline', offline: 'Offline' }[status] || status;
+    const word = statusWord();
     const modeWord = { default: 'Ask', acceptEdits: 'Accept edits', plan: 'Plan', auto: 'Auto' }[mode] || mode;
     const folder = String(o.workspace?.() || '').split(/[\\/]/).filter(Boolean).pop() || '-';
     const open = [...prompts.values()].filter((p) => !p.settled).length;
     return [
       `${word}${open ? ` - ${open} decision${open > 1 ? 's' : ''} waiting` : ''}`,
       `Model: ${model || 'default'} · Mode: ${modeWord}`,
-      `Workspace: ${folder}`,
+      `Workspace: ${folder}${o.cfg().groupId ? ` · PC: ${me()}` : ''}`,
     ].join('\n');
   }
 

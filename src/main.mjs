@@ -15,8 +15,10 @@ import { readDraft, readClickUp, syncClickUp } from './tasks.mjs';
 import { createGitHub } from './github.mjs';
 import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode } from './files.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
-import { sendTelegram, verifyToken, discoverChat, isToken, isChatId } from './telegram.mjs';
-import { createRemote, greeting, isPowerDown, POWER_DOWN_NOTICE } from './remote.mjs';
+import os from 'node:os';
+import { call as telegramCall, sendTelegram, verifyToken, discoverChat, discoverGroup, isToken, isChatId } from './telegram.mjs';
+import { createRemote, greeting, isPowerDown, sleepNotice, offlineNotice } from './remote.mjs';
+import { createPresence } from './presence.mjs';
 import { diffReport, morningBrief } from './reports.mjs';
 import { createDeployWatcher } from './deploys.mjs';
 import { createTranscriber } from './voice.mjs';
@@ -99,8 +101,21 @@ function phoneConfig() {
       token: isToken(t.token) ? t.token : null,
       chatId: isChatId(t.chatId) ? String(t.chatId) : null,
       name: typeof t.name === 'string' ? t.name.slice(0, 60) : null,
+      // With more than one PC: this PC's name, and the group shared with the others (presence.mjs).
+      pcName: cleanPcName(t.pcName) || cleanPcName(os.hostname()) || 'PC',
+      groupId: isChatId(t.groupId) ? String(t.groupId) : null,
+      groupName: typeof t.groupName === 'string' ? t.groupName.slice(0, 60) : null,
     },
   };
+}
+/** This PC's name in messages to the phone - only once there is a group, so more than one PC. */
+function pcLabel() {
+  const t = phoneConfig().telegram;
+  return t.groupId ? t.pcName : null;
+}
+/** A PC's name as it is said in Telegram: letters, digits, spaces, dots and dashes, up to 24. */
+function cleanPcName(s) {
+  return typeof s === 'string' ? s.replace(/[^\w .-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24) : '';
 }
 
 /**
@@ -111,7 +126,7 @@ function phoneConfig() {
 function phoneConfigForWindow(c) {
   return {
     ...c,
-    telegram: { hasToken: !!c.telegram.token, chatId: c.telegram.chatId, name: c.telegram.name },
+    telegram: { hasToken: !!c.telegram.token, chatId: c.telegram.chatId, name: c.telegram.name, pcName: c.telegram.pcName, groupId: c.telegram.groupId, groupName: c.telegram.groupName },
   };
 }
 
@@ -176,7 +191,7 @@ const remote = createRemote({
     // a real message off the queue. JARVIS_REMOTE_TEST=1 allows it for a run that is
     // about remote control.
     const allowed = !process.env.JARVIS_CAPTURE || process.env.JARVIS_REMOTE_TEST === '1';
-    return { on: allowed && c.remote && c.route === 'telegram', mirror: c.mirror, token: c.telegram.token, chatId: c.telegram.chatId, name: c.telegram.name };
+    return { on: allowed && c.remote && c.route === 'telegram', mirror: c.mirror, token: c.telegram.token, chatId: c.telegram.chatId, name: c.telegram.name, pcName: c.telegram.groupId ? c.telegram.pcName : null, groupId: c.telegram.groupId };
   },
   log,
   atDesk: () => !!win && !win.isDestroyed() && win.isFocused(),
@@ -188,6 +203,14 @@ const remote = createRemote({
   },
   newSession: () => toWindow({ kind: 'remote_new' }),
   powerDown: (from) => powerDown(from),
+  wakeUp: (from) => wakeUp(from),
+  asleep: () => asleep,
+  peers: () => presence.peers(),
+  groupMoved: (id) => {
+    const cur = phoneConfig();
+    saveConfig({ phone: { ...cur, telegram: { ...cur.telegram, groupId: id } } });
+    presence.set(asleep ? 'asleep' : 'awake');
+  },
   interrupt: () => { toWindow({ kind: 'remote_stop' }); ensureSession().interrupt(); },
   respond: (id, decision, verdict) => { toWindow({ kind: 'prompt_remote', id, verdict }); ensureSession().respond(id, decision); },
   workspace: () => loadConfig().cwd,
@@ -213,6 +236,17 @@ const remote = createRemote({
   },
   transcribe: (buf) => voice.transcribe(buf),
   voiceReady: () => voice.ready,
+});
+
+// This PC's line on the group's status board (presence.mjs). Set while remote control is on,
+// cleared when it goes off or JARVIS quits. Without a group it does nothing.
+const presence = createPresence({
+  cfg: () => {
+    const c = phoneConfig().telegram;
+    return { token: c.token, groupId: c.groupId, name: c.pcName };
+  },
+  api: telegramCall,
+  log,
 });
 
 // Photos and files sent from the phone are kept here, where you would look for them anyway,
@@ -302,6 +336,9 @@ let awakeId = null;
 let launchHidden = process.argv.includes('--hidden');
 let shownOnce = false;
 let trayHinted = false;
+// Powered down: the window, the session and everything they started are closed, and only the
+// Telegram listener is left, waiting for "Wake up". See powerDown() and wakeUp().
+let asleep = false;
 
 function remoteWanted() {
   const c = phoneConfig();
@@ -310,6 +347,8 @@ function remoteWanted() {
 
 /** Bring the window back from the tray, the taskbar or a login start. */
 function showWindow() {
+  // The tray or the shortcut while asleep is a wake-up at the desk.
+  if (asleep) { wakeUp('desk'); return; }
   launchHidden = false;
   if (!win || win.isDestroyed()) { createWindow(); return; }
   if (!win.isVisible()) { if (!shownOnce) win.maximize(); win.show(); shownOnce = true; }
@@ -341,7 +380,7 @@ function syncBackground() {
     awakeId = null;
     log('keep awake: off');
   }
-  tray?.setToolTip(on ? 'JARVIS - listening to Telegram' : 'JARVIS');
+  tray?.setToolTip(asleep ? 'JARVIS - asleep (click, or say "Wake up" in Telegram)' : on ? 'JARVIS - listening to Telegram' : 'JARVIS');
 }
 
 // Start with Windows. Packaged only: a development run would register electron.exe under
@@ -671,21 +710,42 @@ async function shutdownChildren() {
 ipcMain.handle('jarvis:claudeVersion', () => (fs.existsSync(claudeExe()) ? claudeVersion() : null));
 ipcMain.handle('jarvis:start', (_e, opts) => { remote.sessionStarted(); ensureSession().start(opts || {}); return true; });
 /**
- * "Power down", typed at the desk or sent from the phone: tell the phone JARVIS is going
- * offline, then quit - the same quit as the tray's, so every child process is stopped. The
- * notice gets eight seconds; a phone with no signal does not keep JARVIS open.
+ * "Power down", typed at the desk or sent from the phone or the group: JARVIS goes to sleep.
+ * The window closes and the session, the web apps and the phone mirrors stop, but the
+ * Telegram listener stays in the tray so "Wake up" can bring it all back. Without remote
+ * control there is nothing to wake it from, so it is an ordinary quit instead.
+ * The phone is told by remote.mjs when the phone asked; here only when the desk did.
  */
-let poweringDown = false;
-async function powerDown(from) {
-  if (poweringDown) return;
-  poweringDown = true;
-  log('power down from the', from === 'phone' ? 'phone' : 'desk');
-  await Promise.race([remote.announce(POWER_DOWN_NOTICE).catch(() => {}), new Promise((r) => setTimeout(r, 8000))]);
-  app.quit();
+function powerDown(from) {
+  if (asleep) return;
+  if (!remote.ready) { log('power down from the desk - quitting (remote control is off)'); app.quit(); return; }
+  asleep = true;
+  log('power down from the', from, '- asleep in the tray');
+  if (from === 'desk') remote.announce(sleepNotice(pcLabel()));
+  remote.sessionStarted();
+  try { session?.close(); } catch { /* going to sleep */ }
+  session = null;
+  try { shutdownWebApps(); } catch { /* going to sleep */ }
+  shutdownDevices().catch(() => {});
+  // destroy, not close: close would only hide it to the tray. window-all-closed sees `asleep`.
+  if (win && !win.isDestroyed()) win.destroy();
+  win = null;
+  syncBackground();
+  presence.set('asleep');
+}
+/** "Wake up", or the tray clicked while asleep: the window again, with a fresh session. */
+function wakeUp(from) {
+  if (!asleep) return;
+  asleep = false;
+  log('wake up from the', from);
+  showWindow();
+  syncBackground();
+  presence.set('awake');
+  if (from === 'desk') remote.announce(`☀️ ${greeting(new Date(), pcLabel())}`);
 }
 ipcMain.handle('jarvis:send', (_e, payload) => {
   const atts = Array.isArray(payload?.attachments) ? payload.attachments : [];
-  if (payload?.origin !== 'telegram' && !atts.length && isPowerDown(payload?.text)) {
+  if (payload?.origin !== 'telegram' && !atts.length && isPowerDown(payload?.text, phoneConfig().telegram.pcName)) {
     powerDown('desk');
     return { ok: true };
   }
@@ -859,17 +919,27 @@ ipcMain.handle('jarvis:phoneSet', (_e, patch) => {
       token: t.token === null ? null : (isToken(t.token) ? t.token.trim() : cur.telegram.token),
       chatId: t.chatId === null ? null : (isChatId(t.chatId) ? String(t.chatId).trim() : cur.telegram.chatId),
       name: t.name === null ? null : (typeof t.name === 'string' ? t.name.slice(0, 60) : cur.telegram.name),
+      pcName: cleanPcName(t.pcName) || cur.telegram.pcName,
+      // Only cleared from here (leaving the group); it is set by jarvis:telegramFindGroup.
+      groupId: t.groupId === null ? null : cur.telegram.groupId,
+      groupName: t.groupId === null ? null : cur.telegram.groupName,
     },
   };
+  // Renamed, or leaving the group: take the old line off the board first, while it can still be found.
+  const renamed = next.telegram.pcName !== cur.telegram.pcName;
+  if (cur.telegram.groupId && (renamed || !next.telegram.groupId)) presence.clear();
   saveConfig({ phone: next });
+  if (renamed) log('this PC is now called', next.telegram.pcName);
   phone.reset();
   const where = next.route === 'telegram' ? `Telegram ${next.telegram.name || next.telegram.chatId || '(not set up)'}` : (next.serial || 'no phone');
   log('phone alerts:', next.enabled ? `on via ${where}` : 'off');
   const remoteBefore = cur.remote && cur.route === 'telegram';
   const remoteNow = next.remote && next.route === 'telegram';
+  if (renamed && remoteNow && remoteBefore) presence.set(asleep ? 'asleep' : 'awake');
   if (remoteNow !== remoteBefore) {
     log('remote control:', remoteNow ? 'on' : 'off');
     syncBackground();
+    if (remoteNow) presence.set('awake'); else presence.clear();
     // Said on the phone too: it is the first thing you will look at, and it proves the
     // route works in the direction that matters before you rely on it.
     if (remoteNow) remote.announce('Remote control is on. Send me a task and I will run it on your PC - approvals and questions will come here as buttons. /help lists the commands.');
@@ -904,6 +974,19 @@ ipcMain.handle('jarvis:telegramFindChat', async () => {
   phone.reset();
   log('telegram chat found:', r.name);
   return { ok: true, chatId: r.chatId, name: r.name };
+});
+// The group shared with your other PCs (presence.mjs): found like the chat, from getUpdates.
+ipcMain.handle('jarvis:telegramFindGroup', async () => {
+  const cur = phoneConfig();
+  if (!cur.telegram.token || !cur.telegram.chatId) return { ok: false, error: 'Set up the bot and find your chat first.' };
+  remote.pause(true);
+  let r;
+  try { r = await discoverGroup(cur.telegram.token, cur.telegram.chatId); } finally { remote.pause(false); }
+  if (!r.ok) return r;
+  saveConfig({ phone: { ...cur, telegram: { ...cur.telegram, groupId: r.chatId, groupName: r.name } } });
+  log('telegram group found:', r.name, r.admin ? '' : '(the bot is not an admin yet)');
+  if (remote.ready) presence.set(asleep ? 'asleep' : 'awake');
+  return { ok: true, name: r.name, admin: r.admin };
 });
 ipcMain.handle('jarvis:phoneWifi', async (_e, serial) => {
   const r = await enableWifi(serial);
@@ -1302,7 +1385,19 @@ process.on('unhandledRejection', (e) => log('unhandled rejection:', e?.stack || 
 app.on('child-process-gone', (_e, d) => log('child process gone:', d.type, d.reason, d.exitCode));
 app.on('will-quit', () => log('JARVIS quitting'));
 // Set before any window is asked to close, so the close-to-tray handler lets them go.
-app.on('before-quit', () => { quitting = true; });
+// With remote control on, quitting outright is said on the phone and taken off the group's
+// board - then nothing is listening, so "Wake up" cannot work until JARVIS is started again.
+// Four seconds at most, so no signal never holds the quit up.
+let farewell = false;
+app.on('before-quit', (e) => {
+  quitting = true;
+  if (farewell || !remote.ready || process.env.JARVIS_CAPTURE) return;
+  farewell = true;
+  e.preventDefault();
+  log('quitting - telling the phone');
+  const said = Promise.all([remote.announce(offlineNotice(pcLabel())), presence.clear()]).catch(() => {});
+  Promise.race([said, new Promise((r) => setTimeout(r, 4000))]).then(() => app.quit());
+});
 // Diagnostic only: JARVIS_DIAG_QUERY=<out.json> runs the minimal SDK query in THIS process
 // (the Electron main process, dev or packaged), writes the lifecycle to that file and quits.
 // Nothing else starts - no window, no session. Off in normal use.
@@ -1344,6 +1439,7 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
     // Idle until remote control is switched on; then it listens. See remote.mjs.
     remote.start();
     syncBackground();
+    if (remote.ready) presence.set('awake');
     // Restarted by a system update (the updater passes --updated): say so in the chat, so
     // the phone knows JARVIS is back and listening.
     if (process.argv.includes('--updated')) {
@@ -1351,10 +1447,12 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
       remote.announce(`✅ System update installed - JARVIS v${app.getVersion()} is back online and listening.`);
     } else {
       // Opened at the desk (or at login): a hello on the phone, so it buzzes when the PC side comes up.
-      remote.announce(`👋 ${greeting()}`).then((m) => { if (m) log('greeting sent to the phone'); });
+      remote.announce(`👋 ${greeting(new Date(), pcLabel())}`).then((m) => { if (m) log('greeting sent to the phone'); });
     }
   });
   app.on('window-all-closed', async () => {
+    // Powered down: the window went on purpose, and the listener stays for "Wake up".
+    if (asleep) return;
     await shutdownChildren();
     app.quit();
   });

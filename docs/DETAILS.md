@@ -403,17 +403,53 @@ message, so the phone buzzes. After a system update (`--updated`) the "System up
 message is sent instead, never both. Reopening a JARVIS that is already running (from the tray
 or the shortcut) sends nothing. Tested in `scripts/remote-test.mjs`.
 
-**Power down** (`isPowerDown()` in `src/remote.mjs`, `powerDown()` in `main.mjs`): a message
-that is just "Power down" (any case, trailing punctuation, optionally "JARVIS, " in front, typed
-or as a voice note) closes JARVIS on the PC. From the phone it is caught before anything else,
-so it is never taken as the answer to an open question or as a reply to an approval. At the
-desk it is caught in `jarvis:send` before the session sees it. Either way the phone gets
-"🔌 JARVIS on the PC has powered down and is now offline…" (up to 8 s is allowed for it to
-send), then JARVIS quits through `app.quit()`, the same quit as the tray's, which stops the
-session, the web apps and the phone mirrors. A sentence that only mentions it ("power down
-the test server") runs as a normal message. A "Power down" sent while JARVIS was off is
-skipped like any other late message, so it can never close JARVIS on its next start. Tested in
-`scripts/remote-test.mjs`.
+**Power down and Wake up** (`controlWord()` in `src/remote.mjs`, `powerDown()` / `wakeUp()` in
+`main.mjs`): a message that is just "Power down" or "Wake up" counts. Any case and trailing
+punctuation are fine, as is "JARVIS, " in front, and a PC's name before or after ("Wake up
+Work-PC", "Home-PC, power down"). It can be typed or sent as a voice note. Anything longer,
+like "power down the test server", runs as a normal message.
+
+- *Power down* puts JARVIS to sleep: the window is destroyed and the session, web apps and phone
+  mirrors stop, but the Telegram listener stays in the tray (with keep-awake, so it can still
+  hear you). The phone gets "💤 JARVIS on … has powered down. Say "Wake up" to bring it back."
+  While asleep, tasks, photos and files get "asleep, say Wake up first", and /status says
+  "Asleep". With remote control off there is nothing to wake it from, so Power down at the desk
+  quits instead.
+- *Wake up*, a click on the tray icon, or opening the shortcut brings the window back with a
+  fresh session and sends the time-of-day greeting.
+- *Quit JARVIS* in the tray still shuts down fully. With remote control on, the phone first gets
+  "🔌 JARVIS on … has shut down and is offline" (4 s at most).
+
+From the phone these words are caught before anything else, so they are never taken as the
+answer to a question or a reply to an approval. At the desk "Power down" is caught in
+`jarvis:send` before the session sees it. Words sent while JARVIS was not listening are skipped
+like any other late message.
+
+**More than one PC** (`src/presence.mjs`, `onGroupText()` in `remote.mjs`). Each PC has its own
+bot and a name, set in **Settings → Phone alerts** (letters, digits, spaces, dots, dashes;
+names match ignoring case and punctuation, but "Work-PC" is not "Work-PC1"). Your private chat
+with a PC's bot is that PC's alone, so commands there act at once. For choosing between PCs,
+put every bot in one Telegram group with you and make each one an admin with "Change group
+info". The admin rights let a bot see ordinary group messages and edit the group description.
+Send "hi" there and press **Find my group**. In the group:
+
+- Only your messages are obeyed, and only "Wake up", "Power down" and /status (each PC answers
+  with its state). Anything else is never run, because every PC would run it. The first PC by
+  name replies with a hint instead.
+- A named command is acted on by that PC alone.
+- Unnamed, a PC acts at once if it is the only one that could answer (the only one asleep for
+  Wake up, the only one awake for Power down). If more than one could answer, each posts its
+  own button ("☀️ Wake Home-PC"), and you tap the one you mean. A button works only on the
+  message it came on, only for you, and expires after 2 minutes.
+
+Telegram never shows a bot what another bot writes, so the PCs share state through the group's
+description, used as a board: one line per PC, like `🟢 Home-PC · awake · 2026-10-03 12:43Z`.
+A PC rewrites its line on every change and refreshes it every 5 minutes. A line older than 12
+minutes belongs to a PC that is off, and is ignored. Every write is read back and retried, in
+case two PCs wrote at once. Other text in the description is kept. A PC removes its line when
+it quits, when remote control is turned off, or when it leaves the group, and renaming a PC
+moves its line. If Telegram turns the group into a supergroup (new id), JARVIS follows the
+move. Tested in `scripts/remote-test.mjs` and `scripts/presence-test.mjs`.
 
 **Deploy alerts** (`src/deploys.mjs`): when a Bash or PowerShell command JARVIS runs looks like
 a deploy - anything with `deploy`, `dotnet publish`, `flutter build apk|appbundle|ipa|ios|web|windows`,

@@ -165,6 +165,28 @@ export async function discoverChat(token) {
 }
 
 /**
+ * Find the group shared with your other PCs, from the messages the bot has received: the
+ * newest group or supergroup that YOU wrote in (ownerId is your chat id, which is your user
+ * id). A bot only sees ordinary group messages once it is an admin, so that comes first.
+ * Then checks the bot may change the group's description, which is the PCs' status board.
+ */
+export async function discoverGroup(token, ownerId) {
+  const r = await call(token, 'getUpdates', { limit: 100, timeout: 0, allowed_updates: ['message'] });
+  if (!r.ok) return r;
+  let pick = null;
+  for (const u of Array.isArray(r.result) ? r.result : []) {
+    const m = u?.message;
+    if (!m || !/group/.test(m.chat?.type || '') || String(m.from?.id) !== String(ownerId)) continue;
+    pick = { id: String(m.migrate_to_chat_id || m.chat.id), name: m.chat.title || 'your group' };
+  }
+  if (!pick) return { ok: false, error: 'No message from you in a group yet. Add this bot to your JARVIS group, make it an admin, send "hi" in the group, then press this again.' };
+  const me = await call(token, 'getMe');
+  const member = me.ok ? await call(token, 'getChatMember', { chat_id: pick.id, user_id: me.result.id }) : me;
+  const admin = member.ok && (member.result?.status === 'creator' || (member.result?.status === 'administrator' && member.result?.can_change_info));
+  return { ok: true, chatId: pick.id, name: pick.name, admin: !!admin };
+}
+
+/**
  * Send one alert. Plain text, no parse_mode: the body can contain a file path, a tool name
  * or whatever the model last said, and none of that is written to be safe inside Telegram's
  * Markdown - an unbalanced asterisk would make the whole message fail to send.
