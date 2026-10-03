@@ -17,6 +17,24 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
+## 🆕 What's new in v1.3.0
+
+**Simplified**
+
+- 💤 Say **"Power down"** and JARVIS naps in the tray instead of closing. Say **"Wake up"** on Telegram, or click the tray icon, to bring it back.
+- 🔌 Quitting from the tray still closes it fully, and your phone is told it's offline.
+- 🖥️ Use JARVIS on **more than one PC**: each PC gets a name (Home-PC, Work-PC…), and one Telegram group controls them all. "Wake up Work-PC" picks one, or JARVIS asks which with a button.
+
+**Technical**
+
+- `controlWord()` in `src/remote.mjs` matches a message that is only "Power down" / "Wake up" (any case, optional "JARVIS, " and a PC name). It is caught before questions and approvals, and at the desk in `jarvis:send`. Late messages are still skipped.
+- `powerDown()` destroys the window and stops the session, web apps and mirrors, but keeps the Telegram listener and keep-awake running. `wakeUp()` reopens the window with a fresh session and sends the greeting. If remote control is off, Power down quits.
+- New `src/presence.mjs`: bots can't read each other's messages, so each PC writes a status line in the shared group's description (`🟢 Home-PC · awake · <time>`). It refreshes every 5 min, counts as stale after 12 min, and is read back and retried after each write. It also follows a supergroup migration.
+- In the group (`onGroupText()`), only the owner's Wake up, Power down and /status are obeyed. An unnamed command goes to the only PC that can answer it. Otherwise each PC posts an inline button that only the owner can press and that expires after 2 min.
+- Settings → Phone alerts adds **PC name**, **Find my group** and **Leave group**. Tests: `scripts/presence-test.mjs` (new) and `scripts/remote-test.mjs`.
+
+---
+
 ## ✨ What it does
 
 | | |
