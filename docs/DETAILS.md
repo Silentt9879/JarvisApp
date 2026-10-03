@@ -403,6 +403,18 @@ message, so the phone buzzes. After a system update (`--updated`) the "System up
 message is sent instead, never both. Reopening a JARVIS that is already running (from the tray
 or the shortcut) sends nothing. Tested in `scripts/remote-test.mjs`.
 
+**Power down** (`isPowerDown()` in `src/remote.mjs`, `powerDown()` in `main.mjs`): a message
+that is just "Power down" (any case, trailing punctuation, optionally "JARVIS, " in front, typed
+or as a voice note) closes JARVIS on the PC. From the phone it is caught before anything else,
+so it is never taken as the answer to an open question or as a reply to an approval. At the
+desk it is caught in `jarvis:send` before the session sees it. Either way the phone gets
+"🔌 JARVIS on the PC has powered down and is now offline…" (up to 8 s is allowed for it to
+send), then JARVIS quits through `app.quit()`, the same quit as the tray's, which stops the
+session, the web apps and the phone mirrors. A sentence that only mentions it ("power down
+the test server") runs as a normal message. A "Power down" sent while JARVIS was off is
+skipped like any other late message, so it can never close JARVIS on its next start. Tested in
+`scripts/remote-test.mjs`.
+
 **Deploy alerts** (`src/deploys.mjs`): when a Bash or PowerShell command JARVIS runs looks like
 a deploy - anything with `deploy`, `dotnet publish`, `flutter build apk|appbundle|ipa|ios|web|windows`,
 `eas build|submit|update`, `vercel --prod`, `docker push`, `az webapp deploy` and a few more -

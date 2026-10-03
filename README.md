@@ -50,6 +50,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 👋 **Hello on startup:** when JARVIS opens on the PC, your phone gets a "Good morning / afternoon / evening" message, so you know it's online.
 
+🔌 **Power down:** say "Power down" on the phone or type it on the PC, and JARVIS closes on the PC. Telegram tells you it's offline until you switch it on again.
+
 🔒 Only *your* Telegram account is obeyed. Messages sent while JARVIS was off never run later, and every approval still needs your tap.
 
 ---

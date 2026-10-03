@@ -2,7 +2,7 @@
 // bot, no session. Every safety rule in remote.mjs has a case here, including the attacks:
 // a stranger, a group, a message sent while JARVIS was away, and a forged button.
 //   node scripts/remote-test.mjs
-import { createRemote, chunk, greeting } from '../src/remote.mjs';
+import { createRemote, chunk, greeting, isPowerDown } from '../src/remote.mjs';
 import { toTelegramHtml, balanceFences } from '../src/tgformat.mjs';
 
 const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw';
@@ -63,7 +63,7 @@ const SESSIONS = [
 function rig({ on = true, atDesk = false, remindMs } = {}) {
   const tg = fakeTelegram();
   const cfg = { on, token: TOKEN, chatId: String(ME), name: '@test' };
-  const seen = { submitted: [], attached: [], downloads: [], saved: [], responded: [], interrupts: 0, fresh: 0, logs: [], switched: [], transcribed: 0, brief: { on: true, at: '08:00' } };
+  const seen = { submitted: [], attached: [], downloads: [], saved: [], responded: [], interrupts: 0, fresh: 0, logs: [], switched: [], transcribed: 0, poweredDown: [], brief: { on: true, at: '08:00' } };
   const desk = { at: atDesk, current: SESSIONS[0].id, transcript: 'run the tests please', voiceReady: true, screens: 1 };
   const r = createRemote({
     cfg: () => cfg,
@@ -94,6 +94,7 @@ function rig({ on = true, atDesk = false, remindMs } = {}) {
     readAttachment: async (p) => (/huge/.test(p) ? null : Buffer.from(`contents of ${p}`)),
     transcribe: async () => { seen.transcribed++; return { ok: true, text: desk.transcript }; },
     voiceReady: () => desk.voiceReady,
+    powerDown: (from) => { seen.poweredDown.push(from); },
     remindMs,
   });
   return { tg, cfg, seen, r, desk };
@@ -718,6 +719,28 @@ const settle = () => sleep(120); // let the poll loop take what is queued
   ok(at(8).startsWith('Good morning'), 'greeting: 08:30 is morning');
   ok(at(12).startsWith('Good afternoon') && at(16).startsWith('Good afternoon'), 'greeting: 12:30 and 16:30 are afternoon');
   ok(at(17).startsWith('Good evening') && at(23).startsWith('Good evening') && at(2).startsWith('Good evening'), 'greeting: 17:30, 23:30 and 02:30 are evening');
+}
+
+// ------------------------------------------------------------------ power down
+{
+  ok(['Power down', 'power down', 'POWER DOWN!', 'Power down.', 'powerdown', 'JARVIS, power down', ' jarvis power down '].every(isPowerDown), 'power down: the phrase, in any case, with or without "JARVIS"');
+  ok(!['how do I power down the server?', 'power down the phone', 'power', 'down', ''].some(isPowerDown), 'power down: a sentence that only mentions it is not one');
+
+  const { tg, seen, r } = rig();
+  r.start();
+  await sleep(30);
+  // An open question must not swallow it as an answer.
+  r.event({ kind: 'question', id: 'q9', questions: [{ question: 'Which repo?', options: [{ label: 'A' }] }] });
+  await settle();
+  tg.message('Power down');
+  await settle();
+  ok(seen.poweredDown.length === 1 && seen.poweredDown[0] === 'phone', 'power down from the phone closes JARVIS');
+  ok(!seen.submitted.includes('Power down') && !seen.responded.length, 'power down is never run as a prompt or taken as an answer');
+  r.event({ kind: 'prompt_done', id: 'q9' });
+  tg.message('please power down the test server');
+  await settle();
+  ok(seen.poweredDown.length === 1 && seen.submitted.includes('please power down the test server'), 'power down: a sentence mentioning it runs as a normal message');
+  r.stop();
 }
 
 console.log(`remote-test: ${pass} passed, ${fail} failed`);

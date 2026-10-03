@@ -64,6 +64,7 @@ const HELP = [
   '/diff - what has changed in the repos; /diff <repo> for the patch',
   '/brief - the morning brief now; /brief off, /brief on, /brief 07:30',
   '/help - this list',
+  'Power down - close JARVIS on the PC (switch it on again there to carry on)',
   '',
   'Other slash commands (/compact, /context, /cost …) go to Claude Code as they are.',
 ].join('\n');
@@ -91,6 +92,15 @@ export function greeting(date = new Date()) {
   return `Good ${part}. JARVIS is online on your PC and standing by - send me anything and I will run it there.`;
 }
 
+/**
+ * "Power down" on its own (or "JARVIS, power down") closes JARVIS on the PC. Only the whole
+ * message counts, so a sentence that merely mentions it is sent on as usual.
+ */
+export function isPowerDown(text) {
+  return /^(jarvis[\s,.!]+)?power\s*down[\s.!]*$/i.test(String(text || '').trim());
+}
+export const POWER_DOWN_NOTICE = '🔌 JARVIS on the PC has powered down and is now offline. Switch it on again at the PC to resume talking.';
+
 const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 
 /**
@@ -116,6 +126,7 @@ const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.s
  * @param o.readAttachment (path) => Promise<Buffer|null> - a file attached at the desk, for the mirror; null if too big
  * @param o.transcribe    (oggBuffer) => Promise<{ ok, text, error }> - voice notes
  * @param o.voiceReady    () => boolean - the speech model is loaded (no first-time download)
+ * @param o.powerDown     (from) => void - "Power down" was sent: close JARVIS on the PC
  * @param o.now           () => ms - injectable clock
  * @param o.remindMs      ms before an unanswered decision is nudged - injectable for tests
  */
@@ -485,6 +496,8 @@ export function createRemote(o) {
 
   /** Typed text, or a voice note's transcript: an answer, a reply instead, a command or a message. */
   async function onText(text) {
+    // Before anything else, even an open question: "Power down" is never taken as an answer.
+    if (isPowerDown(text) && o.powerDown) { log('remote: power down from the phone'); o.powerDown('phone'); return; }
     // A typed reply to a question answers it ("Other").
     const q = openQuestion();
     if (q && !text.startsWith('/')) { await answerQuestion(q, text); return; }

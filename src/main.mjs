@@ -16,7 +16,7 @@ import { createGitHub } from './github.mjs';
 import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode } from './files.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
 import { sendTelegram, verifyToken, discoverChat, isToken, isChatId } from './telegram.mjs';
-import { createRemote, greeting } from './remote.mjs';
+import { createRemote, greeting, isPowerDown, POWER_DOWN_NOTICE } from './remote.mjs';
 import { diffReport, morningBrief } from './reports.mjs';
 import { createDeployWatcher } from './deploys.mjs';
 import { createTranscriber } from './voice.mjs';
@@ -187,6 +187,7 @@ const remote = createRemote({
     return true;
   },
   newSession: () => toWindow({ kind: 'remote_new' }),
+  powerDown: (from) => powerDown(from),
   interrupt: () => { toWindow({ kind: 'remote_stop' }); ensureSession().interrupt(); },
   respond: (id, decision, verdict) => { toWindow({ kind: 'prompt_remote', id, verdict }); ensureSession().respond(id, decision); },
   workspace: () => loadConfig().cwd,
@@ -669,11 +670,28 @@ async function shutdownChildren() {
 }
 ipcMain.handle('jarvis:claudeVersion', () => (fs.existsSync(claudeExe()) ? claudeVersion() : null));
 ipcMain.handle('jarvis:start', (_e, opts) => { remote.sessionStarted(); ensureSession().start(opts || {}); return true; });
+/**
+ * "Power down", typed at the desk or sent from the phone: tell the phone JARVIS is going
+ * offline, then quit - the same quit as the tray's, so every child process is stopped. The
+ * notice gets eight seconds; a phone with no signal does not keep JARVIS open.
+ */
+let poweringDown = false;
+async function powerDown(from) {
+  if (poweringDown) return;
+  poweringDown = true;
+  log('power down from the', from === 'phone' ? 'phone' : 'desk');
+  await Promise.race([remote.announce(POWER_DOWN_NOTICE).catch(() => {}), new Promise((r) => setTimeout(r, 8000))]);
+  app.quit();
+}
 ipcMain.handle('jarvis:send', (_e, payload) => {
+  const atts = Array.isArray(payload?.attachments) ? payload.attachments : [];
+  if (payload?.origin !== 'telegram' && !atts.length && isPowerDown(payload?.text)) {
+    powerDown('desk');
+    return { ok: true };
+  }
   const r = ensureSession().send(payload);
   // Every message is noted with where it came from, so its reply can go back there.
   try {
-    const atts = Array.isArray(payload?.attachments) ? payload.attachments : [];
     remote.noteSend(payload?.origin === 'telegram' ? 'telegram' : 'desk', r, { text: typeof payload?.text === 'string' ? payload.text : '', attachments: atts });
   } catch (e) { log('remote:', e?.message || e); }
   return r;
