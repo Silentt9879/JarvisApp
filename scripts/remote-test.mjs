@@ -2,7 +2,7 @@
 // bot, no session. Every safety rule in remote.mjs has a case here, including the attacks:
 // a stranger, a group, a message sent while JARVIS was away, and a forged button.
 //   node scripts/remote-test.mjs
-import { createRemote, chunk } from '../src/remote.mjs';
+import { createRemote, chunk, greeting } from '../src/remote.mjs';
 import { toTelegramHtml, balanceFences } from '../src/tgformat.mjs';
 
 const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw';
@@ -710,6 +710,14 @@ const settle = () => sleep(120); // let the poll loop take what is queued
   ok(r.event({ kind: 'permission', id: 'z', toolName: 'Bash' }) === false, 'switched off: approvals stay at the desk');
   ok(!seen.logs.some((l) => l.includes('listening for Telegram')), 'switched off: the log never claims to be listening');
   r.stop();
+}
+
+// ------------------------------------------------------------------ greeting
+{
+  const at = (h) => greeting(new Date(2026, 9, 3, h, 30));
+  ok(at(8).startsWith('Good morning'), 'greeting: 08:30 is morning');
+  ok(at(12).startsWith('Good afternoon') && at(16).startsWith('Good afternoon'), 'greeting: 12:30 and 16:30 are afternoon');
+  ok(at(17).startsWith('Good evening') && at(23).startsWith('Good evening') && at(2).startsWith('Good evening'), 'greeting: 17:30, 23:30 and 02:30 are evening');
 }
 
 console.log(`remote-test: ${pass} passed, ${fail} failed`);

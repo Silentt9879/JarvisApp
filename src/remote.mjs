@@ -84,6 +84,13 @@ export function chunk(text, max = MAX_TEXT) {
   return out;
 }
 
+/** The phone's hello when JARVIS opens on the PC: morning before noon, afternoon until 17:00, evening after. */
+export function greeting(date = new Date()) {
+  const h = date.getHours();
+  const part = h >= 5 && h < 12 ? 'morning' : h >= 12 && h < 17 ? 'afternoon' : 'evening';
+  return `Good ${part}. JARVIS is online on your PC and standing by - send me anything and I will run it there.`;
+}
+
 const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 
 /**

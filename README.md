@@ -48,6 +48,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 **PC → phone:** with mirroring on, what you type and attach on the PC shows up in Telegram too.
 
+👋 **Hello on startup:** when JARVIS opens on the PC, your phone gets a "Good morning / afternoon / evening" message, so you know it's online.
+
 🔒 Only *your* Telegram account is obeyed. Messages sent while JARVIS was off never run later, and every approval still needs your tap.
 
 ---

@@ -16,7 +16,7 @@ import { createGitHub } from './github.mjs';
 import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode } from './files.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
 import { sendTelegram, verifyToken, discoverChat, isToken, isChatId } from './telegram.mjs';
-import { createRemote } from './remote.mjs';
+import { createRemote, greeting } from './remote.mjs';
 import { diffReport, morningBrief } from './reports.mjs';
 import { createDeployWatcher } from './deploys.mjs';
 import { createTranscriber } from './voice.mjs';
@@ -1331,6 +1331,9 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
     if (process.argv.includes('--updated')) {
       log('started after a system update');
       remote.announce(`✅ System update installed - JARVIS v${app.getVersion()} is back online and listening.`);
+    } else {
+      // Opened at the desk (or at login): a hello on the phone, so it buzzes when the PC side comes up.
+      remote.announce(`👋 ${greeting()}`).then((m) => { if (m) log('greeting sent to the phone'); });
     }
   });
   app.on('window-all-closed', async () => {

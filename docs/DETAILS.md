@@ -395,6 +395,14 @@ issues, the handoff's current focus, ClickUp in-progress tasks and the last sess
 a day (`brief.sent` in config.json, so a restart does not repeat it) and only within three
 hours of the set time. `/brief` gets it any time.
 
+**The startup greeting** (`greeting()` in `src/remote.mjs`, sent from `main.mjs`): each time
+JARVIS starts, by hand or at login, one message goes to the phone while remote control is on:
+"Good morning / afternoon / evening. JARVIS is online on your PC and standing by". Morning is
+05:00-11:59, afternoon 12:00-16:59, evening the rest, all by the PC's clock. It is a normal
+message, so the phone buzzes. After a system update (`--updated`) the "System update installed"
+message is sent instead, never both. Reopening a JARVIS that is already running (from the tray
+or the shortcut) sends nothing. Tested in `scripts/remote-test.mjs`.
+
 **Deploy alerts** (`src/deploys.mjs`): when a Bash or PowerShell command JARVIS runs looks like
 a deploy - anything with `deploy`, `dotnet publish`, `flutter build apk|appbundle|ipa|ios|web|windows`,
 `eas build|submit|update`, `vercel --prod`, `docker push`, `az webapp deploy` and a few more -
@@ -570,6 +578,16 @@ of the output, not the exit code, and confirm the new code actually landed:
 npx asar extract dist\win-unpacked\resources\app.asar tmp-asar
 Compare-Object (Get-Content src\main.mjs) (Get-Content tmp-asar\src\main.mjs)   # no output = identical
 ```
+
+**Updating without closing JARVIS by hand.** Build beside the running copy with
+`npx electron-builder --dir "-c.directories.output=dist-next"`, then run
+`scripts\swap-update.ps1` detached. It waits 4 s, closes every process running from
+`dist\win-unpacked` (JARVIS and the `claude.exe` sessions it started, which would otherwise
+outlive it), backs the live copy up to `dist\win-unpacked.old`, copies the new build in and
+restarts JARVIS. It copies with robocopy instead of renaming folders, because Windows refuses
+to rename a folder that anything has open (Search or a virus scan), even with nothing running
+from it. Each step retries for 30 s. If copying the new build fails partway, the backup is put
+back. The log is in `swap-update.log`.
 
 ## Develop
 
