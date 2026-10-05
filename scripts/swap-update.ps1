@@ -1,7 +1,9 @@
 # Swap dist-next\win-unpacked in for dist\win-unpacked and restart JARVIS.
 # Run detached: it closes the JARVIS that started it.
 $ErrorActionPreference = 'Stop'
-$root = 'C:\Users\User\Downloads\JARVIS_App'
+# The project folder this script lives in, wherever it was cloned - it once named the
+# original machine's path, and swapped nothing anywhere else.
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $live = Join-Path $root 'dist\win-unpacked'
 $next = Join-Path $root 'dist-next\win-unpacked'
 $old  = Join-Path $root 'dist\win-unpacked.old'
