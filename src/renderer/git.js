@@ -576,6 +576,15 @@
     p.scrollIntoView({ block: 'nearest' });
   }
 
+  // A change set over the action's budget is sent shortened (every file listed, long files
+  // cut, binary/generated files named only) rather than refused. Say so next to the scope.
+  function shortenedNote(c) {
+    if (!c) return '';
+    const kb = Math.round((c.fromBytes || 0) / 1024);
+    return ` Shortened to fit from ${kb} KB: every file is listed, long files show their first changes`
+      + (c.namedOnly ? `, ${c.namedOnly} binary or generated file${c.namedOnly === 1 ? '' : 's'} named only` : '') + '.';
+  }
+
   /** Ask once, having shown what is being sent. Nothing here changes the repository. */
   async function runAssist(action, opts = {}, onText) {
     if (assistBusy || !active) return;
@@ -607,7 +616,7 @@
 
     assistBusy = true;
     const waiting = el('div', 'sc-assist-body');
-    waiting.appendChild(el('p', 'sc-assist-scope', `Sending ${scope.scope} — ${scope.files} file${scope.files === 1 ? '' : 's'} · ${scope.lines} lines.`));
+    waiting.appendChild(el('p', 'sc-assist-scope', `Sending ${scope.scope} — ${scope.files} file${scope.files === 1 ? '' : 's'} · ${scope.lines} lines.${shortenedNote(scope.condensed)}`));
     if (scope.secrets.length) waiting.appendChild(el('p', 'warn', `Possible ${scope.secrets.join(', ')} found and masked before sending.`));
     waiting.appendChild(el('p', null, 'Thinking…'));
     assistShow(ASSIST_LABEL[action] || 'JARVIS', waiting, 'live');
@@ -626,7 +635,7 @@
 
     const body = el('div', 'sc-assist-body');
     body.appendChild(el('p', 'sc-assist-scope',
-      `Sent ${r.scopeInfo.label} — ${r.scopeInfo.files} file${r.scopeInfo.files === 1 ? '' : 's'} · ${r.scopeInfo.lines} lines.`));
+      `Sent ${r.scopeInfo.label} — ${r.scopeInfo.files} file${r.scopeInfo.files === 1 ? '' : 's'} · ${r.scopeInfo.lines} lines.${shortenedNote(r.scopeInfo.condensed)}`));
     const text = el('div', 'sc-assist-text');
     text.textContent = r.text;
     body.appendChild(text);

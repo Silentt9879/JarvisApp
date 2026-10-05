@@ -1054,7 +1054,7 @@ ipcMain.handle('jarvis:gitAssist', async (_e, key, action, opts, id) => {
       extra: { repoName: context.repo.name, path: (opts || {}).path, meta: context.meta },
     });
     log('git assist finished', key, action, r.ok ? `ok (${(r.text || '').length} chars)` : `failed: ${(r.error || '').slice(0, 160)}`);
-    return { ...r, key, scopeInfo: { files: context.files, lines: context.lines, label: context.scope, secrets: context.secrets } };
+    return { ...r, key, scopeInfo: { files: context.files, lines: context.lines, label: context.scope, secrets: context.secrets, condensed: context.condensed || null } };
   } catch (e) {
     log('gitAssist failed', key, action, e?.message || e);
     return { ok: false, key, error: String(e?.message || e) };

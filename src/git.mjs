@@ -26,7 +26,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listRepos, repoStateAt, run, killTree, NICKNAMES } from './workspace.mjs';
 import { classify } from './git-policy.mjs';
-import { measure } from './gitai.mjs';
+import { measure, budgetFor } from './gitai.mjs';
 
 const APP_KEY = '@app';
 
@@ -833,7 +833,9 @@ export async function assistContext(cwd, key, action, { scope = 'staged', path: 
     meta.push(useStaged ? 'Reviewing: staged changes' : 'Reviewing: all current changes');
   }
 
-  const m = measure(parts);
+  // Over the action's budget the diff is condensed (file list + shortened hunks) instead of
+  // refused, so a large commit still gets a message.
+  const m = measure(parts, { budget: budgetFor(action) });
   return {
     ok: true,
     repo: { key: repo.key, name: repo.name, nickname: repo.nickname },
