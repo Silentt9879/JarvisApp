@@ -314,7 +314,7 @@
   // Digits are read from e.code, not e.key, so they work on any keyboard layout. None of
   // these combinations does anything by default in this window (it has no menu), so taking
   // them costs nothing - including while typing in the composer.
-  const PRIMARY = ['chat', 'command', 'automations', 'notes', 'files'];
+  const PRIMARY = ['chat', 'command', 'source', 'notes', 'files'];
   document.addEventListener('keydown', (e) => {
     if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
     const key = e.key.toLowerCase();
@@ -626,14 +626,8 @@
     set('nbChat', state.pendingPrompts || null);
     $('nbChat').classList.toggle('warn', !!state.pendingPrompts);
     set('nbTools', state.commands.length || null);
-    const dirty = (state.workspace?.repos || []).filter((r) => r.modified + r.staged + r.untracked > 0).length;
-    set('nbRepos', dirty || null);
-    const k = state.workspace?.knowledge;
-    set('nbKnowledge', k && k.state === 'stale' ? '!' : null);
-    set('nbMemory', state.memory.filter((d) => d.path.toLowerCase() !== 'memory.md').length || null);
   }
   JV.on('agents_changed', renderNavBadges);
-  JV.on('memory', renderNavBadges);
 
   // ------------------------------------------------------------- core mini panel (sidebar)
   function renderMini() {

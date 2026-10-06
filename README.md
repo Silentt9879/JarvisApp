@@ -17,7 +17,21 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.7.2
+## 🆕 What's new in v1.7.3
+
+**Simplified**
+
+- 🧭 **A tidier sidebar.** Automations, Memory, Activity, Workspace and Knowledge Base are off the sidebar. GitHub Desktop, Devices and AI Core now sit right under Overview. Memory, Workspace and Knowledge Base still open from search (Ctrl+K).
+
+**Technical**
+
+- `renderer/index.html`: `navAutomations`, `navMemory`, `navActivity`, `navWorkspace` and `navKnowledge` are removed from `#navList`. `navSource`, `navDevices` and `navCore` move up to follow `navCommand`. Tasks, Agents and Tools & Skills stay in the More group.
+- `renderer/app.js`: `PRIMARY` (Ctrl+1 to Ctrl+5) has `source` in place of `automations`. `renderNavBadges` no longer writes the Workspace, Knowledge or Memory badges, which are gone (writing to them would throw), and the `memory` listener that drove only those is removed.
+- The views and their modules are unchanged. Automations and Activity can no longer be opened from the sidebar or search.
+- `npm test` passes in full. A capture run (`JARVIS_CAPTURE`) confirmed the new sidebar order.
+
+<details>
+<summary><b>Earlier: v1.7.2</b></summary>
 
 **Simplified**
 
@@ -26,8 +40,10 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 **Technical**
 
 - `main.mjs` `createWindow`: when started with `--updated`, the window is shown, focused and brought forward with `app.focus({ steal: true })`. Windows can leave a window started by a background process behind other apps.
-- The updater's final window check wrote nothing to `update.log` after the 1.7.1 update. This fix does not depend on it; the cause of that gap is still open.
+- The updater's final window check wrote nothing to `jarvis.log` after the 1.7.1 update. This fix does not depend on it; the cause of that gap is still open.
 - `scripts/updates-test.mjs`: 54 checks.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.7.0</b></summary>
