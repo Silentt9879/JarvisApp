@@ -17,7 +17,21 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.6.1
+## 🆕 What's new in v1.6.2
+
+**Simplified**
+
+- 🔁 **Update really brings JARVIS back.** Pressing Update now starts the new version and opens it again by itself. Before, the updater could be stopped the moment JARVIS closed, so nothing was installed and JARVIS did not come back.
+- 🛟 **Safer failures.** If the update cannot be started, JARVIS stays open and tells you, instead of closing with nothing happening.
+
+**Technical**
+
+- `updates.mjs` `launchUpdater`: a process started from JARVIS dies when JARVIS quits (reproduced on this PC; a `detached` PowerShell never ran at all). The updater is now started through WMI (`Win32_Process.Create`) by a short launcher, and JARVIS quits only after Windows confirms the start. `jarvisUpdate` returns an error, and the window stays open, if the start is refused.
+- `scripts/updates-test.mjs`: 54 checks, including the WMI start and the refused-start path.
+- Reproduction: a hidden PowerShell launched from Node was gone within seconds of Node exiting; the WMI-started one ran to completion.
+
+<details>
+<summary><b>Earlier: v1.6.1</b></summary>
 
 **Simplified**
 
@@ -31,8 +45,10 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 - `main.mjs`: a `signedOut` flag, set by a readable "not signed in" answer (`noteAccount`) and by sign-out. `jarvis:send` and `jarvis:start` refuse with `SIGNED_OUT`. Sign-out sends the window status `closed` (not `ready`). Restarts relaunch with `--restarted`, which skips the greeting.
 - `renderer/app.js`: the sign-out, restart and workspace buttons read `e.currentTarget` before their `await` (it is null after one), and always restore the button and show errors.
-- `updates.mjs`: the Git credential helper runs with `GCM_INTERACTIVE=never`. The updater stops anything still running from the install folder before the silent install. `scripts/updates-test.mjs`: 51 checks.
+- `updates.mjs`: the Git credential helper runs with `GCM_INTERACTIVE=never`. The updater stops anything still running from the install folder before the silent install.
 - Tests: `notes-test` and `auth-test` find the app from their own folder. `sc-undo-discard-test` runs only when `JARVIS_POLICY_FILE` points at the workspace policy.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.6.0</b></summary>

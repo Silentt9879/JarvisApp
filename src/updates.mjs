@@ -289,7 +289,7 @@ export function updaterCommand({ installerPath, waitPid, relaunchExe, logPath, i
   return [
     `function Log($m) { "$(Get-Date -Format s) $m" | Out-File -Append -Encoding utf8 ${q(logPath)} }`,
     `Log 'update: waiting for JARVIS to close'`,
-    `try { Wait-Process -Id ${Number(waitPid)} -Timeout 60 -ErrorAction Stop } catch { Log 'update: JARVIS did not close in time, installing anyway' }`,
+    `try { Wait-Process -Id ${Number(waitPid)} -Timeout 60 -ErrorAction Stop } catch { Log 'update: JARVIS is closed (or did not close in time), installing' }`,
     `Start-Sleep -Seconds 2`,
     // Safety net: anything still running from the install folder (the agent's claude.exe, say)
     // would lock its files, so close it first. Trailing separator, so "JARVIS2" is not matched.
@@ -305,16 +305,36 @@ export function updaterCommand({ installerPath, waitPid, relaunchExe, logPath, i
   ].join('\n');
 }
 
-/** Start the updater detached, so it outlives JARVIS. */
-export function launchUpdater(script, { spawnImpl = spawn } = {}) {
-  const encoded = Buffer.from(script, 'utf16le').toString('base64');
-  const child = spawnImpl('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
+/**
+ * Start the updater so it outlives JARVIS. A PowerShell started straight from JARVIS dies the
+ * moment JARVIS quits (tested on this PC: the installer never ran, so nothing came back). So a
+ * short launcher asks Windows, through WMI, to start the updater - a process Windows owns, not
+ * JARVIS. JARVIS quits only after this resolves. Resolves { ok, error }.
+ */
+export function launchUpdater(script, { spawnImpl = spawn, timeoutMs = 20_000 } = {}) {
+  const inner = Buffer.from(script, 'utf16le').toString('base64');
+  const create = "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "
+    + `'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ${inner}' } `
+    + '| ForEach-Object { if ($_.ReturnValue -ne 0) { exit 1 } }';
+  const launcher = Buffer.from(create, 'utf16le').toString('base64');
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawnImpl('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand', launcher], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch (e) {
+      resolve({ ok: false, error: e.message });
+      return;
+    }
+    const timer = setTimeout(() => { child.kill(); resolve({ ok: false, error: 'Windows took too long to start the installer.' }); }, timeoutMs);
+    child.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, error: e.message }); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 ? { ok: true } : { ok: false, error: 'Windows did not start the installer.' });
+    });
   });
-  child.unref();
-  return child;
 }
 
 /**
@@ -327,11 +347,13 @@ export async function jarvisUpdate({ currentVersion, tempDir, pid, logPath, onPr
   if (compareVersions(release.version, currentVersion) <= 0) return { ok: true, upToDate: true };
   const dest = path.join(tempDir, release.installer.name);
   await downloadInstaller(release.installer, dest, { fetchImpl, onProgress, token });
-  launchUpdater(updaterCommand({
+  const started = await launchUpdater(updaterCommand({
     installerPath: dest,
     waitPid: pid,
     relaunchExe: JARVIS_INSTALL_EXE,
     logPath,
   }), { spawnImpl });
+  // Only a confirmed start lets JARVIS quit; otherwise it stays open and says what happened.
+  if (!started.ok) return { ok: false, error: `The update was downloaded, but it could not be started (${started.error}). JARVIS is still open. Press Update again.` };
   return { ok: true, version: release.version };
 }

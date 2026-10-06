@@ -204,11 +204,18 @@ const SHA = 'ab'.repeat(32);
   ok(script.includes("'--updated'"), 'JARVIS opens again with --updated, so it announces the update');
 }
 {
-  let args = null;
-  const fakeSpawn = (file, a) => { args = { file, a }; return { unref() {} }; };
-  launchUpdater('Write-Output hi', { spawnImpl: fakeSpawn });
-  const decoded = Buffer.from(args.a.at(-1), 'base64').toString('utf16le');
-  ok(args.file === 'powershell.exe' && args.a.includes('-EncodedCommand') && decoded === 'Write-Output hi', 'the updater is passed encoded and starts detached');
+  // The updater must be started by Windows (WMI), not from JARVIS: a process started from JARVIS
+  // dies when JARVIS quits, and then the installer never runs.
+  let outer = null;
+  const okSpawn = (file, a) => { outer = { file, a }; const c = new EventEmitter(); setImmediate(() => c.emit('close', 0)); return c; };
+  const r = await launchUpdater('Write-Output hi', { spawnImpl: okSpawn });
+  const launcher = Buffer.from(outer.a.at(-1), 'base64').toString('utf16le');
+  const inner = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(launcher)?.[1];
+  ok(outer.file === 'powershell.exe' && launcher.includes('Invoke-CimMethod') && launcher.includes('Win32_Process'), 'the updater is started through Windows (WMI), not from JARVIS');
+  ok(inner && Buffer.from(inner, 'base64').toString('utf16le') === 'Write-Output hi', 'the updater script arrives intact inside that launch');
+  ok(r.ok === true, 'a start Windows accepts resolves ok, so JARVIS may quit');
+  const refused = await launchUpdater('x', { spawnImpl: () => { const c = new EventEmitter(); setImmediate(() => c.emit('close', 1)); return c; } });
+  ok(refused.ok === false, 'a start Windows refuses is reported, so JARVIS stays open');
 }
 
 // ------------------------------------------------------------------ the whole JARVIS update
@@ -219,7 +226,7 @@ const SHA = 'ab'.repeat(32);
   const r = await jarvisUpdate({
     currentVersion: '1.5.0', tempDir: tmp, pid: 99, logPath: path.join(tmp, 'log.txt'), token: 't',
     fetchImpl: async (url) => (String(url).includes('api.github.com/repos') && String(url).endsWith('/latest') ? jsonResponse(200, body) : new Response(data, { status: 200 })),
-    spawnImpl: (f, a) => { spawned = a; return { unref() {} }; },
+    spawnImpl: (f, a) => { spawned = a; const c = new EventEmitter(); setImmediate(() => c.emit('close', 0)); return c; },
   });
   ok(r.ok && r.version === '1.6.0' && spawned, 'JARVIS update: downloads, then hands over to the updater');
   ok(fs.existsSync(path.join(tmp, 'JARVIS-Setup-1.6.0.exe')), 'JARVIS update: the installer is in the temp folder');
