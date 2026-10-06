@@ -60,6 +60,10 @@ contextBridge.exposeInMainWorld('jarvis', {
   mirror: (serial, on) => ipcRenderer.invoke('jarvis:mirror', serial, !!on),
   resetVideo: (serial) => ipcRenderer.invoke('jarvis:resetVideo', serial),
   deviceInput: (serial, ev) => ipcRenderer.send('jarvis:deviceInput', serial, ev),
+  // The right-click menu: cut | copy | paste on this page, exactly as the keyboard does.
+  edit: (cmd) => ipcRenderer.invoke('jarvis:edit', cmd),
+  // A phone in its own window: open | focus | close | dock.
+  phoneWindow: (serial, action) => ipcRenderer.invoke('jarvis:phoneWindow', serial, action),
   flutterRun: (serial, app) => ipcRenderer.invoke('jarvis:flutterRun', serial, app),
   flutterCmd: (serial, cmd) => ipcRenderer.invoke('jarvis:flutterCmd', serial, cmd),
   flutterLog: (serial) => ipcRenderer.invoke('jarvis:flutterLog', serial),
@@ -73,6 +77,9 @@ contextBridge.exposeInMainWorld('jarvis', {
   gitStageAll: (key) => ipcRenderer.invoke('jarvis:gitStageAll', key),
   gitUnstageAll: (key) => ipcRenderer.invoke('jarvis:gitUnstageAll', key),
   gitCommit: (key, message) => ipcRenderer.invoke('jarvis:gitCommit', key, message),
+  gitLastCommit: (key) => ipcRenderer.invoke('jarvis:gitLastCommit', key),
+  gitUndoCommit: (key, sha) => ipcRenderer.invoke('jarvis:gitUndoCommit', key, sha),
+  gitDiscardAll: (key, confirmed, expect) => ipcRenderer.invoke('jarvis:gitDiscardAll', key, confirmed, expect),
   gitBranches: (key) => ipcRenderer.invoke('jarvis:gitBranches', key),
   gitCreateBranch: (key, name, opts) => ipcRenderer.invoke('jarvis:gitCreateBranch', key, name, opts),
   gitSwitchBranch: (key, name) => ipcRenderer.invoke('jarvis:gitSwitchBranch', key, name),
@@ -126,6 +133,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),
   webStop: (key) => ipcRenderer.invoke('jarvis:webStop', key),
+  webStopAll: () => ipcRenderer.invoke('jarvis:webStopAll'),
   webLog: (key) => ipcRenderer.invoke('jarvis:webLog', key),
   openUrl: (url) => ipcRenderer.invoke('jarvis:openUrl', url),
   // Tasks: the ClickUp board (cached) and the workspace's own draft list.

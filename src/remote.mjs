@@ -764,7 +764,7 @@ export function createRemote(o) {
     let r;
     try { r = await o.diff(query); } catch (e) { await say(`I could not read the repositories: ${e?.message || e}`); return; }
     await reply(r.text);
-    if (r.file && !await sendFile('sendDocument', 'document', r.file)) await say('The patch would not upload - it may be too large. Open Source Control at the desk.');
+    if (r.file && !await sendFile('sendDocument', 'document', r.file)) await say('The patch would not upload - it may be too large. Open GitHub Desktop in JARVIS at the desk.');
   }
 
   async function onBrief(arg) {

@@ -70,23 +70,51 @@
    */
   let remoteOp = 'idle';
 
+  /** "just now", "3 minutes ago", "2 days ago" - for times read from disk. */
+  function ago(ms) {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return 'just now';
+    const unit = (n, word) => `${n} ${word}${n === 1 ? '' : 's'} ago`;
+    const m = Math.round(s / 60);
+    if (m < 60) return unit(m, 'minute');
+    const h = Math.round(m / 60);
+    if (h < 24) return unit(h, 'hour');
+    return unit(Math.round(h / 24), 'day');
+  }
+
+  /**
+   * GitHub Desktop's wording: "Pull origin" with the counts beside it and "Last fetched 3
+   * minutes ago" beneath. The time is FETCH_HEAD's on disk, the counts are from the last
+   * fetch - still no network call to work out a label.
+   */
   function remoteAction(d) {
     if (!d || !d.ok) return null;
     if (d.detachedHead) return null;
-    if (!d.upstream) return { op: 'publish', label: 'Publish branch', hint: 'Push this branch and set its upstream. Nothing is published until you press this.' };
-    if (d.behind) return { op: 'pull', label: `Pull ${d.behind} commit${d.behind === 1 ? '' : 's'}`, hint: 'From the last fetch stored here, not a live check.' };
-    if (d.ahead) return { op: 'push', label: `Push ${d.ahead} commit${d.ahead === 1 ? '' : 's'}`, hint: 'From the last fetch stored here, not a live check.' };
-    return { op: 'fetch', label: 'Fetch origin', hint: 'Ask the remote what has changed. This is the only thing here that uses the network.' };
+    const remote = (d.upstream || '').split('/')[0] || d.remotes?.[0]?.name || 'origin';
+    const fetched = d.lastFetched ? `Last fetched ${ago(d.lastFetched)}` : 'Never fetched';
+    const count = [d.ahead ? `${d.ahead} ↑` : '', d.behind ? `${d.behind} ↓` : ''].filter(Boolean).join('  ');
+    const stored = 'From the last fetch stored here, not a live check.';
+    if (!d.upstream) return { op: 'publish', label: 'Publish branch', sub: `Publish this branch to ${remote}`, count: '', hint: 'Push this branch and set its upstream. Nothing is published until you press this.' };
+    if (d.behind) return { op: 'pull', label: `Pull ${remote}`, sub: fetched, count, hint: `${d.behind} commit${d.behind === 1 ? '' : 's'} to pull. ${stored}` };
+    if (d.ahead) return { op: 'push', label: `Push ${remote}`, sub: fetched, count, hint: `${d.ahead} commit${d.ahead === 1 ? '' : 's'} to push. ${stored}` };
+    return { op: 'fetch', label: `Fetch ${remote}`, sub: fetched, count: '', hint: 'Ask the remote what has changed. This is the only thing here that uses the network.' };
   }
 
   function renderRemote(d) {
     const btn = $('scRemoteBtn');
     const label = $('scRemoteLabel');
+    const sub = $('scRemoteSub');
     const stop = $('scRemoteStop');
+    const showCount = (text) => {
+      $('scRemoteCount').textContent = text || '';
+      $('scRemoteCount').hidden = !text;
+      btn.classList.toggle('has-count', !!text);
+    };
 
     if (remoteOp !== 'idle') {
       const verb = { fetching: 'Fetching', pulling: 'Pulling', pushing: 'Pushing', publishing: 'Publishing', cancelling: 'Stopping' }[remoteOp] || 'Working';
       label.textContent = `${verb}…`;
+      showCount('');
       btn.disabled = true;
       btn.classList.add('busy');
       stop.hidden = remoteOp === 'cancelling';
@@ -98,11 +126,15 @@
     const act = remoteAction(d);
     if (!act) {
       label.textContent = d?.detached ? 'No branch' : '—';
+      sub.textContent = '';
+      showCount('');
       btn.disabled = true;
       btn.title = d?.detached ? 'You are on a detached HEAD. Create or switch to a branch first.' : '';
       return;
     }
     label.textContent = act.label;
+    sub.textContent = act.sub || '';
+    showCount(act.count);
     btn.disabled = busy;
     btn.title = act.hint;
     btn.dataset.op = act.op;
@@ -130,7 +162,7 @@
         push: () => window.jarvis.gitPush(key),
         publish: () => window.jarvis.gitPublish(key),
       })[op]();
-    } catch { r = { ok: false, key, error: 'Source Control could not be reached.' }; }
+    } catch { r = { ok: false, key, error: 'Git could not be reached.' }; }
 
     remoteOp = 'idle';
 
@@ -176,6 +208,14 @@
     $('scRepoName').textContent = repos.find((r) => r.key === key)?.nickname || key;
     $('scBranchName').textContent = '…';
     $('scRemoteLabel').textContent = '…';
+    $('scRemoteSub').textContent = '';
+    $('scRemoteCount').hidden = true;
+    // The last commit, the right-click menu and a pending discard all belong to the
+    // repository that was open.
+    last = null;
+    renderUndo();
+    closeFilesMenu();
+    closeDiscard();
     $('scFiles').replaceChildren(el('div', 'sc-note', 'Reading…'));
     $('scDiff').replaceChildren();
     $('scChangeCount').textContent = '';
@@ -226,20 +266,21 @@
   async function loadDetail(key) {
     const seq = ++seqDetail;
     let d;
-    try { d = await window.jarvis.gitDetail(key); } catch { d = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { d = await window.jarvis.gitDetail(key); } catch { d = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqDetail || key !== active) return;
     if (d.ok && d.repo?.key !== key) return;
     detail = d;
     $('scBranchName').textContent = d.ok ? (d.branch || '(no branch)') : '—';
     renderRemote(d);
     syncCommitButton();
+    loadLastCommit(key);
   }
 
   // ------------------------------------------------------------- changed files
   async function loadFiles(key) {
     const seq = ++seqFiles;
     let r;
-    try { r = await window.jarvis.gitChanges(key); } catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { r = await window.jarvis.gitChanges(key); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqFiles || key !== active) return;
     if (r.ok && r.repo?.key !== key) return;
 
@@ -285,6 +326,15 @@
     all.appendChild(allBox);
     all.appendChild(el('b', null, `${counts.total} changed file${counts.total === 1 ? '' : 's'}`));
     head.appendChild(all);
+    // Right-click, as in GitHub Desktop: Discard all changes… / Stash all changes. The
+    // context-menu key (clientX/Y of 0) opens it at the header instead of the corner.
+    head.title = 'Right-click for Discard all changes… or Stash all changes';
+    head.oncontextmenu = (e) => {
+      e.preventDefault();
+      const r = head.getBoundingClientRect();
+      const fromKey = !e.clientX && !e.clientY;
+      openFilesMenu(fromKey ? r.left + 12 : e.clientX, fromKey ? r.bottom : e.clientY);
+    };
 
     const tags = el('span', 'sc-files-tags');
     if (counts.staged) tags.appendChild(el('em', 'sc-pill ok', `${counts.staged} staged`));
@@ -375,7 +425,7 @@
       else if (op === 'unstage') r = await window.jarvis.gitUnstage(key, paths);
       else if (op === 'stageAll') r = await window.jarvis.gitStageAll(key);
       else if (op === 'unstageAll') r = await window.jarvis.gitUnstageAll(key);
-    } catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    } catch { r = { ok: false, error: 'Git could not be reached.' }; }
 
     busy = false;
     if (key !== active) return;                       // the repository was switched meanwhile
@@ -426,7 +476,7 @@
 
     let r;
     try { r = await window.jarvis.gitCommit(key, { summary, description }); }
-    catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    catch { r = { ok: false, error: 'Git could not be reached.' }; }
 
     busy = false;
     if (key !== active) return;
@@ -447,6 +497,150 @@
     if (tab === 'history') loadHistory(key, { reset: true }); else history = [];
   }
 
+  // ------------------------------------------------------------- undo the last commit
+  // GitHub Desktop's "Committed just now ... Undo" beneath the commit button. Shown for the
+  // newest commit while it exists only here: once it is on a remote branch it is gone from
+  // view, because taking it back would rewrite history someone else may have.
+  let last = null;
+  let seqLast = 0;
+
+  async function loadLastCommit(key) {
+    const seq = ++seqLast;
+    let r;
+    try { r = await window.jarvis.gitLastCommit(key); } catch { r = null; }
+    if (seq !== seqLast || key !== active) return;
+    last = r && r.ok && r.repo?.key === key ? r : null;
+    renderUndo();
+  }
+
+  function renderUndo() {
+    const show = !!(last && last.commit && last.undoable);
+    $('scUndo').hidden = !show;
+    if (!show) return;
+    const at = Date.parse(last.commit.at);
+    $('scUndoWhen').textContent = `Committed ${Number.isNaN(at) ? 'recently' : ago(at)}`;
+    const subject = $('scUndoSubject');
+    subject.textContent = last.commit.subject;
+    subject.title = `${last.commit.subject}\n${last.commit.sha} on ${last.commit.branch}`;
+    const btn = $('scUndoBtn');
+    btn.disabled = busy;
+    btn.title = 'Take this commit back. Its changes stay staged, and nothing on the remote changes.';
+  }
+
+  async function doUndo() {
+    if (busy || !active || !last?.commit) return;
+    const key = active;
+    const sha = last.commit.sha;
+    busy = true;
+    renderUndo();
+    syncCommitButton();
+    say('Undoing the last commit…');
+
+    let r;
+    try { r = await window.jarvis.gitUndoCommit(key, sha); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
+    busy = false;
+    if (key !== active) return;
+    if (!r || !r.ok) { say(r?.error || 'The commit was not undone.', true); syncCommitButton(); loadDetail(key); return; }
+
+    // Its message comes back into the boxes, as in GitHub Desktop - unless something has
+    // already been typed there, which is never overwritten.
+    const summary = $('scSummary');
+    const description = $('scDescription');
+    const empty = !summary.value.trim() && !description.value.trim();
+    if (empty) { summary.value = r.undone.subject || ''; description.value = r.undone.body || ''; }
+    say(`Undid "${r.undone.subject}". Its changes are staged again${empty ? ' and its message is back in the boxes' : ''}. Nothing on the remote changed.`);
+
+    files = r.after?.ok ? r.after.files : files;
+    $('scChangeCount').textContent = (r.after?.counts?.total) || '';
+    renderFiles(r.after?.counts || countsOf());
+    if (files.length) openDiff(files[0].path);
+    loadDetail(key);
+    syncCommitButton();
+    if (tab === 'history') loadHistory(key, { reset: true }); else history = [];
+  }
+
+  // ------------------------------------------------------------- right-click: all changes
+  function openFilesMenu(x, y) {
+    const c = countsOf();
+    const off = busy || !c.total || c.conflicted > 0;
+    $('scCtxDiscard').disabled = off;
+    $('scCtxStash').disabled = off;
+    const why = c.conflicted ? 'Resolve the conflicts first' : '';
+    $('scCtxDiscard').title = why;
+    $('scCtxStash').title = why;
+    const menu = $('scFilesMenu');
+    menu.hidden = false;
+    // Keep it on screen.
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+    (off ? menu : $('scCtxDiscard')).focus?.();
+  }
+
+  function closeFilesMenu() { $('scFilesMenu').hidden = true; }
+
+  // ------------------------------------------------------------- discard all changes
+  // Destructive, so two steps: the first call only asks git what would be lost, the dialog
+  // names the repository and every file, and only "Discard changes" runs it - for exactly
+  // those files. A copy goes to the Recycle Bin before anything is touched.
+  let discardFor = null;   // { key, paths } the open confirmation was raised for
+
+  async function discardAllNow() {
+    if (busy || !active) return;
+    const key = active;
+    let r;
+    try { r = await window.jarvis.gitDiscardAll(key, false); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
+    if (key !== active) return;
+    if (r?.needsConfirmation) { showDiscardConfirm(key, r); return; }
+    say(r?.error || 'Nothing was discarded.', true);
+  }
+
+  function showDiscardConfirm(key, r) {
+    discardFor = { key, paths: r.files.map((f) => f.path) };
+    const n = r.files.length;
+    $('scDiscardWhat').textContent =
+      `Discard all ${n} change${n === 1 ? '' : 's'} in ${r.repoLabel}? Every file goes back to the last commit, and new files are removed.`;
+    const list = $('scDiscardFiles');
+    list.replaceChildren();
+    const SHOW = 12;
+    for (const f of r.files.slice(0, SHOW)) {
+      list.appendChild(el('li', null, f.path + (f.status === 'untracked' ? '  (new)' : f.status === 'added' ? '  (new, staged)' : '')));
+    }
+    if (n > SHOW) list.appendChild(el('li', null, `…and ${n - SHOW} more`));
+    $('scDiscardRepo').textContent = r.repoLabel;
+    $('scDiscardVeil').hidden = false;
+    $('scDiscardCancel').focus();   // the safe choice is the default
+  }
+
+  function closeDiscard() {
+    $('scDiscardVeil').hidden = true;
+    discardFor = null;
+  }
+
+  async function confirmDiscard() {
+    const pending = discardFor;
+    closeDiscard();
+    if (!pending || busy || pending.key !== active) return;   // the repository changed under the dialog
+    const key = pending.key;
+    busy = true;
+    renderFiles(countsOf());
+    say('Discarding…');
+
+    let r;
+    try { r = await window.jarvis.gitDiscardAll(key, true, pending.paths); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
+    busy = false;
+    if (key !== active) return;
+    if (!r || !r.ok) { say(r?.error || 'Nothing was discarded.', true); await loadFiles(key); loadDetail(key); return; }
+
+    say(r.message);
+    files = r.after?.ok ? r.after.files : [];
+    $('scChangeCount').textContent = (r.after?.counts?.total) || '';
+    openFile = null;
+    renderFiles(r.after?.counts || countsOf());
+    $('scDiff').replaceChildren(el('div', 'sc-diff-empty', files.length ? 'Pick a file to see its diff.' : 'No changes left in this repository.'));
+    loadDetail(key);
+    syncCommitButton();
+  }
+
   // ------------------------------------------------------------- the diff
   async function openDiff(filePath, which) {
     openFile = filePath;
@@ -462,7 +656,7 @@
     $('scDiff').replaceChildren(el('div', 'sc-diff-empty', 'Reading the diff…'));
 
     let d;
-    try { d = await window.jarvis.gitDiff(key, filePath, which); } catch { d = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { d = await window.jarvis.gitDiff(key, filePath, which); } catch { d = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqDiff || key !== active || filePath !== openFile) return;
     if (d.ok && d.repo?.key !== key) return;
 
@@ -595,7 +789,7 @@
     // Measure first - this costs nothing and is what the panel shows.
     let scope;
     try { scope = await window.jarvis.gitAssistScope(key, action, opts); }
-    catch { scope = { ok: false, error: 'Source Control could not be reached.' }; }
+    catch { scope = { ok: false, error: 'Git could not be reached.' }; }
     if (key !== active) return;
     if (!scope.ok) { assistShow(ASSIST_LABEL[action] || 'JARVIS', scope.error, 'err'); return; }
 
@@ -623,7 +817,7 @@
 
     let r;
     try { r = await window.jarvis.gitAssist(key, action, { ...opts, allowLarge: true }, id); }
-    catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    catch { r = { ok: false, error: 'Git could not be reached.' }; }
     // Superseded - by a repository switch, or a newer request. Drop it, and leave the
     // busy flag to whichever request is current.
     if (myId !== assistId) return;
@@ -688,7 +882,7 @@
 
   async function loadStashes(key) {
     let r;
-    try { r = await window.jarvis.gitStashes(key); } catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { r = await window.jarvis.gitStashes(key); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
     if (key !== active) return;
     if (r.ok && r.repo?.key !== key) return;
     stashes = r.ok ? r.stashes : [];
@@ -745,7 +939,7 @@
     const seq = ++seqStash;
     $('scDiff').replaceChildren(el('div', 'sc-diff-empty', 'Reading the stash…'));
     let d;
-    try { d = await window.jarvis.gitStashDetail(key, sha); } catch { d = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { d = await window.jarvis.gitStashDetail(key, sha); } catch { d = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqStash || key !== active || sha !== openStash) return;
     if (d.ok && d.repo?.key !== key) return;
     renderStashDetail(d);
@@ -793,7 +987,7 @@
     const slot = $('scDiff').querySelector('.sc-commit-diff');
     if (slot) slot.replaceChildren(el('div', 'sc-diff-empty', 'Reading the diff…'));
     let d;
-    try { d = await window.jarvis.gitStashDiff(key, sha, filePath); } catch { d = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { d = await window.jarvis.gitStashDiff(key, sha, filePath); } catch { d = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqStash || key !== active || sha !== openStash || filePath !== openStashFile) return;
     if (d.ok && d.repo?.key !== key) return;
     for (const btn of $('scDiff').querySelectorAll('.sc-sfile')) btn.classList.toggle('on', btn.title === filePath);
@@ -826,7 +1020,7 @@
     busy = true;
     stashSay(pop ? 'Restoring…' : 'Applying…');
     let r;
-    try { r = await window.jarvis.gitStashApply(key, sha, pop); } catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { r = await window.jarvis.gitStashApply(key, sha, pop); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
     busy = false;
     if (key !== active) return;
 
@@ -850,7 +1044,7 @@
     const key = active;
     busy = true;
     let r;
-    try { r = await window.jarvis.gitStashDrop(key, sha, confirmed); } catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { r = await window.jarvis.gitStashDrop(key, sha, confirmed); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
     busy = false;
     if (key !== active) return;
 
@@ -878,7 +1072,8 @@
     $('scDiff').replaceChildren(el('div', 'sc-diff-empty', 'Pick a stash to inspect it.'));
   }
 
-  function openStashForm() {
+  /** `includeUntracked` pre-ticks the untracked box - "Stash all changes" from the right-click menu. */
+  function openStashForm({ includeUntracked = false } = {}) {
     const c = countsOf();
     const form = el('form', 'sc-stash-form');
     const msg = el('input', 'field');
@@ -886,6 +1081,7 @@
     form.appendChild(msg);
     const lab = el('label');
     const cb = el('input'); cb.type = 'checkbox';
+    cb.checked = includeUntracked && c.untracked > 0;
     lab.appendChild(cb);
     lab.appendChild(el('span', null, `Also stash the ${c.untracked} untracked file${c.untracked === 1 ? '' : 's'}`));
     if (!c.untracked) { cb.disabled = true; lab.style.opacity = '.5'; }
@@ -905,7 +1101,7 @@
       stashSay('Stashing…');
       let r;
       try { r = await window.jarvis.gitStashCreate(key, { message: msg.value, includeUntracked: cb.checked, confirmed: true }); }
-      catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+      catch { r = { ok: false, error: 'Git could not be reached.' }; }
       busy = false;
       if (key !== active) return;
       if (!r.ok) { stashSay(r.error || 'That did not work.', 'err'); return; }
@@ -950,7 +1146,7 @@
     const seq = ++seqDiff;
     $('scDiff').replaceChildren(el('div', 'sc-diff-empty', 'Reading the conflict…'));
     let d;
-    try { d = await window.jarvis.gitConflictDetail(key, filePath); } catch { d = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { d = await window.jarvis.gitConflictDetail(key, filePath); } catch { d = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqDiff || key !== active) return;
     if (d.ok && d.repo?.key !== key) return;
     renderConflict(d);
@@ -1018,7 +1214,7 @@
     const key = active;
     busy = true;
     let r;
-    try { r = await window.jarvis.gitResolveConflict(key, filePath, choice); } catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { r = await window.jarvis.gitResolveConflict(key, filePath, choice); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
     busy = false;
     if (key !== active) return;
     if (!r.ok) { say(r.error || 'That did not work.', true); showConflict(filePath); return; }
@@ -1080,7 +1276,7 @@
 
     let r;
     try { r = await window.jarvis.gitHistory(key, { skip: history.length, search: histSearch }); }
-    catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    catch { r = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqHist || key !== active) return;
     if (r.ok && r.repo?.key !== key) return;
 
@@ -1111,8 +1307,10 @@
 
       const meta = el('span', 'sc-commit-meta');
       meta.appendChild(el('code', null, c.short));
-      meta.appendChild(el('small', null, c.author));
-      meta.appendChild(el('small', 'sc-when', when(c.when)));
+      meta.appendChild(el('small', 'sc-author', c.author));
+      const at = el('small', 'sc-when', when(c.when));
+      at.title = fullWhen(c.when);
+      meta.appendChild(at);
       if (c.merge) meta.appendChild(el('em', 'sc-pill', 'merge'));
       row.appendChild(meta);
 
@@ -1127,14 +1325,25 @@
     }
   }
 
+  // By calendar day, not "the last 24 hours": yesterday 6 PM reads "Yesterday 6:07 PM",
+  // never a bare "06:07 PM" that looks like today.
   const when = (iso) => {
     if (!iso) return '';
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '';
-    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-    if (days === 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    if (days < 7) return `${days}d ago`;
-    return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const days = Math.round((startOf(new Date()) - startOf(d)) / 86400000);
+    if (days <= 0) return time;
+    if (days === 1) return `Yesterday ${time}`;
+    if (days < 7) return `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+    const sameYear = d.getFullYear() === new Date().getFullYear();
+    return d.toLocaleDateString([], { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
+  };
+  const fullWhen = (iso) => {
+    const d = new Date(iso || '');
+    return Number.isNaN(d.getTime()) ? ''
+      : d.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   };
 
   async function showCommit(sha) {
@@ -1147,7 +1356,7 @@
 
     let d;
     try { d = await window.jarvis.gitCommitDetail(key, sha); }
-    catch { d = { ok: false, error: 'Source Control could not be reached.' }; }
+    catch { d = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqCommit || key !== active || sha !== openCommit) return;
     if (d.ok && d.repo?.key !== key) return;
     renderCommit(d);
@@ -1221,7 +1430,7 @@
 
     let d;
     try { d = await window.jarvis.gitCommitDiff(key, sha, filePath); }
-    catch { d = { ok: false, error: 'Source Control could not be reached.' }; }
+    catch { d = { ok: false, error: 'Git could not be reached.' }; }
     if (seq !== seqCommit || key !== active || sha !== openCommit || filePath !== openCommitFile) return;
     if (d.ok && d.repo?.key !== key) return;
 
@@ -1259,7 +1468,7 @@
 
   async function loadBranches(key) {
     let r;
-    try { r = await window.jarvis.gitBranches(key); } catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { r = await window.jarvis.gitBranches(key); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
     if (key !== active) return;
     if (r.ok && r.repo?.key !== key) return;
     branches = r.ok ? r : null;
@@ -1360,7 +1569,7 @@
     branchSay('Working…');
 
     let r;
-    try { r = await fn(key); } catch { r = { ok: false, error: 'Source Control could not be reached.' }; }
+    try { r = await fn(key); } catch { r = { ok: false, error: 'Git could not be reached.' }; }
     busy = false;
 
     // The repository moved on under us: the result belongs to the old one, so drop it.
@@ -1478,7 +1687,7 @@
   // ------------------------------------------------------------- loading
   async function refresh() {
     let r;
-    try { r = await window.jarvis.gitRepos(); } catch { r = { ok: false, error: 'Source Control could not be reached.', list: [] }; }
+    try { r = await window.jarvis.gitRepos(); } catch { r = { ok: false, error: 'Git could not be reached.', list: [] }; }
     $('scNote').textContent = r.ok ? '' : `git is not reachable: ${r.error}`;
     repos = r.list || [];
 
@@ -1515,11 +1724,42 @@
   };
 
   JV.on('view', (v) => { if (v === 'source') refresh(); });
-  $('scRefresh').onclick = refresh;
+  $('scRefresh').onclick = (e) => JV.spinWhile(e.currentTarget, refresh);
   $('scTabChanges').onclick = () => setTab('changes');
   $('scTabStash').onclick = () => setTab('stash');
   $('scTabGitHub').onclick = () => setTab('github');
-  $('scStashBtn').onclick = openStashForm;
+  $('scStashBtn').onclick = () => openStashForm();
+  $('scUndoBtn').onclick = doUndo;
+
+  // The right-click menu on "N changed files".
+  JV.registerPop($('scFilesMenu'));
+  $('scCtxDiscard').onclick = () => { closeFilesMenu(); discardAllNow(); };
+  $('scCtxStash').onclick = () => { closeFilesMenu(); openStashForm({ includeUntracked: true }); };
+  $('scFilesMenu').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeFilesMenu(); return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = [$('scCtxDiscard'), $('scCtxStash')].filter((b) => !b.disabled);
+    const i = items.indexOf(document.activeElement);
+    items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+  });
+  window.addEventListener('blur', closeFilesMenu);
+  window.addEventListener('resize', closeFilesMenu);
+  $('scFiles').addEventListener('scroll', closeFilesMenu);
+
+  // The discard confirmation: Cancel is the default, Esc and a click outside cancel too.
+  $('scDiscardCancel').onclick = closeDiscard;
+  $('scDiscardGo').onclick = confirmDiscard;
+  $('scDiscardVeil').addEventListener('mousedown', (e) => { if (e.target === $('scDiscardVeil')) closeDiscard(); });
+  $('scDiscardVeil').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeDiscard(); return; }
+    if (e.key !== 'Tab') return;
+    // Keep focus inside the dialog.
+    e.preventDefault();
+    const order = [$('scDiscardCancel'), $('scDiscardGo')];
+    const i = order.indexOf(document.activeElement);
+    order[(i + (e.shiftKey ? -1 : 1) + order.length) % order.length].focus();
+  });
   $('scGenMsg').onclick = () => runAssist('commitMessage', {}, (text) => {
     const use = el('button', 'btn btn-primary small');
     use.type = 'button';

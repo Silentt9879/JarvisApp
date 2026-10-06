@@ -159,22 +159,40 @@
     else { const p = el('div', 'content'); JV.renderMarkdown(p, a.description || 'A built-in Claude Code agent.'); body.appendChild(p); }
     drawer.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+  // The roster: compact cards (name, one-line role, status) grouped by what each specialist
+  // covers. The full brief is a hover (tooltip) or a click (the drawer) away, not on every card.
+  const ROSTER = [['phone', 'Mobile apps'], ['globe', 'Web apps'], ['server', 'APIs']];
+  let builtinOpen = false; // the roster redraws while agents work; a fold you opened stays open
   function renderAgents() {
-    const g = $('agentAll');
-    g.replaceChildren();
+    const box = $('agentAll');
+    box.replaceChildren();
     const custom = JV.customAgents().slice().sort((a, b) => a.name.localeCompare(b.name));
     // No specialists is no reason to hide the built-in agents: they are there either way.
-    if (!custom.length) {
-      const note = el('div', 'muted empty', JV.noSpecialistsText());
-      note.style.gridColumn = '1 / -1';
-      g.appendChild(note);
+    if (!custom.length) box.appendChild(el('div', 'muted empty', JV.noSpecialistsText()));
+    const groups = new Map([...ROSTER.map(([, label]) => [label, []]), ['Support crew', []]]);
+    for (const a of custom) {
+      const g = ROSTER.find(([icon]) => icon === JV.agentInfo(a).icon);
+      groups.get(g ? g[1] : 'Support crew').push(a);
     }
-    for (const a of custom) g.appendChild(JV.agentCard(a, { big: true, onClick: agentDoc }));
+    for (const [label, list] of groups) {
+      if (!list.length) continue;
+      const head = el('div', 'roster-head', label);
+      head.appendChild(el('em', null, String(list.length)));
+      const grid = el('div', 'agent-grid roster');
+      for (const a of list) grid.appendChild(JV.agentCard(a, { onClick: agentDoc }));
+      box.append(head, grid);
+    }
     const bi = JV.builtinAgents();
     if (bi.length) {
-      const h = el('div', 'grid-sep', 'Built-in');
-      g.appendChild(h);
-      for (const a of bi) g.appendChild(JV.agentCard(a, { big: true, onClick: agentDoc }));
+      const more = el('details', 'roster-more');
+      const sum = el('summary');
+      sum.append(JV.icon('chevron'), el('span', null, `Built-in Claude agents (${bi.length})`));
+      const grid = el('div', 'agent-grid roster');
+      for (const a of bi) grid.appendChild(JV.agentCard(a, { onClick: agentDoc }));
+      more.append(sum, grid);
+      more.open = builtinOpen;
+      more.addEventListener('toggle', () => { builtinOpen = more.open; });
+      box.appendChild(more);
     }
   }
 
@@ -416,7 +434,7 @@
     if (!ul.children.length) ul.appendChild(el('li', 'muted empty', 'No open-issues file found.'));
     knowledgeBlock($('wsKnowledge'));
   }
-  $('wsRefresh').onclick = () => JV.refreshWorkspace(true);
+  $('wsRefresh').onclick = (e) => JV.spinWhile(e.currentTarget, () => JV.refreshWorkspace(true));
 
   // ------------------------------------------------------------- routing + subscriptions
   const RENDER = { core: renderCore, agents: renderAgents, tasks: renderTasks, memory: renderMemory, knowledge: () => renderKnowledge(), tools: renderTools, workspace: renderWorkspace };

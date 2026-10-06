@@ -247,7 +247,7 @@
     stick(() => {
       const card = el('div', 'agent-card running');
       const head = el('div', 'head');
-      head.appendChild(el('span', 'badge', e.agent));
+      head.appendChild(el('span', 'badge', JV.minionName ? `${JV.minionName(e.agent)} · ${e.agent}` : e.agent));
       head.appendChild(el('span', 'task', e.agentTask || 'Working…'));
       const st = el('span', 'tstate run', 'working');
       head.appendChild(st);
@@ -260,10 +260,23 @@
   }
 
   function agentDone(e, a) {
+    // A background agent's call answers "launched" at once; it is done only when its task
+    // notification arrives (agent_task, below) - the agent floor follows the same rule.
+    if (!e.isError && /async agent launched|running in the background/i.test(String(e.preview || '').slice(0, 160))) {
+      a.st.textContent = 'working in the background';
+      return;
+    }
     a.card.classList.remove('running');
     a.st.className = `tstate ${e.isError ? 'err' : 'ok'}`;
     a.st.textContent = e.isError ? '✗ failed' : '✓ reported';
   }
+  JV.on('agent_task', (e) => {
+    if (e.phase !== 'done') return;
+    const a = ui.agents.get(e.toolUseId);
+    if (!a || !a.card.classList.contains('running')) return;
+    agentDone({ isError: e.status !== 'completed', preview: '' }, a);
+    if (e.status === 'stopped') a.st.textContent = '■ stopped';
+  });
 
   // ------------------------------------------------------------- prompts
   function permissionCard(e) {
@@ -1007,12 +1020,12 @@
     window.jarvis.interrupt();
   }
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && busy() && slashPop.hidden && modelPop.hidden && modePop.hidden) { e.preventDefault(); stopTurn(); }
+    if (e.key === 'Escape' && busy() && slashPop.hidden && modelPop.hidden && modePop.hidden && $('agentsPop').hidden) { e.preventDefault(); stopTurn(); }
   });
   sendBtn.onclick = () => submit();
   stopBtn.onclick = () => stopTurn();
   $('newSession').onclick = () => newSession();
-  $('refreshSessions').onclick = () => loadSessions();
+  $('refreshSessions').onclick = (e) => JV.spinWhile(e.currentTarget, loadSessions);
   $('sessionFilter').addEventListener('input', renderSessions);
   transcript.addEventListener('click', (e) => {
     const chip = e.target.closest('.chip[data-prompt]');

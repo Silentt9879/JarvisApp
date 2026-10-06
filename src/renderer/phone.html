@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'" />
+  <title>Phone - JARVIS</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<!-- One phone in its own window, like scrcpy: the same screen and controls as a phone shown
+     fullscreen in the Devices view, built by phone.js. -->
+<body class="phone-window">
+  <div id="phoneRoot"></div>
+  <script src="core.js"></script>
+  <script src="phone-screen.js"></script>
+  <script src="phone.js"></script>
+</body>
+</html>

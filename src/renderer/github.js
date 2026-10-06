@@ -41,7 +41,7 @@
 
   // A reply is used only if it is the newest of its kind AND for the repository still shown.
   const current = (k) => !!k && k === key && k === sc.key();
-  const reach = (p) => Promise.resolve(p).catch(() => ({ ok: false, error: 'Source Control could not be reached.' }));
+  const reach = (p) => Promise.resolve(p).catch(() => ({ ok: false, error: 'Git could not be reached.' }));
 
   // ------------------------------------------------------------- wording
   const PR_STATE = { OPEN: ['Open', 'ok'], MERGED: ['Merged', 'merged'], CLOSED: ['Closed', 'err'] };
@@ -377,6 +377,7 @@
     btn.type = 'button';
     btn.append(JV.icon('refresh'), el('span', null, checkBusy ? 'Asking GitHub…' : 'Check workflow runs'));
     btn.disabled = checkBusy;
+    btn.classList.toggle('reloading', checkBusy); // the icon turns while GitHub is asked
     btn.onclick = () => runCheck(checkTarget);
     card.appendChild(btn);
     if (checkTarget) {

@@ -227,7 +227,7 @@ for (const [name, doc] of Object.entries(QUERIES)) {
 // ---------------------------------------------------------------- messages
 // Fixed text only. Nothing GitHub or the transport says is passed through, so no URL,
 // header or credential can ride along in an error.
-const SAFE = ' Nothing was changed, and local Source Control is unaffected.';
+const SAFE = ' Nothing was changed, and the local GitHub Desktop page is unaffected.';
 const MESSAGES = {
   notGitHub: 'This repository\'s origin is not on GitHub.',
   badRequest: 'That GitHub request was not valid.',

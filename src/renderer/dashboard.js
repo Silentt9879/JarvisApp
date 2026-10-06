@@ -50,7 +50,8 @@
     const txt = el('div', 'acard-txt');
     txt.appendChild(el('b', null, info.code));
     txt.appendChild(el('small', 'acard-role', info.role));
-    const st = el('span', 'acard-state', active ? `Active${active > 1 ? ` ×${active}` : ''}` : used ? `Standby · used ×${used}` : 'Standby');
+    const st = el('span', `acard-state${!active && !used ? ' st-standby' : ''}`,
+      active ? `Working${active > 1 ? ` ×${active}` : ''}` : used ? `Used ×${used}` : 'Standby');
     txt.appendChild(st);
     card.appendChild(txt);
     const w = el('div', 'wave mini');

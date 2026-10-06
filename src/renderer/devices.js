@@ -38,63 +38,10 @@
   const byId = (id) => allCards().find((c) => c.id === id);
 
   // ------------------------------------------------------------- H.264 -> canvas
-  /** avc1.PPCCLL from the SPS in scrcpy's configuration packet (Annex B). */
-  function h264Codec(b) {
-    const hex = (v) => v.toString(16).padStart(2, '0');
-    for (let i = 0; i + 6 < b.length; i++) {
-      if (b[i] === 0 && b[i + 1] === 0 && b[i + 2] === 1 && (b[i + 3] & 0x1f) === 7) return `avc1.${hex(b[i + 4])}${hex(b[i + 5])}${hex(b[i + 6])}`;
-    }
-    return null;
-  }
-  function concat(a, b) { const out = new Uint8Array(a.length + b.length); out.set(a, 0); out.set(b, a.length); return out; }
-
-  function makeScreen(serial, canvas, onFirstFrame) {
-    const ctx = canvas.getContext('2d', { alpha: false });
-    let decoder = null;
-    let config = null;
-    let needKey = true;
-    let askedAt = 0;
-    let shown = false;
-    // Out of step (decoder error, or it fell behind): wait for a keyframe and ask for one.
-    const resync = () => {
-      needKey = true;
-      if (Date.now() - askedAt > 1500) { askedAt = Date.now(); window.jarvis.resetVideo(serial); }
-    };
-    function configure(cfg) {
-      const codec = h264Codec(cfg);
-      if (!codec || typeof VideoDecoder === 'undefined') return;
-      try { decoder?.close(); } catch { /* already closed */ }
-      decoder = new VideoDecoder({
-        output: (frame) => {
-          if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
-            canvas.width = frame.displayWidth;
-            canvas.height = frame.displayHeight;
-          }
-          ctx.drawImage(frame, 0, 0);
-          frame.close();
-          if (!shown) { shown = true; onFirstFrame(); }
-        },
-        error: () => resync(),
-      });
-      decoder.configure({ codec, optimizeForLatency: true });
-      config = cfg;
-      needKey = true;
-    }
-    return {
-      packet(p) {
-        if (p.type === 'configuration') { configure(p.data); return; }
-        if (!decoder || decoder.state !== 'configured') return;
-        if (needKey && !p.keyframe) return;
-        if (decoder.decodeQueueSize > 24) { resync(); return; }
-        try {
-          // Annex B without a description: the SPS/PPS travel in front of each keyframe.
-          decoder.decode(new EncodedVideoChunk({ type: p.keyframe ? 'key' : 'delta', timestamp: p.pts || 0, data: p.keyframe && config ? concat(config, p.data) : p.data }));
-          if (p.keyframe) needKey = false;
-        } catch { resync(); }
-      },
-      close() { try { decoder?.close(); } catch { /* closed */ } decoder = null; shown = false; },
-    };
-  }
+  // The decoder and the touch handling live in phone-screen.js, shared with the pop-out
+  // phone window. A phone that is popped out streams to that window only, so nothing for it
+  // arrives here.
+  const { makeScreen } = JV.phone;
 
   window.jarvis.onVideo((p) => cards.get(p.serial)?.screen?.packet(p));
 
@@ -165,6 +112,11 @@
     c.fullBtn = iconBtn('expand', 'Fullscreen - or double-click the name. Esc leaves it', () => toggleFull(c));
     c.fullBtn.classList.add('dev-full-btn');
     views.appendChild(c.fullBtn);
+    // Its own window, like scrcpy: the phone keeps streaming while JARVIS shows the chat.
+    c.popBtn = iconBtn('external', 'Open in its own window', () => popOut(c));
+    c.popBtn.classList.add('dev-pop-btn');
+    c.popBtn.id = `devPop-${d.serial.replace(/[^\w-]/g, '_')}`;
+    views.appendChild(c.popBtn);
     views.appendChild(iconBtn('code', 'Show or hide the flutter output', () => c.root.classList.toggle('no-log')));
     bar.appendChild(views);
     c.screenBtn = el('button', 'btn btn-ghost dev-screen-btn', 'Hide screen');
@@ -270,35 +222,7 @@
   }
 
   function wireInput(c) {
-    const cv = c.canvas;
-    const at = (e) => {
-      const r = cv.getBoundingClientRect();
-      return { x: ((e.clientX - r.left) / r.width) * cv.width, y: ((e.clientY - r.top) / r.height) * cv.height, w: cv.width, h: cv.height };
-    };
-    let down = false;
-    cv.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0 || !c.live) return;
-      cv.focus();
-      cv.setPointerCapture(e.pointerId);
-      down = true;
-      input(c, { kind: 'touch', action: 'down', ...at(e) });
-      e.preventDefault();
-    });
-    cv.addEventListener('pointermove', (e) => { if (down) input(c, { kind: 'touch', action: 'move', ...at(e) }); });
-    const up = (e) => { if (!down) return; down = false; input(c, { kind: 'touch', action: 'up', ...at(e) }); };
-    cv.addEventListener('pointerup', up);
-    cv.addEventListener('pointercancel', up);
-    cv.addEventListener('wheel', (e) => {
-      if (!c.live) return;
-      e.preventDefault();
-      input(c, { kind: 'scroll', ...at(e), dx: -Math.sign(e.deltaX), dy: -Math.sign(e.deltaY) });
-    }, { passive: false });
-    const KEYS = { Enter: 'enter', Backspace: 'backspace', Tab: 'tab', Delete: 'delete', ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', Escape: 'back' };
-    cv.addEventListener('keydown', (e) => {
-      if (!c.live) return;
-      if (KEYS[e.key]) { e.preventDefault(); e.stopPropagation(); input(c, { kind: 'key', key: KEYS[e.key] }); return; }
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); input(c, { kind: 'text', text: e.key }); }
-    });
+    JV.phone.wireInput(c.canvas, { live: () => c.live && !c.popped, send: (ev) => input(c, ev) });
   }
   // Esc leaves fullscreen even when the screen itself is not selected.
   document.addEventListener('keydown', (e) => {
@@ -331,9 +255,77 @@
     if (sub) c.ov.appendChild(el('div', 'ov-sub', sub));
   }
 
+  // ------------------------------------------------------------- its own window
+  // The window is the phone's while it is open: the main process sends this phone's video
+  // there and nowhere else, so it is never decoded twice. The card here says where it went
+  // and brings it back.
+  async function popOut(c) {
+    if (c.popped) { window.jarvis.phoneWindow(c.serial, 'focus'); return; }
+    const r = await window.jarvis.phoneWindow(c.serial, 'open');
+    if (!r?.ok) setOverlay(c, 'alert', 'Could not open its window', r?.error || '');
+  }
+
+  function showPopped(c) {
+    c.overlay.hidden = false;
+    setOverlay(c, 'external', 'In its own window', 'It keeps streaming there while you use JARVIS.');
+    const back = el('button', 'btn btn-ghost small dev-dock-btn', 'Bring it back');
+    back.onclick = () => window.jarvis.phoneWindow(c.serial, 'close');
+    const show = el('button', 'btn small', 'Show window');
+    show.onclick = () => window.jarvis.phoneWindow(c.serial, 'focus');
+    const row = el('div', 'ov-acts');
+    row.appendChild(show);
+    row.appendChild(back);
+    c.ov.appendChild(row);
+  }
+
+  // While a phone's window is dragged over JARVIS's left edge: where it will dock on release.
+  JV.on('phone_snap_hint', (e) => {
+    let z = document.getElementById('snapZone');
+    if (!e.on) { z?.remove(); return; }
+    if (!z) {
+      z = el('div', 'snap-zone');
+      z.id = 'snapZone';
+      z.appendChild(JV.icon('phone'));
+      z.appendChild(el('b', null, 'Release to dock the phone here'));
+      z.appendChild(el('small', null, 'JARVIS makes room beside it. Drag it away to undock.'));
+      document.body.appendChild(z);
+    }
+    z.style.width = `${Math.max(240, e.width || 440)}px`;
+  });
+
+  JV.on('phone_popped', (e) => {
+    const c = cards.get(e.serial);
+    if (!c) return;
+    c.popped = true;
+    if (fullId === c.id) toggleFull(c, false);
+    c.screen?.close();
+    c.screen = null;
+    c.popBtn.title = 'Show its window';
+    c.root.classList.add('popped');   // the last frame stays on the canvas: dim it, it is not live here
+    setStatus(c, 'In its own window', 'accent');
+    showPopped(c);
+  });
+  JV.on('phone_docked', (e) => {
+    const c = cards.get(e.serial);
+    if (!c) return;
+    c.popped = false;
+    c.popBtn.title = 'Open in its own window';
+    c.root.classList.remove('popped');
+    setStatus(c, c.live ? 'Live' : (c.state === 'device' ? 'Connected' : c.state), c.live ? 'ok' : '');
+    // Back on the card: join the stream if this view is showing, otherwise let it rest.
+    if (state.view === 'devices' && c.want && c.state === 'device') {
+      if (c.live) {
+        c.overlay.hidden = false;
+        setOverlay(c, 'phone', 'Connecting…', 'Picking the screen back up.');
+        c.screen = makeScreen(c.serial, c.canvas, () => { c.overlay.hidden = true; });
+        c.screen.resync();
+      } else startScreen(c);
+    } else if (c.live) window.jarvis.mirror(c.serial, false);
+  });
+
   // ------------------------------------------------------------- screens
   async function startScreen(c) {
-    if (c.live || c.starting || !c.want || c.state !== 'device') return;
+    if (c.popped || c.live || c.starting || !c.want || c.state !== 'device') return;
     if (c.failedAt && Date.now() - c.failedAt < 15000) return; // do not hammer a phone that refused
     c.starting = true;
     c.screenBtn.textContent = 'Hide screen';
@@ -360,6 +352,7 @@
     const c = cards.get(e.serial);
     if (!c) return;
     c.live = false;
+    if (c.popped) { setStatus(c, c.state === 'device' ? 'Connected' : c.state); return; }   // its window says what happened
     c.screen?.close();
     c.overlay.hidden = false;
     if (e.reason && e.reason !== 'stopped') setOverlay(c, 'alert', 'The screen stopped', e.reason);
@@ -580,6 +573,8 @@
           c.run = d.flutter;
           appendLog(c, await window.jarvis.flutterLog(d.serial));
         }
+        // Already in its own window (this view was reloaded while it was out).
+        if (d.popped) JV.emit('phone_popped', { serial: d.serial });
       }
       c.state = d.state;
       c.model.textContent = d.model || d.serial;
@@ -645,12 +640,13 @@
       refresh();
       pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 3000);
     } else {
-      // Screens only stream while they are on screen; flutter runs carry on.
+      // Screens only stream while they are on screen; flutter runs carry on. A phone in its
+      // own window is on screen there, so it keeps streaming.
       const full = fullId && byId(fullId);
       if (full) toggleFull(full, false);
       fullId = null;
       document.body.classList.remove('dev-full', 'dev-sbs');
-      for (const c of cards.values()) if (c.live || c.starting) window.jarvis.mirror(c.serial, false);
+      for (const c of cards.values()) if ((c.live || c.starting) && !c.popped) window.jarvis.mirror(c.serial, false);
     }
   });
 
@@ -659,7 +655,7 @@
     const sel = $('devAllApp');
     for (const a of apps.filter((x) => x.found)) { const o = el('option', null, a.name); o.value = a.key; sel.appendChild(o); }
     $('devRunAll').onclick = runOnAll;
-    $('devRefresh').onclick = () => refresh();
+    $('devRefresh').onclick = (e) => JV.spinWhile(e.currentTarget, () => refresh());
 
     // Phone alerts
     $('paOn').onchange = (e) => setAlerts({ enabled: e.target.checked, serial: $('paPhone').value || null });

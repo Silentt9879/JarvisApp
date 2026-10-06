@@ -664,9 +664,16 @@ plain Node ("electron does not provide an export named BrowserWindow").
   is missing. They used to hardcode the original machine's path and fail anywhere else.
   Each real turn they run leaves a session in that folder's history; delete them from the
   session list afterwards (hover → bin) if you would rather not see them.
+- `JARVIS_DEMO=crew` (capture runs only) plays a scripted set of agent events into the Agents
+  floor 2.5 s after load - four specialists working, launched in the background, one finished - so
+  the floor can be screenshot without a real, paid agent run. Use with `JARVIS_VIEW=agents`.
 - Screenshots: `JARVIS_CAPTURE=<file.png>` (+ `JARVIS_CAPTURE_DELAY` ms, `JARVIS_VIEW=<view>`,
   `JARVIS_CLICK=<id or .class, comma-separated to click several in turn>`,
   `JARVIS_SIZE=<w>x<h>`, `JARVIS_AUTOPROMPT=<text>`).
+  `JARVIS_CAPTURE_CWD=<folder>` points the run at a throwaway workspace instead of the real
+  one (it needs `.claude\jarvis\git-risk-policy.json` inside), and `JARVIS_CONTEXT=<selector>`
+  right-clicks an element at `JARVIS_CONTEXT_AT` ms. `JARVIS_STORE` puts the previous value
+  back before the capture quits.
   By default the click lands 1.5 s before the capture, and the app quits right after it - fine
   for instant UI, fatal for anything slow. For a model query or a sync, set
   `JARVIS_CLICK_AT=<ms>` to click early and a `JARVIS_CAPTURE_DELAY` long enough to finish.

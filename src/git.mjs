@@ -22,6 +22,7 @@
 // or a push over a slow link, in Phase 5 - is where it has to be added, to run() rather
 // than here.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listRepos, repoStateAt, run, killTree, NICKNAMES } from './workspace.mjs';
@@ -119,11 +120,17 @@ export async function repoDetail(cwd, key) {
     }
   }
 
+  // When this repository last heard from a remote: git touches FETCH_HEAD on every fetch and
+  // pull. Read from disk, so showing "Last fetched 3 minutes ago" never contacts anything.
+  let lastFetched = null;
+  try { lastFetched = fs.statSync(path.join(repo.dir, '.git', 'FETCH_HEAD')).mtimeMs; } catch { /* never fetched */ }
+
   return {
     ok: true,
     repo: { key: repo.key, name: repo.name, nickname: repo.nickname, scope: repo.scope, dir: repo.dir },
     ...state,
     remotes,
+    lastFetched,
     clean: state.ok && !state.staged && !state.modified && !state.untracked,
     checkedAt: Date.now(),
   };
@@ -494,6 +501,218 @@ export async function commit(cwd, key, { summary, description } = {}) {
       count: (committed.length ? committed : staged).length,
     },
     after: await changedFiles(cwd, key),
+  };
+}
+
+// ---------------------------------------------------------------- undo the last commit
+//
+// GitHub Desktop's "Undo" under the commit button: take the newest commit back off the
+// branch, leaving its changes staged and its message ready to reuse. `git reset --soft
+// HEAD~1` moves only the branch - the index and the working tree keep every change - so
+// nothing can be lost, which is why the shared policy classes it `mutate`.
+//
+// Offered only for a commit that exists nowhere else. Once it is on a remote-tracking
+// branch, taking it back would rewrite history someone else may already have. That is
+// judged from the refs already on disk; nothing here contacts a remote.
+
+/** The newest commit on the current branch, and whether Undo is offered for it. Read-only. */
+export async function lastCommit(cwd, key) {
+  const repo = resolveRepo(cwd, key);
+  if (!repo) return { ok: false, error: 'That repository is not one of the detected repositories.' };
+  if (!await hasHead(repo.dir)) return { ok: true, repo: { key: repo.key }, commit: null, undoable: false, reason: 'No commits yet.' };
+
+  const [show, branchOut] = await Promise.all([
+    run('git', ['--no-optional-locks', '-C', repo.dir, 'log', '-1', '--format=%H%x1f%P%x1f%cI%x1f%s%x1f%b'], { timeout: 8000 }),
+    run('git', ['--no-optional-locks', '-C', repo.dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 8000 }),
+  ]);
+  if (!show.ok) return { ok: false, error: firstLine(show) };
+
+  const [sha = '', parents = '', at = '', subject = '', ...rest] = show.out.split('\x1f');
+  const branch = branchOut.out.trim();
+  const commitInfo = {
+    sha: sha.trim().slice(0, 10),
+    fullSha: sha.trim(),
+    subject,
+    body: rest.join('\x1f').trim(),
+    at,
+    branch,
+  };
+
+  const parentCount = parents.trim() ? parents.trim().split(/\s+/).length : 0;
+  let reason = null;
+  if (!branch || branch === 'HEAD') reason = 'You are not on a branch.';
+  else if (parentCount === 0) reason = 'This is the first commit in the repository, so there is nothing to go back to.';
+  else if (parentCount > 1) reason = 'This is a merge commit. Undoing a merge is not offered here.';
+  else {
+    const state = await conflictState(cwd, key);
+    if (state.ok && state.operation) reason = `A ${state.operation} is in progress. Finish or abort it first.`;
+  }
+  if (!reason) {
+    const onRemote = await run('git', ['--no-optional-locks', '-C', repo.dir, 'branch', '-r', '--contains', commitInfo.fullSha], { timeout: 10000 });
+    const where = onRemote.ok ? onRemote.out.split('\n').map((s) => s.trim()).filter((s) => s && !s.includes(' -> ')) : [];
+    if (!onRemote.ok) reason = 'Could not tell whether this commit has been pushed, so Undo is not offered.';
+    else if (where.length) reason = `It is already on ${where[0]}. Undoing it would rewrite history others may have.`;
+  }
+
+  return { ok: true, repo: { key: repo.key }, commit: commitInfo, undoable: !reason, reason };
+}
+
+/**
+ * Undo the newest commit: the branch steps back one commit, and the commit's changes stay
+ * staged. `sha` must still be the newest commit - a click on a panel that has gone stale
+ * must not undo a different commit than the one it showed.
+ */
+export async function undoLastCommit(cwd, key, { sha = '' } = {}) {
+  const repo = resolveRepo(cwd, key);
+  if (!repo) return { ok: false, error: 'That repository is not one of the detected repositories.' };
+  const refuse = allowed(cwd, 'reset', ['--soft', 'HEAD~1']);
+  if (refuse) return { ok: false, error: refuse };
+
+  const last = await lastCommit(cwd, key);
+  if (!last.ok) return last;
+  if (!last.commit) return { ok: false, error: 'There is no commit to undo.' };
+  const wanted = String(sha || '');
+  if (!wanted || !last.commit.fullSha.startsWith(wanted)) {
+    return { ok: false, stale: true, error: 'The newest commit has changed since this was shown. Nothing was undone.' };
+  }
+  if (!last.undoable) return { ok: false, error: last.reason || 'This commit cannot be undone here.' };
+
+  const parent = (await run('git', ['--no-optional-locks', '-C', repo.dir, 'rev-parse', `${last.commit.fullSha}~1`], { timeout: 8000 })).out.trim();
+  const r = await run('git', ['-C', repo.dir, 'reset', '--soft', 'HEAD~1'], { timeout: 30000 });
+  const headNow = (await run('git', ['--no-optional-locks', '-C', repo.dir, 'rev-parse', 'HEAD'], { timeout: 8000 })).out.trim();
+  if (!r.ok || !parent || headNow !== parent) {
+    return { ok: false, error: r.ok ? 'git did not move the branch back. Nothing was undone.' : firstLine(r) };
+  }
+
+  return {
+    ok: true,
+    undone: { sha: last.commit.sha, subject: last.commit.subject, body: last.commit.body, branch: last.commit.branch },
+    after: await changedFiles(cwd, key),
+  };
+}
+
+// ---------------------------------------------------------------- discard all changes
+//
+// GitHub Desktop's "Discard all changes...": every tracked file goes back to the last
+// commit and every new file is removed. The shared policy classes both halves destructive
+// (`git restore --worktree`, and what `git clean` would do), so it runs only with
+// `confirmed`, and the window's confirmation names the repository and the files first.
+//
+// As in GitHub Desktop, the work is not simply thrown away: before anything is touched, a
+// copy of every changed file that is on disk goes to the Recycle Bin, in one folder named
+// after the repository and the time. If that copy cannot be made, nothing is discarded.
+// `trash` moves a path to the Recycle Bin; the main process passes Electron's
+// shell.trashItem, and tests pass their own.
+
+/** Remove now-empty folders left by deleted files, never climbing above the repository. */
+function pruneEmptyDirs(root, rel) {
+  let dir = path.dirname(path.join(root, rel));
+  const top = path.resolve(root);
+  while (path.resolve(dir).startsWith(top + path.sep)) {
+    try {
+      if (fs.readdirSync(dir).length) break;
+      fs.rmdirSync(dir);
+    } catch { break; }
+    dir = path.dirname(dir);
+  }
+}
+
+export async function discardAll(cwd, key, { confirmed = false, trash = null, expect = null } = {}) {
+  const repo = resolveRepo(cwd, key);
+  if (!repo) return { ok: false, error: 'That repository is not one of the detected repositories.' };
+
+  const before = await changedFiles(cwd, key);
+  if (!before.ok) return before;
+  if (!before.counts.total) return { ok: false, error: 'There are no changes to discard.' };
+  // A confirmation covers the files it listed. If the set changed since - a file saved, a
+  // new one created - the person has not agreed to lose that, so nothing is touched.
+  if (confirmed && Array.isArray(expect)) {
+    const now = before.files.map((f) => f.path).sort().join('\0');
+    const shown = expect.map(String).sort().join('\0');
+    if (now !== shown) {
+      return { ok: false, stale: true, error: 'The changes are not the ones you confirmed - something changed since. Nothing was discarded.' };
+    }
+  }
+  if (before.counts.conflicted) return { ok: false, error: 'This repository has unresolved conflicts. Resolve them before discarding.' };
+  const state = await conflictState(cwd, key);
+  if (state.ok && state.operation) return { ok: false, error: `A ${state.operation} is in progress. Finish or abort it first.` };
+  if (!await hasHead(repo.dir)) return { ok: false, error: 'This repository has no commit yet, so there is nothing to go back to.' };
+
+  const tracked = before.files.filter((f) => !f.untracked);
+  const untracked = before.files.filter((f) => f.untracked);
+
+  // The policy is asked about exactly what will run; it is not weakened here.
+  const verdicts = [];
+  if (tracked.length) verdicts.push(classify(cwd, 'restore', ['--source=HEAD', '--staged', '--worktree', '--', '.']));
+  if (untracked.length) verdicts.push(classify(cwd, 'clean', ['-f']));
+  const destructive = verdicts.filter((v) => v.level === 'destructive');
+  if (destructive.length && !confirmed) {
+    return {
+      ok: false,
+      needsConfirmation: true,
+      reason: destructive.map((v) => v.reason).filter(Boolean).join('. ') || 'This discards uncommitted work.',
+      repoLabel: repo.nickname,
+      files: before.files.map((f) => ({ path: f.path, status: f.status })),
+      counts: before.counts,
+    };
+  }
+  if (typeof trash !== 'function') return { ok: false, error: 'The Recycle Bin is not available, so nothing was discarded.' };
+
+  // 1. The copy, before anything is touched.
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  const backup = path.join(os.tmpdir(), `JARVIS discarded changes - ${repo.name} - ${stamp}`);
+  const saved = [];
+  try {
+    for (const f of before.files) {
+      const src = path.join(repo.dir, f.path);
+      let st;
+      try { st = fs.statSync(src); } catch { continue; }   // deleted on disk: git still has it
+      if (!st.isFile()) continue;
+      const dst = path.resolve(backup, f.path);
+      if (!dst.startsWith(path.resolve(backup) + path.sep)) continue;
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+      saved.push(f.path);
+    }
+  } catch (e) {
+    try { fs.rmSync(backup, { recursive: true, force: true }); } catch { /* best effort */ }
+    return { ok: false, error: `Could not copy the changed files for safekeeping (${e?.message || e}). Nothing was discarded.` };
+  }
+  if (saved.length) {
+    try { await trash(backup); } catch (e) {
+      try { fs.rmSync(backup, { recursive: true, force: true }); } catch { /* best effort */ }
+      return { ok: false, error: `Could not put a copy in the Recycle Bin (${e?.message || e}). Nothing was discarded.` };
+    }
+  } else {
+    try { fs.rmSync(backup, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+  const binName = saved.length ? path.basename(backup) : null;
+  const kept = binName ? ` A copy of the changed files is in the Recycle Bin as "${binName}".` : '';
+
+  // 2. Tracked files back to the last commit - index and working tree. A file that was
+  //    added but never committed is tracked and absent from HEAD, so it is removed too.
+  if (tracked.length) {
+    const r = await run('git', ['-C', repo.dir, 'restore', '--source=HEAD', '--staged', '--worktree', '--', '.'], { timeout: 60000 });
+    if (!r.ok) return { ok: false, error: `${firstLine(r)}.${kept}`, after: await changedFiles(cwd, key) };
+  }
+
+  // 3. New files: exactly the ones listed, nothing else (no `git clean` sweeping the tree).
+  const failed = [];
+  for (const f of untracked) {
+    const target = path.resolve(repo.dir, f.path);
+    if (!target.startsWith(path.resolve(repo.dir) + path.sep)) continue;
+    try { fs.rmSync(target, { force: true }); pruneEmptyDirs(repo.dir, f.path); } catch { failed.push(f.path); }
+  }
+
+  const after = await changedFiles(cwd, key);
+  const n = before.counts.total;
+  return {
+    ok: !failed.length,
+    discarded: n - failed.length,
+    backup: binName,
+    after,
+    error: failed.length ? `Could not remove ${failed.length} new file${failed.length === 1 ? '' : 's'} (${failed.slice(0, 3).join(', ')}).${kept}` : undefined,
+    message: `Discarded ${n} change${n === 1 ? '' : 's'}.${kept}`,
   };
 }
 

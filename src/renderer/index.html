@@ -24,7 +24,7 @@
       <button id="navChat" data-view="chat" class="active" aria-current="page"><i data-icon="chat"></i><span>Chat</span><em class="nbadge" id="nbChat"></em></button>
       <button id="navCommand" data-view="command"><i data-icon="grid"></i><span>Overview</span></button>
       <button id="navTasks" data-view="tasks"><i data-icon="tasks"></i><span>Tasks</span><em class="nbadge" id="nbTasks"></em></button>
-      <button id="navSource" data-view="source"><i data-icon="branch"></i><span>Source Control</span><em class="nbadge" id="nbSource" hidden></em></button>
+      <button id="navSource" data-view="source"><i data-icon="github"></i><span>GitHub Desktop</span><em class="nbadge" id="nbSource" hidden></em></button>
       <button id="navFiles" data-view="files"><i data-icon="code"></i><span>Files</span></button>
       <button id="navMemory" data-view="memory"><i data-icon="memory"></i><span>Memory</span><em class="nbadge" id="nbMemory"></em></button>
 
@@ -118,6 +118,7 @@
                   <span class="ctx" id="ctx" title="Context window used"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="14" class="ctx-bg"/><circle cx="18" cy="18" r="14" class="ctx-fg" id="ctxArc"/></svg><em id="ctxPct">–</em></span>
                   <span class="timer" id="sessTimer" title="Session time"><i data-icon="clock"></i><em>0m</em></span>
                   <button class="cbtn toggle" id="thinkBtn" title="Extended thinking"><i data-icon="bulb"></i><span class="tdot"></span></button>
+                  <button class="pill agents-pill" id="agentsBtn" type="button" title="No specialists working right now"><span class="ap-dot"></span><b id="agentsCount">0 agents</b></button>
                   <button class="pill" id="modelBtn" title="Model and effort"><b id="modelName">Model</b><em id="effortName"></em></button>
                   <span class="spacer"></span>
                   <button class="pill mode" id="modeBtn" title="How JARVIS asks before acting"><i data-icon="shield"></i><b id="modeName">Ask</b></button>
@@ -128,6 +129,11 @@
                 <div class="pop menu slash-pop" id="slashPop" hidden>
                   <input id="slashFilter" class="field" placeholder="Filter commands…" autocomplete="off" />
                   <ul id="slashList"></ul>
+                </div>
+                <!-- The agents pill's panel: who is working right now, without leaving the chat. -->
+                <div class="pop agents-pop" id="agentsPop" hidden>
+                  <div class="pop-head"><b>Agents</b><button class="link-btn" id="agentsOpenFloor" type="button">Open the floor</button></div>
+                  <div class="ap-list" id="agentsPopList"></div>
                 </div>
                 <div class="pop menu model-pop" id="modelPop" hidden>
                   <div class="pop-sec">Model</div>
@@ -217,8 +223,14 @@
       <!-- ========================================================== AGENTS -->
       <section class="view" id="view-agents">
         <div class="page">
-          <div class="page-head"><h2>Agents</h2><p>JARVIS's specialists. They light up while working; click one to read its brief or hand it a task.</p></div>
-          <div class="agent-grid big" id="agentAll"></div>
+          <div class="page-head"><h2>Agents</h2><p>JARVIS's specialists. Watch them work on the floor; click a desk to see every step, or a card below to read a brief.</p></div>
+          <div class="crew" id="crew">
+            <div class="crew-head"><h3><i data-icon="agents"></i>Agent floor</h3><span class="crew-count" id="crewCount">Nobody is working right now</span></div>
+            <div class="crew-floor" id="crewFloor"></div>
+            <div class="crew-empty" id="crewEmpty">When JARVIS hands work to a specialist, it takes a desk here and you can watch it go: what it is reading, searching, running and changing, live.</div>
+            <div class="crew-bench" id="crewBench" hidden></div>
+          </div>
+          <div class="agent-groups" id="agentAll"></div>
           <div class="hud-panel doc-drawer" id="agentDoc" hidden></div>
         </div>
       </section>
@@ -305,7 +317,7 @@
       <!-- ========================================================== WORKSPACE -->
       <section class="view" id="view-workspace">
         <div class="page">
-          <div class="page-head"><h2>Workspace</h2><p>Every repo, knowledge freshness and known issues. Read-only: nothing here changes a repo. <button class="panel-link inline" id="wsRefresh">Refresh</button></p></div>
+          <div class="page-head"><h2>Workspace</h2><p>Every repo, knowledge freshness and known issues. Read-only: nothing here changes a repo. <button class="panel-link inline" id="wsRefresh"><i data-icon="refresh"></i>Refresh</button></p></div>
           <div class="repo-grid" id="repoGrid"></div>
           <div class="two-col">
             <div class="hud-panel"><h3>Open issues <span class="h-note" id="issueCount"></span></h3><ul class="rows" id="issueList"></ul></div>
@@ -335,11 +347,11 @@
         </div>
       </section>
 
-      <!-- ===================================================== SOURCE CONTROL -->
+      <!-- ============================================ GITHUB DESKTOP (was Source Control) -->
       <section class="view" id="view-source">
         <div class="page">
           <div class="page-head">
-            <h2>Source Control</h2>
+            <h2>GitHub Desktop</h2>
             <p>One repository at a time, so there is never any doubt which one you are working in.</p>
           </div>
 
@@ -382,22 +394,27 @@
               </div>
             </div>
 
-            <div class="sc-remote-wrap">
-              <button class="btn sc-remote" id="scRemoteBtn" disabled>
-                <i data-icon="refresh"></i><span id="scRemoteLabel">—</span>
+            <!-- Beside the branch, as in GitHub Desktop: the action, when the remote was last
+                 heard from, and the ahead / behind counts from the refs already on disk. -->
+            <div class="sc-pick sc-remote-wrap">
+              <button class="sc-drop sc-remote" id="scRemoteBtn" disabled>
+                <i data-icon="refresh"></i>
+                <b id="scRemoteLabel">—</b>
+                <span class="sc-remote-sub" id="scRemoteSub"></span>
+                <em class="sc-remote-count" id="scRemoteCount" hidden></em>
               </button>
               <button class="btn btn-danger small sc-remote-stop" id="scRemoteStop" hidden type="button">Stop</button>
             </div>
 
             <span class="sc-bar-note" id="scNote"></span>
-            <button class="panel-link inline" id="scRefresh">Refresh</button>
+            <button class="panel-link inline" id="scRefresh"><i data-icon="refresh"></i>Refresh</button>
           </header>
 
           <div class="sc-remote-msg" id="scRemoteMsg"></div>
 
           <div class="sc-work" id="scWork" hidden>
             <aside class="sc-side">
-              <div class="sc-tabs" role="tablist" aria-label="Source control">
+              <div class="sc-tabs" role="tablist" aria-label="GitHub Desktop">
                 <button class="sc-tab on" id="scTabChanges">Changes <em id="scChangeCount"></em></button>
                 <button class="sc-tab" id="scTabHistory">History</button>
                 <button class="sc-tab" id="scTabStash">Stashes <em id="scStashCount"></em></button>
@@ -435,6 +452,14 @@
                 <button class="btn btn-primary sc-commit-btn" id="scCommitBtn" type="submit" disabled>
                   Commit
                 </button>
+                <!-- GitHub Desktop's Undo: the newest commit, while it exists only here. -->
+                <div class="sc-undo" id="scUndo" hidden>
+                  <div class="sc-undo-text">
+                    <span class="sc-undo-when" id="scUndoWhen"></span>
+                    <b class="sc-undo-subject" id="scUndoSubject"></b>
+                  </div>
+                  <button class="btn small sc-undo-btn" id="scUndoBtn" type="button">Undo</button>
+                </div>
               </form>
             </aside>
 
@@ -442,6 +467,30 @@
           </div>
 
           <div class="sc-empty" id="scEmpty">Pick a repository to see its changes.</div>
+
+          <!-- Right-click on "N changed files". -->
+          <div class="pop sc-ctx" id="scFilesMenu" role="menu" hidden>
+            <button class="sc-ctx-item" id="scCtxDiscard" role="menuitem" type="button">Discard all changes…</button>
+            <button class="sc-ctx-item" id="scCtxStash" role="menuitem" type="button">Stash all changes</button>
+          </div>
+
+          <!-- Discard all: names the repository and every file before anything is lost. -->
+          <div class="modal-veil" id="scDiscardVeil" hidden>
+            <div class="modal hud-panel sc-discard-modal" role="alertdialog" aria-modal="true"
+              aria-labelledby="scDiscardTitle" aria-describedby="scDiscardWhat">
+              <h3 id="scDiscardTitle">Confirm discard changes</h3>
+              <div class="modal-body">
+                <p class="sc-discard-what" id="scDiscardWhat"></p>
+                <ul class="sc-discard-files" id="scDiscardFiles"></ul>
+                <p class="sc-discard-note">A copy of these files goes to the Recycle Bin first, so you can get them back from there.</p>
+              </div>
+              <div class="modal-foot">
+                <span class="modal-keys" id="scDiscardRepo"></span>
+                <button class="btn small" id="scDiscardCancel" type="button">Cancel</button>
+                <button class="btn btn-danger small" id="scDiscardGo" type="button">Discard changes</button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -450,7 +499,7 @@
         <div class="page">
           <div class="page-head">
             <h2>Devices</h2>
-            <p>Your phones and the workspace's web projects, in one place. <span class="muted" id="devNote"></span> <button class="panel-link inline" id="devRefresh">Refresh</button></p>
+            <p>Your phones and the workspace's web projects, in one place. <span class="muted" id="devNote"></span> <button class="panel-link inline" id="devRefresh"><i data-icon="refresh"></i>Refresh</button></p>
           </div>
 
           <div class="dev-layout">
@@ -466,7 +515,13 @@
           </section>
 
           <section class="dev-section web">
-            <h3>Web apps &amp; APIs <span class="h-note">run here, open in your browser</span></h3>
+            <h3>Web apps &amp; APIs <span class="count" id="webCount" hidden></span>
+              <span class="h-note">dotnet watch here, the page in your browser</span>
+              <span class="web-head-acts">
+                <button class="panel-link inline" id="webRefresh" type="button"><i data-icon="refresh"></i>Refresh</button>
+                <button class="btn btn-danger small" id="webStopAll" type="button" hidden>Stop all</button>
+              </span>
+            </h3>
             <div class="web-grid" id="webGrid"></div>
           </section>
           </div>
@@ -613,12 +668,15 @@
 <script src="chat.js"></script>
 <script src="dashboard.js"></script>
 <script src="pages.js"></script>
+<script src="phone-screen.js"></script>
 <script src="devices.js"></script>
 <script src="webapps.js"></script>
 <script src="clickup.js"></script>
 <script src="files.js"></script>
 <script src="git.js"></script>
 <script src="github.js"></script>
+<script src="crew-model.js"></script>
+<script src="crew.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -480,6 +480,34 @@ export class JarvisSession {
     this.#emitTasks();
   }
 
+  /**
+   * A subagent's life as the SDK reports it - started, progress, finished - so the Agents floor
+   * can show it working until it really ends. A background agent's Agent call returns "launched"
+   * at once; only its task_notification says it is done. Housekeeping tasks (ambient,
+   * skip_transcript) and non-agent tasks the renderer cannot match are its to ignore.
+   */
+  #agentTask(m) {
+    if (m.ambient || m.skip_transcript) return;
+    const phase = { task_started: 'started', task_progress: 'progress', task_notification: 'done', task_updated: 'updated' }[m.subtype];
+    const u = m.usage || {};
+    this.emit({
+      kind: 'agent_task',
+      phase,
+      taskId: m.task_id,
+      toolUseId: m.tool_use_id || null,
+      agent: m.subagent_type || null,
+      taskType: m.task_type || null,
+      description: clip(m.description || '', 200),
+      background: m.is_backgrounded ?? m.patch?.is_backgrounded ?? null,
+      status: m.status || m.patch?.status || null,
+      summary: clip(m.summary || '', 600),
+      lastTool: m.last_tool_name || null,
+      tokens: u.total_tokens ?? null,
+      toolUses: u.tool_uses ?? null,
+      durationMs: u.duration_ms ?? null,
+    });
+  }
+
   #handle(m) {
     switch (m.type) {
       case 'system':
@@ -513,6 +541,8 @@ export class JarvisSession {
             this.running = true;
             this.emit({ kind: 'status', state: m.state === 'requires_action' || this.pending.size ? 'waiting' : 'working' });
           }
+        } else if (/^task_(started|progress|notification|updated)$/.test(m.subtype || '')) {
+          this.#agentTask(m);
         }
         return;
 

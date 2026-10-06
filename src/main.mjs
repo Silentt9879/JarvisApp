@@ -10,7 +10,8 @@ import { execFile } from 'node:child_process';
 import { JarvisSession, listRecent, loadHistory, findSessions, removeSession, renameStoredSession, isSessionId, IMAGE_TYPES, MAX_IMAGE_BYTES } from './session.mjs';
 import { systemStats, gitStatus, knowledgeStatus, openIssues, handoffFocus, listDocs, readDoc, searchDocs, docRoots, savedEffort } from './workspace.mjs';
 import { FLUTTER_APPS, isSerial, listDevices, startMirror, stopMirror, resetVideo, sendInput, flutterRun, flutterCommandFor, flutterLog, shutdownDevices } from './devices.mjs';
-import { listWebApps, webRun, webStop, webLog, shutdownWebApps } from './webapps.mjs';
+import { listWebApps, webRun, webStop, webStopAll, webLog, shutdownWebApps } from './webapps.mjs';
+import { inSnapZone, dockWidth, dockLayout, followLayout, afterPhoneResize, stillDocked } from './dock.mjs';
 import { readDraft, readClickUp, syncClickUp } from './tasks.mjs';
 import { createGitHub } from './github.mjs';
 import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode } from './files.mjs';
@@ -23,7 +24,7 @@ import { diffReport, morningBrief } from './reports.mjs';
 import { createDeployWatcher } from './deploys.mjs';
 import { createTranscriber } from './voice.mjs';
 import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
-import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
+import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.dirname(SRC);
@@ -59,6 +60,12 @@ const configPath = path.join(userDir, 'config.json');
 const logPath = path.join(userDir, 'jarvis.log');
 
 function loadConfig() {
+  // Capture aid: JARVIS_CAPTURE_CWD points a screenshot run at a throwaway workspace, so a
+  // capture can show states (an unpushed commit, a discard dialog) without touching real
+  // repositories. Ignored unless JARVIS_CAPTURE is set.
+  if (process.env.JARVIS_CAPTURE && process.env.JARVIS_CAPTURE_CWD) {
+    return { cwd: process.env.JARVIS_CAPTURE_CWD, phone: {} };
+  }
   try {
     const c = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     return { cwd: c.cwd || DEFAULT_CWD, phone: c.phone || {} };
@@ -183,7 +190,15 @@ const phone = createPhoneWatcher({
 // Remote control (remote.mjs): your Telegram chat as a second keyboard. It is fed every
 // session event like the alert watcher, and goes first: an approval or a reply it has put
 // on the phone is "claimed", so the watcher does not send a second message about it.
-const toWindow = (evt) => { if (win && !win.isDestroyed()) win.webContents.send('jarvis:event', evt); };
+// serial -> BrowserWindow of a phone shown in its own window (see "IPC: devices"). Declared
+// here, before anything can send an event, because toWindow reads it.
+const phoneWindows = new Map();
+const toWindow = (evt) => {
+  if (win && !win.isDestroyed()) win.webContents.send('jarvis:event', evt);
+  // A phone's own window gets that phone's events too (screen started or stopped, flutter run).
+  const pw = evt && evt.serial ? phoneWindows.get(evt.serial) : null;
+  if (pw && !pw.isDestroyed()) pw.webContents.send('jarvis:event', evt);
+};
 const remote = createRemote({
   cfg: () => {
     const c = phoneConfig();
@@ -488,7 +503,12 @@ function createWindow() {
     }
   });
 
-  win.on('closed', () => { win = null; });
+  wireDockFollow();
+  win.on('closed', () => {
+    win = null;
+    // A phone window never outlives JARVIS's own window.
+    for (const pw of phoneWindows.values()) if (!pw.isDestroyed()) pw.close();
+  });
   win.webContents.on('render-process-gone', (_e, d) => log('window renderer gone:', d.reason, d.exitCode));
   // Script errors in the window (uncaught exceptions included) go to jarvis.log, not just devtools.
   win.webContents.on('console-message', (e, lvl, msg, line, src) => {
@@ -507,15 +527,28 @@ function createWindow() {
         win.webContents.executeJavaScript(`window.__jarvisAutoprompt && window.__jarvisAutoprompt(${JSON.stringify(process.env.JARVIS_AUTOPROMPT)});`);
       }, 3500));
     }
+    // JARVIS_DEMO=crew plays a scripted set of agent events into the Agents floor, so a capture
+    // can show minions at work without a real (paid) agent run. Capture runs only.
+    if (/^[a-z]+$/.test(process.env.JARVIS_DEMO || '')) {
+      win.webContents.once('did-finish-load', () => setTimeout(() => {
+        win.webContents.executeJavaScript(`window.__jarvisDemo && window.__jarvisDemo(${JSON.stringify(process.env.JARVIS_DEMO)});`);
+      }, 2500));
+    }
     // JARVIS_STORE=key=value seeds one localStorage item before the view opens, so a
     // capture can be pointed at a particular saved state (which repository Source Control
     // reopens, say) without clicking through the UI or disturbing the real settings.
     const store = /^([\w.]{1,60})=(.{0,200})$/.exec(process.env.JARVIS_STORE || '');
+    // localStorage is the real one, shared with normal runs, so the previous value is put
+    // back before the capture quits - a capture must not change where the next launch opens.
+    let storeBefore;
     if (store) {
-      win.webContents.once('did-finish-load', () => {
-        win.webContents.executeJavaScript(
-          `try { localStorage.setItem(${JSON.stringify(store[1])}, ${JSON.stringify(store[2])}); } catch {}`,
-        );
+      win.webContents.once('did-finish-load', async () => {
+        try {
+          storeBefore = await win.webContents.executeJavaScript(
+            `(() => { try { const k = ${JSON.stringify(store[1])}; const was = localStorage.getItem(k);
+               localStorage.setItem(k, ${JSON.stringify(store[2])}); return was; } catch { return undefined; } })();`,
+          );
+        } catch { /* a capture aid only */ }
       });
     }
     if (view) {
@@ -614,9 +647,49 @@ function createWindow() {
         }, Math.max(1500, start + i * gap)));
       });
     }
+    // JARVIS_HINT_AT=<ms> shows the phone drop zone; JARVIS_DOCK_AT=<ms> docks the first phone
+    // window as a drop would, and logs both windows' bounds - docking cannot be dragged here.
+    const hintAt = Number(process.env.JARVIS_HINT_AT || 0);
+    if (hintAt) win.webContents.once('did-finish-load', () => setTimeout(() => { hintOn = false; snapHint(true, 440); }, hintAt));
+    const dockAt = Number(process.env.JARVIS_DOCK_AT || 0);
+    if (dockAt) {
+      win.webContents.once('did-finish-load', () => setTimeout(() => {
+        const [serial, pw] = [...phoneWindows][0] || [];
+        if (!pw) { log('capture: no phone window to dock'); return; }
+        const before = win.getBounds();
+        dockPhone(serial, pw);
+        setTimeout(() => log('capture: dock bounds', JSON.stringify({ before, phone: pw.getBounds(), jarvis: win.getBounds() })), 300);
+      }, dockAt));
+    }
+    // JARVIS_CONTEXT=<selector> right-clicks an element (a contextmenu event at its centre),
+    // at JARVIS_CONTEXT_AT ms or 2.5 s before the capture - so a right-click menu can be seen.
+    const context = (process.env.JARVIS_CONTEXT || '').trim();
+    if (SEL.test(context)) {
+      const sel = context.startsWith('.') ? context : `#${context}`;
+      const at = Number(process.env.JARVIS_CONTEXT_AT || 0) || Math.max(1500, Number(process.env.JARVIS_CAPTURE_DELAY || 9000) - 2500);
+      win.webContents.once('did-finish-load', () => setTimeout(() => {
+        win.webContents.executeJavaScript(`(() => { const n = document.querySelector(${JSON.stringify(sel)}); if (!n) return;
+          const b = n.getBoundingClientRect();
+          n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true,
+            clientX: Math.round(b.left + b.width / 2), clientY: Math.round(b.top + b.height / 2) })); })();`).catch(() => {});
+      }, at));
+    }
     win.webContents.once('did-finish-load', () => setTimeout(async () => {
       try { fs.writeFileSync(process.env.JARVIS_CAPTURE, (await win.webContents.capturePage()).toPNG()); }
       catch (e) { log('capture failed', e?.message || e); }
+      // A phone opened in its own window is saved beside it, as <name>-phone.png.
+      for (const pw of phoneWindows.values()) {
+        if (pw.isDestroyed()) continue;
+        try { fs.writeFileSync(`${process.env.JARVIS_CAPTURE.replace(/\.png$/i, '')}-phone.png`, (await pw.webContents.capturePage()).toPNG()); }
+        catch (e) { log('phone capture failed', e?.message || e); }
+      }
+      if (store && storeBefore !== undefined) {
+        try {
+          await win.webContents.executeJavaScript(storeBefore === null
+            ? `localStorage.removeItem(${JSON.stringify(store[1])});`
+            : `localStorage.setItem(${JSON.stringify(store[1])}, ${JSON.stringify(storeBefore)});`);
+        } catch { /* a capture aid only */ }
+      }
       app.quit();
     }, Number(process.env.JARVIS_CAPTURE_DELAY || 9000)));
   }
@@ -658,10 +731,12 @@ const TITLE_BAR = {
   dark: { color: '#15171a', symbolColor: '#a4abb3', height: 40 },
   light: { color: '#ffffff', symbolColor: '#555d66', height: 40 },
 };
-ipcMain.handle('jarvis:titleBar', (_e, theme) => {
+ipcMain.handle('jarvis:titleBar', (e, theme) => {
   const t = TITLE_BAR[theme === 'light' ? 'light' : 'dark'];
-  try { if (win && !win.isDestroyed()) win.setTitleBarOverlay(t); } catch { /* not supported here */ }
-  try { if (win && !win.isDestroyed()) win.setBackgroundColor(theme === 'light' ? '#f7f8f9' : '#0d0e10'); } catch { /* cosmetic */ }
+  // Whichever window asked: JARVIS itself, or a phone in its own window.
+  const target = BrowserWindow.fromWebContents(e.sender) || win;
+  try { if (target && !target.isDestroyed()) target.setTitleBarOverlay(t); } catch { /* not supported here */ }
+  try { if (target && !target.isDestroyed()) target.setBackgroundColor(theme === 'light' ? '#f7f8f9' : '#0d0e10'); } catch { /* cosmetic */ }
   return true;
 });
 
@@ -854,13 +929,201 @@ ipcMain.handle('jarvis:openAttachment', async (_e, p) => {
 });
 
 // ---------------------------------------------------------------- IPC: devices (phones)
+// A phone can have its own window (phone.html), like scrcpy. While it is open, that phone's
+// video goes there and nowhere else - it is never decoded twice - and its events go to both,
+// so the Devices card can say where the phone went. Closing the window brings it back.
+// (phoneWindows is declared beside toWindow, near the top.)
+
 /** Video packets go on their own channel: dozens a second, never through the chat event path. */
 function sendVideo(p) {
+  const pw = phoneWindows.get(p.serial);
+  if (pw && !pw.isDestroyed()) { pw.webContents.send('jarvis:video', p); return; }
   if (win && !win.isDestroyed()) win.webContents.send('jarvis:video', p);
 }
+
+function openPhoneWindow(serial) {
+  const had = phoneWindows.get(serial);
+  const capture = !!process.env.JARVIS_CAPTURE;
+  if (had && !had.isDestroyed()) {
+    if (!capture) { had.show(); had.focus(); }
+    return { ok: true, already: true };
+  }
+  const dark = nativeTheme.shouldUseDarkColors;
+  const pw = new BrowserWindow({
+    width: 440,
+    height: 900,
+    minWidth: 300,
+    minHeight: 480,
+    title: 'Phone - JARVIS',
+    backgroundColor: dark ? '#0d0e10' : '#f7f8f9',
+    icon: windowIcon(),
+    titleBarStyle: 'hidden',
+    titleBarOverlay: TITLE_BAR[dark ? 'dark' : 'light'],
+    show: false,
+    webPreferences: {
+      preload: path.join(SRC, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      // On screen beside other windows, so it keeps drawing when it is not the focused one.
+      backgroundThrottling: false,
+    },
+  });
+  phoneWindows.set(serial, pw);
+  pw.loadFile(path.join(SRC, 'renderer', 'phone.html'), { query: { serial } });
+  pw.once('ready-to-show', () => {
+    // A capture run (debug aid) keeps it off-screen and never takes focus, like the main window.
+    if (capture) { place(pw, { x: -5000, y: 0, width: 440, height: 900 }); pw.showInactive(); }
+    else pw.show();
+  });
+  pw.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  pw.webContents.on('will-navigate', (e) => e.preventDefault());
+  pw.webContents.on('console-message', (e, lvl, msg) => {
+    const level = e?.level ?? lvl;
+    if (level === 'error' || level === 3) log('[phone window error]', serial, String(e?.message ?? msg));
+  });
+  pw.on('closed', () => {
+    if (phoneWindows.get(serial) === pw) phoneWindows.delete(serial);
+    toWindow({ kind: 'phone_docked', serial });
+    log('phone window closed', serial);
+  });
+  wireDocking(serial, pw);
+  toWindow({ kind: 'phone_popped', serial });
+  log('phone window opened', serial);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------- phone window docking
+// Drag a phone's window onto JARVIS's left edge and let go: it docks there at full height and
+// JARVIS makes room beside it, like Windows Snap. While it is being dragged, JARVIS shows
+// where it will land. Dragging it away or closing it gives JARVIS its old size back. The
+// geometry is dock.mjs; this only reads bounds and applies them.
+let dock = null;          // { serial, width, at: {x, y}, prev: { maximized, bounds } }
+let ownMoveUntil = 0;     // our own setBounds fires move / resize events too: ignored until then
+const ours = () => Date.now() < ownMoveUntil;
+function place(w, b) {
+  if (!w || w.isDestroyed()) return;
+  ownMoveUntil = Date.now() + 700;
+  w.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
+}
+
+/** Where JARVIS is: its window, or the screen's work area when maximized. Null if hidden. */
+function jarvisArea() {
+  if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return null;
+  return win.isMaximized() ? screen.getDisplayMatching(win.getBounds()).workArea : win.getBounds();
+}
+
+function dockPhone(serial, pw, { keepPrev = false } = {}) {
+  const area = jarvisArea();
+  if (!area || !pw || pw.isDestroyed()) return;
+  const prev = keepPrev && dock ? dock.prev
+    : { maximized: win.isMaximized(), bounds: win.isMaximized() ? win.getNormalBounds() : win.getBounds() };
+  const l = dockLayout(area, pw.getBounds().width);
+  ownMoveUntil = Date.now() + 900;
+  if (win.isMaximized()) win.unmaximize();
+  place(pw, l.phone);
+  place(win, l.jarvis);
+  dock = { serial, width: l.width, at: { x: l.phone.x, y: l.phone.y }, prev };
+  log('phone window docked', serial, `${l.width}px`);
+}
+
+function undockPhone({ restore = true } = {}) {
+  if (!dock) return;
+  const { prev, serial } = dock;
+  dock = null;
+  if (restore && win && !win.isDestroyed()) {
+    ownMoveUntil = Date.now() + 900;
+    if (prev.maximized) win.maximize();
+    else if (prev.bounds) win.setBounds(prev.bounds);
+  }
+  log('phone window undocked', serial);
+}
+
+let hintOn = false;
+/** The drop zone shown in JARVIS while a phone window is dragged over its left edge. */
+function snapHint(on, width = 0) {
+  if (on === hintOn) return;
+  hintOn = on;
+  if (win && !win.isDestroyed()) win.webContents.send('jarvis:event', { kind: 'phone_snap_hint', on, width });
+}
+
+function wireDocking(serial, pw) {
+  pw.on('move', () => {
+    if (ours() || dock) return;
+    const area = jarvisArea();
+    const b = pw.getBounds();
+    snapHint(inSnapZone(b, area), area ? dockWidth(b.width, area) : 0);
+  });
+  // 'moved' comes once, when the drag ends: that is the drop.
+  pw.on('moved', () => {
+    snapHint(false);
+    if (ours()) return;
+    if (dock?.serial === serial) { if (!stillDocked(pw.getBounds(), dock.at)) undockPhone(); return; }
+    if (!dock && inSnapZone(pw.getBounds(), jarvisArea())) dockPhone(serial, pw);
+  });
+  pw.on('resized', () => {
+    if (ours() || dock?.serial !== serial || !win || win.isDestroyed()) return;
+    const p = pw.getBounds();
+    const j = win.getBounds();
+    dock.width = p.width;
+    place(win, afterPhoneResize(p, { x: dock.at.x, y: p.y, width: j.x + j.width - dock.at.x, height: p.height }));
+  });
+  pw.on('closed', () => {
+    snapHint(false);
+    if (dock?.serial === serial) undockPhone();
+  });
+}
+
+/** JARVIS moved, resized or maximized by hand while a phone is docked: keep them together. */
+function wireDockFollow() {
+  const follow = () => {
+    if (ours() || !dock) return;
+    const pw = phoneWindows.get(dock.serial);
+    if (!pw || pw.isDestroyed()) { dock = null; return; }
+    const b = followLayout(win.getBounds(), dock.width);
+    place(pw, b);
+    dock.at = { x: b.x, y: b.y };
+  };
+  win.on('moved', follow);
+  win.on('resized', follow);
+  win.on('maximize', () => {
+    if (ours() || !dock) return;
+    const pw = phoneWindows.get(dock.serial);
+    if (pw && !pw.isDestroyed()) dockPhone(dock.serial, pw, { keepPrev: true });
+  });
+}
+
+/** The right-click menu's Cut / Copy / Paste, on whichever window asked - as Ctrl+X / C / V. */
+ipcMain.handle('jarvis:edit', (e, cmd) => {
+  const wc = e.sender;
+  if (cmd === 'cut') wc.cut();
+  else if (cmd === 'copy') wc.copy();
+  else if (cmd === 'paste') wc.paste();
+  else return false;
+  return true;
+});
+
+/** open | focus | close | dock (close it and bring JARVIS forward). */
+ipcMain.handle('jarvis:phoneWindow', (_e, serial, action) => {
+  if (!isSerial(serial)) return { ok: false, error: 'Not a device serial.' };
+  const pw = phoneWindows.get(serial);
+  const alive = pw && !pw.isDestroyed();
+  if (action === 'open') return openPhoneWindow(serial);
+  if (action === 'focus') { if (alive) { pw.show(); pw.focus(); } return { ok: !!alive }; }
+  if (action === 'close' || action === 'dock') {
+    if (alive) pw.close();
+    if (action === 'dock' && win && !win.isDestroyed()) { win.show(); win.focus(); }
+    return { ok: true };
+  }
+  return { ok: false, error: 'Unknown action.' };
+});
+
 ipcMain.handle('jarvis:devices', async () => {
-  try { return { ok: true, list: await listDevices() }; }
-  catch (e) { log('listDevices failed', e?.message || e); return { ok: false, error: String(e?.message || e), list: [] }; }
+  try {
+    const list = await listDevices();
+    return { ok: true, list: list.map((d) => ({ ...d, popped: phoneWindows.has(d.serial) })) };
+  } catch (e) { log('listDevices failed', e?.message || e); return { ok: false, error: String(e?.message || e), list: [] }; }
 });
 ipcMain.handle('jarvis:flutterApps', () => {
   const { cwd } = loadConfig();
@@ -1204,6 +1467,31 @@ ipcMain.handle('jarvis:gitCommit', async (_e, key, message) => {
     return r;
   } catch (e) { log('gitCommit failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
 });
+// GitHub Desktop's Undo: the newest commit, and taking it back with its changes kept staged.
+ipcMain.handle('jarvis:gitLastCommit', async (_e, key) => {
+  try { return await lastCommit(loadConfig().cwd, key); }
+  catch (e) { log('gitLastCommit failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle('jarvis:gitUndoCommit', async (_e, key, sha) => {
+  try {
+    const r = await undoLastCommit(loadConfig().cwd, key, { sha });
+    if (r.ok) log('git commit undone', key, r.undone.sha, 'on', r.undone.branch);
+    return r;
+  } catch (e) { log('gitUndoCommit failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
+// Discard all changes: destructive, so it runs only once the window has confirmed, and a
+// copy of every changed file goes to the Recycle Bin first.
+ipcMain.handle('jarvis:gitDiscardAll', async (_e, key, confirmed, expect) => {
+  try {
+    const r = await discardAll(loadConfig().cwd, key, {
+      confirmed: confirmed === true,
+      expect: Array.isArray(expect) ? expect : null,
+      trash: (p) => shell.trashItem(p),
+    });
+    if (r.discarded) log('git discarded all changes', key, `(${r.discarded} change(s))`, r.backup ? `copy in Recycle Bin: ${r.backup}` : '');
+    return r;
+  } catch (e) { log('gitDiscardAll failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+});
 
 // The test goes by whichever route is configured, so what it proves is the route you will
 // actually be relying on - not just that adb can still see a phone.
@@ -1230,14 +1518,23 @@ ipcMain.handle('jarvis:phoneTest', async (_e, serial) => {
 
 // ---------------------------------------------------------------- IPC: web apps (ASP.NET)
 ipcMain.handle('jarvis:webApps', () => listWebApps(loadConfig().cwd));
-ipcMain.handle('jarvis:webRun', (_e, key, watch) => {
-  try { return { ok: true, run: webRun(loadConfig().cwd, key, { watch: watch !== false }, send) }; }
-  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+ipcMain.handle('jarvis:webRun', async (_e, key, watch) => {
+  try {
+    const run = await webRun(loadConfig().cwd, key, { watch: watch !== false }, send);
+    log('web app started', key, watch !== false ? '(dotnet watch)' : '(dotnet run)');
+    return { ok: true, run };
+  } catch (e) {
+    log('web app refused', key, e?.message || e);
+    return { ok: false, code: e?.code || null, error: String(e?.message || e) };
+  }
 });
 ipcMain.handle('jarvis:webStop', (_e, key) => webStop(key));
+ipcMain.handle('jarvis:webStopAll', () => webStopAll());
 /** Open a running local site in the normal browser. Nothing but this machine's own ports. */
 ipcMain.handle('jarvis:openUrl', (_e, url) => {
   if (typeof url !== 'string' || !LOCAL_URL.test(url)) { log('refused to open', url); return false; }
+  // A screenshot run must not throw a browser window onto the screen of whoever is working.
+  if (process.env.JARVIS_CAPTURE) { log('capture: would open', url); return true; }
   shell.openExternal(url);
   return true;
 });

@@ -33,6 +33,9 @@
     tools: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/>',
     repo: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9a7 7 0 0 1-7 7H8"/>',
     branch: '<circle cx="7" cy="5" r="2.2"/><circle cx="7" cy="19" r="2.2"/><circle cx="17" cy="9" r="2.2"/><path d="M7 7.2v9.6M17 11.2a5 5 0 0 1-5 5H9.2"/>',
+    // The GitHub mark (Octicons mark-github, MIT), the shape of GitHub Desktop's logo, drawn
+    // solid in currentColor so it takes the same grey / accent as the stroked icons around it.
+    github: '<g transform="translate(2.4 2.4) scale(1.2)"><path fill="currentColor" stroke="none" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></g>',
     focus: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
     bell: '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
@@ -86,6 +89,25 @@
   };
   JV.fillIcons = (root = document) => {
     root.querySelectorAll('i[data-icon]').forEach((i) => { i.replaceWith(JV.icon(i.dataset.icon)); });
+  };
+
+  // A reload button shows its work: its refresh icon turns (.reloading) for as long as the
+  // reload runs, and for at least one full turn, so a reload that answers in 50 ms is still
+  // seen to have happened. Overlapping clicks share one spin.
+  JV.spinWhile = async (btn, work) => {
+    if (!btn) return work();
+    const started = Date.now();
+    btn._spins = (btn._spins || 0) + 1;
+    btn.classList.add('reloading');
+    btn.setAttribute('aria-busy', 'true');
+    try {
+      return await work();
+    } finally {
+      const left = 900 - (Date.now() - started);
+      if (left > 0) await new Promise((r) => setTimeout(r, left));
+      btn._spins -= 1;
+      if (btn._spins <= 0) { btn.classList.remove('reloading'); btn.removeAttribute('aria-busy'); }
+    }
   };
 
   // ------------------------------------------------------------- formatting
@@ -322,4 +344,74 @@
     host.appendChild(t);
     if (sub != null) host.appendChild(JV.el('div', 'g-sub', sub));
   };
+
+  // ------------------------------------------------------------- right-click: Cut / Copy / Paste
+  // One menu for the whole app - JARVIS and a phone's own window both load this file - over
+  // selected text or any text field. Nothing appears where there is nothing to cut, copy or
+  // paste. An element with its own right-click menu (the changed-files list on the GitHub
+  // Desktop page) cancels the event first and keeps its menu.
+  //
+  // The work is done by the main process on this page (webContents.cut / copy / paste), so it
+  // behaves exactly like Ctrl+X / C / V. The menu never takes focus or the selection: its
+  // buttons act on mousedown-safe clicks and the field stays focused.
+  (() => {
+    let menu = null;
+    const TEXT_INPUTS = /^(text|search|email|url|tel|password|number)$/i;
+    const fieldOf = (n) => {
+      const t = n && n.closest ? n.closest('input, textarea, [contenteditable=""], [contenteditable="true"]') : null;
+      if (!t) return null;
+      if (t.tagName === 'INPUT' && !TEXT_INPUTS.test(t.type || 'text')) return null;
+      return t;
+    };
+    const close = () => { if (menu) { menu.remove(); menu = null; } };
+
+    function item(label, keys, enabled, cmd) {
+      const b = JV.el('button', 'ctx-item');
+      b.type = 'button';
+      b.setAttribute('role', 'menuitem');
+      b.appendChild(JV.el('span', null, label));
+      b.appendChild(JV.el('kbd', null, keys));
+      b.disabled = !enabled;
+      b.addEventListener('mousedown', (e) => e.preventDefault()); // keep the focus and selection where they are
+      b.onclick = () => { close(); window.jarvis.edit?.(cmd); };
+      return b;
+    }
+
+    document.addEventListener('contextmenu', (e) => {
+      close();
+      if (e.defaultPrevented) return;
+      const field = fieldOf(e.target);
+      let selected;
+      if (field && field.tagName !== 'INPUT' && field.tagName !== 'TEXTAREA') selected = !!String(window.getSelection() || '').length;
+      else if (field) {
+        let start = null;
+        let end = null;
+        try { start = field.selectionStart; end = field.selectionEnd; } catch { /* this input type has no selection API */ }
+        selected = start == null ? true : end > start;
+      } else selected = !!String(window.getSelection() || '').trim().length;
+      if (!field && !selected) return;   // nothing here to cut, copy or paste
+      e.preventDefault();
+
+      const writable = !!field && !field.disabled && !field.readOnly;
+      const secret = field && field.tagName === 'INPUT' && /^password$/i.test(field.type);
+      if (field && document.activeElement !== field) field.focus();
+
+      menu = JV.el('div', 'ctx-menu pop');
+      menu.setAttribute('role', 'menu');
+      menu.appendChild(item('Cut', 'Ctrl+X', writable && selected && !secret, 'cut'));
+      menu.appendChild(item('Copy', 'Ctrl+C', selected && !secret, 'copy'));
+      menu.appendChild(item('Paste', 'Ctrl+V', writable, 'paste'));
+      document.body.appendChild(menu);
+      // At the pointer, kept on screen.
+      const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 6);
+      const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 6);
+      menu.style.left = `${Math.max(6, x)}px`;
+      menu.style.top = `${Math.max(6, y)}px`;
+    });
+    document.addEventListener('mousedown', (e) => { if (menu && !menu.contains(e.target)) close(); }, true);
+    document.addEventListener('keydown', (e) => { if (menu && e.key === 'Escape') { e.preventDefault(); close(); } }, true);
+    document.addEventListener('scroll', close, true);
+    window.addEventListener('blur', close);
+    window.addEventListener('resize', close);
+  })();
 })();

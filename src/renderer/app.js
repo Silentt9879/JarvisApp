@@ -39,21 +39,18 @@
       case 'thinking': state.thinking = e.on; break;
       case 'tool_use':
         if (!e.parent) state.toolCalls++;
+        // state.agentActive (who is working now) is kept by crew.js from the agent floor's
+        // model: a background agent's Agent call returns at once, but it works on until its
+        // task notification, and a counter here would drop it the moment it was launched.
         if (e.agent && !e.parent) {
           agentIds.set(e.id, e.agent);
           state.agentRuns++;
-          state.agentActive.set(e.agent, (state.agentActive.get(e.agent) || 0) + 1);
           state.agentUse.set(e.agent, (state.agentUse.get(e.agent) || 0) + 1);
         }
         break;
       case 'tool_result':
         if (!e.parent && e.isError) state.toolErrors++;
-        if (agentIds.has(e.id)) {
-          const name = agentIds.get(e.id);
-          agentIds.delete(e.id);
-          const left = (state.agentActive.get(name) || 1) - 1;
-          if (left > 0) state.agentActive.set(name, left); else state.agentActive.delete(name);
-        }
+        agentIds.delete(e.id);
         break;
       case 'permission':
       case 'question': state.pendingPrompts++; break;
@@ -91,7 +88,7 @@
       case 'tool_use':
         if (e.agent && !e.parent) {
           const info = JV.agentInfo({ name: e.agent, description: (state.agentList.find((a) => a.name === e.agent) || {}).description || '' });
-          JV.feed({ level: 'live', title: `${info.code} dispatched`, sub: e.agentTask || info.role, action: 'agents' });
+          JV.feed({ level: 'live', title: `${JV.minionName ? `${JV.minionName(e.agent)} (${info.code})` : info.code} dispatched`, sub: e.agentTask || info.role, action: 'agents' });
           JV.emit('agents_changed');
           renderMini();
         }
@@ -243,7 +240,7 @@
     if (q.length < 2) { sRes.hidden = true; return; }
     const ql = q.toLowerCase();
     const groups = [];
-    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['Source Control', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Agents', 'agents'], ['Workspace', 'workspace'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
+    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['GitHub Desktop', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Agents', 'agents'], ['Workspace', 'workspace'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
       .filter(([n]) => n.toLowerCase().includes(ql)).map(([n, v]) => ({ title: n, sub: 'Go to view', run: () => JV.show(v) }));
     if (views.length) groups.push(['Views', views]);
     const sessions = state.sessions.filter((s) => s.title.toLowerCase().includes(ql)).slice(0, 6).map((s) => ({ title: s.title, sub: JV.ago(s.lastModified), run: () => JV.chat.resumeSession(s.id, s.title) }));
