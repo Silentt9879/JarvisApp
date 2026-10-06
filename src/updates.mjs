@@ -7,7 +7,9 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-export const JARVIS_REPO = 'Silentt9879/JarvisApp';
+// Only the installers live here, in a public repo, so the app can download them without a login.
+// The source code stays in Silentt9879/JarvisApp (private).
+export const JARVIS_REPO = 'Silentt9879/JarvisReleases';
 export const VSCODE_ID = 'Microsoft.VisualStudioCode';
 export const CLAUDE_PKG = '@anthropic-ai/claude-code';
 // The installer name electron-builder gives the release (see "artifactName" in package.json).
