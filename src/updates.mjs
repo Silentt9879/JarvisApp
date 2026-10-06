@@ -355,5 +355,5 @@ export async function jarvisUpdate({ currentVersion, tempDir, pid, logPath, onPr
   }), { spawnImpl });
   // Only a confirmed start lets JARVIS quit; otherwise it stays open and says what happened.
   if (!started.ok) return { ok: false, error: `The update was downloaded, but it could not be started (${started.error}). JARVIS is still open. Press Update again.` };
-  return { ok: true, version: release.version };
+  return { ok: true, version: release.version, notes: release.notes };
 }

@@ -28,6 +28,8 @@
       <button id="navFiles" data-view="files"><i data-icon="code"></i><span>Files</span></button>
       <button id="navMemory" data-view="memory"><i data-icon="memory"></i><span>Memory</span><em class="nbadge" id="nbMemory"></em></button>
       <button id="navNotes" data-view="notes"><i data-icon="edit"></i><span>Notes</span><em class="nbadge" id="nbNotes"></em></button>
+      <button id="navActivity" data-view="activity"><i data-icon="clock"></i><span>Activity</span></button>
+      <button id="navAutomations" data-view="automations"><i data-icon="play"></i><span>Automations</span></button>
 
       <button class="nav-more" id="navMore" title="More views" aria-expanded="false"><i data-icon="chevron"></i><span>More</span></button>
       <div class="nav-group" id="navGroup">
@@ -90,6 +92,7 @@
         <div class="chat-layout">
           <aside class="chat-side">
             <button id="newSession" class="btn btn-primary btn-block"><i data-icon="plus"></i> New session</button>
+            <button id="newWindow" class="btn btn-block" type="button" title="A second chat in its own window, to put side by side with this one"><i data-icon="external"></i> Open a chat in a new window</button>
             <input id="sessionFilter" class="field" placeholder="Filter sessions…" />
             <h3>Recent <button id="refreshSessions" class="icon-btn" title="Refresh"><i data-icon="refresh"></i></button></h3>
             <ul id="sessions" class="list sessions"><li class="muted">Loading…</li></ul>
@@ -116,6 +119,7 @@
                 <div class="cbar">
                   <button class="cbtn" id="attachBtn" title="Attach files or images (you can also paste or drop them)"><i data-icon="plus"></i></button>
                   <button class="cbtn" id="slashBtn" title="Commands and skills"><i data-icon="slash"></i></button>
+                  <button class="cbtn" id="promptsBtn" title="Saved prompts" aria-label="Saved prompts"><i data-icon="spark"></i></button>
                   <span class="ctx" id="ctx" title="Context window used"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="14" class="ctx-bg"/><circle cx="18" cy="18" r="14" class="ctx-fg" id="ctxArc"/></svg><em id="ctxPct">–</em></span>
                   <span class="timer" id="sessTimer" title="Session time"><i data-icon="clock"></i><em>0m</em></span>
                   <button class="cbtn toggle" id="thinkBtn" title="Extended thinking"><i data-icon="bulb"></i><span class="tdot"></span></button>
@@ -143,6 +147,10 @@
                   <div class="seg" id="effortSeg"></div>
                   <div class="pop-note" id="effortNote"></div>
                 </div>
+                <div class="pop menu prompts-pop" id="promptsPop" hidden>
+                  <input id="promptsFilter" class="field" placeholder="Find a saved prompt…" autocomplete="off" aria-label="Find a saved prompt" />
+                  <ul id="promptsList" class="prompts-list"></ul>
+                </div>
                 <div class="pop menu mode-pop" id="modePop" hidden>
                   <ul id="modeList"></ul>
                 </div>
@@ -155,7 +163,14 @@
       </section>
 
       <!-- ========================================================== OVERVIEW -->
+      <!-- ========================================================== ACTIVITY (what JARVIS did; built by activity.js) -->
+      <section class="view" id="view-activity"></section>
+
+      <!-- ========================================================== AUTOMATIONS (saved prompts and routines; built by automations.js) -->
+      <section class="view" id="view-automations"></section>
+
       <section class="view" id="view-command">
+        <div class="usage-card" id="usageCard" hidden></div>
         <div class="cc-grid">
           <div class="p-orb" id="orbPanel">
             <canvas id="orb"></canvas>
@@ -203,21 +218,54 @@
 
       <!-- ========================================================== AI CORE -->
       <section class="view" id="view-core">
-        <div class="page">
-          <div class="page-head"><h2>AI Core</h2><p>The live Claude Code session behind JARVIS.</p></div>
-          <div class="core-grid">
-            <div class="hud-panel"><h3>Session</h3><dl class="kv" id="coreSession"></dl></div>
-            <div class="hud-panel core-ctx">
-              <h3>Context window <button class="panel-link inline" id="ctxPrecise">Precise count</button></h3>
-              <div class="ctx-big">
-                <div class="gauge big" id="gCtx"></div>
-                <div class="ctx-legend" id="ctxLegend"></div>
-              </div>
-              <div class="ctx-bar" id="ctxBar"></div>
+        <div class="nt-page">
+          <header class="nt-head">
+            <div class="nt-icon" aria-hidden="true"><i data-icon="core"></i></div>
+            <h1 class="nt-title">AI Core</h1>
+            <p class="nt-sub">The Claude Code session behind JARVIS: your plan's limits, the context it is holding, and what it has been doing.</p>
+          </header>
+
+          <section class="nt-block" id="usageBlock" aria-labelledby="usageTitle">
+            <div class="nt-block-head">
+              <h2 id="usageTitle">Usage</h2>
+              <span class="nt-pill" id="usagePlan" hidden></span>
+              <button class="nt-btn" id="usageRefresh" type="button" title="Ask Claude Code for the latest figures. This costs nothing.">Refresh</button>
             </div>
-            <div class="hud-panel"><h3>Activity</h3><dl class="kv" id="coreStats"></dl></div>
-            <div class="hud-panel"><h3>Memory files in context</h3><ul class="rows" id="ctxMemory"></ul></div>
-          </div>
+            <p class="nt-hint">How much of your plan's session and weekly allowance you have used, and when it resets. Refreshing costs nothing.</p>
+            <div class="nt-limits" id="usageLimits"><p class="nt-hint">Loading…</p></div>
+            <div class="nt-callout" id="usageWhy" hidden></div>
+            <div class="nt-foot">
+              <small id="usageUpdated"></small>
+              <small id="usageOverage"></small>
+            </div>
+          </section>
+
+          <section class="nt-block">
+            <div class="nt-block-head"><h2>This session</h2></div>
+            <dl class="nt-props" id="coreSession"></dl>
+          </section>
+
+          <section class="nt-block">
+            <div class="nt-block-head">
+              <h2>Context window</h2>
+              <button class="nt-btn" id="ctxPrecise" type="button">Precise count</button>
+            </div>
+            <div class="nt-ctx">
+              <div class="gauge big" id="gCtx"></div>
+              <div class="ctx-legend" id="ctxLegend"></div>
+            </div>
+            <div class="ctx-bar" id="ctxBar"></div>
+          </section>
+
+          <section class="nt-block">
+            <div class="nt-block-head"><h2>Activity</h2></div>
+            <dl class="nt-props" id="coreStats"></dl>
+          </section>
+
+          <section class="nt-block">
+            <div class="nt-block-head"><h2>Memory files in context</h2></div>
+            <ul class="nt-list" id="ctxMemory"></ul>
+          </section>
         </div>
       </section>
 
@@ -575,7 +623,17 @@
 <div class="modal-veil" id="settingsVeil" hidden>
   <div class="modal hud-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <h3 id="settingsTitle">Settings <button class="icon-btn" id="settingsClose" title="Close (Esc)" aria-label="Close settings"><i data-icon="x"></i></button></h3>
-    <div class="modal-body">
+    <div class="set-toolbar">
+      <div class="set-tabs" role="tablist" aria-label="Settings sections">
+        <button role="tab" data-tab="general" aria-selected="true">General</button>
+        <button role="tab" data-tab="phone" aria-selected="false">Phone &amp; Telegram</button>
+        <button role="tab" data-tab="voice" aria-selected="false">Voice &amp; phone app</button>
+        <button role="tab" data-tab="account" aria-selected="false">Account &amp; usage</button>
+        <button role="tab" data-tab="about" aria-selected="false">About</button>
+      </div>
+      <input class="field set-search" id="setSearch" type="search" placeholder="Search settings…" aria-label="Search settings" autocomplete="off" />
+    </div>
+    <div class="modal-body" id="settingsBody">
 
       <section class="set-sec" id="updSec">
         <div class="upd-head">
@@ -798,6 +856,65 @@
         </div>
       </section>
 
+      <section class="set-sec" data-title="Text and contrast">
+        <div class="pop-sec">Text and contrast</div>
+        <div class="seg" id="zoomSeg" role="radiogroup" aria-label="Text size">
+          <button type="button" data-zoom="0.9" role="radio">Smaller</button>
+          <button type="button" data-zoom="1" role="radio">Standard</button>
+          <button type="button" data-zoom="1.15" role="radio">Larger</button>
+          <button type="button" data-zoom="1.3" role="radio">Largest</button>
+        </div>
+        <label class="check"><input type="checkbox" id="prefContrast" /> High contrast: stronger text and borders, easier to read in bright light</label>
+      </section>
+
+      <section class="set-sec" data-title="Voice">
+        <div class="pop-sec">Voice</div>
+        <label class="check"><input type="checkbox" id="prefSpeak" /> Read replies aloud, with the voices Windows already has. Nothing is sent anywhere.</label>
+        <div class="field-row">
+          <span>Voice</span>
+          <select class="field" id="prefVoice" aria-label="Voice for replies"></select>
+          <button class="btn small" id="prefVoiceTest" type="button">Test</button>
+        </div>
+        <label class="check"><input type="checkbox" id="prefWake" /> Say “JARVIS” to start: hands-free, listening on this PC only, and only while this is on</label>
+        <p class="set-note" id="wakeNote">The first time, JARVIS downloads the speech model once. Sound is cut into short pieces and not kept.</p>
+      </section>
+
+      <section class="set-sec" data-title="Phone web app">
+        <div class="pop-sec">Phone web app</div>
+        <label class="check"><input type="checkbox" id="compOn" /> Open JARVIS on my phone: read the chat, send messages and answer approvals from a page on your Wi-Fi</label>
+        <div class="field-row">
+          <span>Port</span>
+          <input class="field" id="compPort" type="number" min="1024" max="65535" value="8787" aria-label="Port for the phone web app" />
+          <button class="btn small" id="compApply" type="button">Apply</button>
+        </div>
+        <div class="comp-addr" id="compAddr" hidden>
+          <small>Open this on your phone, on the same Wi-Fi:</small>
+          <code id="compUrl"></code>
+          <div class="wiz-actions">
+            <button class="btn small" id="compReveal" type="button">Show the access code</button>
+            <button class="btn small" id="compNew" type="button">Make a new code</button>
+          </div>
+          <div class="comp-code" id="compCodeBox" hidden>
+            <code id="compCode"></code>
+            <button class="btn small" id="compCopy" type="button">Copy</button>
+          </div>
+        </div>
+        <p class="set-warn">Anyone with the address and the access code can read the chat and answer approvals. Use it on your own network, or through Tailscale, avoid public Wi-Fi, and turn it off when you do not need it.</p>
+        <p class="set-note" id="compStatus"></p>
+      </section>
+
+      <section class="set-sec" data-title="Usage and budget">
+        <div class="pop-sec">Usage and budget</div>
+        <p class="set-note" id="budgetNow">Loading…</p>
+        <div class="field-row">
+          <span>Daily limit (dollars)</span>
+          <input class="field" id="budgetIn" type="number" min="0" max="1000" step="0.5" value="0" aria-label="Daily limit in dollars" />
+          <button class="btn small" id="budgetSave" type="button">Save</button>
+        </div>
+        <p class="set-note" id="budgetNote">0 means no limit. Once a day, JARVIS tells you when the estimate passes the limit, here and on Telegram.</p>
+        <p class="set-note">These are estimates from Claude Code's own cost figure. On a subscription they show what the same work would cost at API prices, not a bill.</p>
+      </section>
+
       <section class="set-sec">
         <div class="pop-sec">About</div>
         <dl class="kv" id="settingsInfo"></dl>
@@ -821,6 +938,16 @@
 <script src="phone-screen.js"></script>
 <script src="devices.js"></script>
 <script src="updates.js"></script>
+<script src="dialogs.js"></script>
+<script src="welcome.js"></script>
+<script src="health.js"></script>
+<script src="activity.js"></script>
+<script src="wakeword-core.js"></script>
+<script src="automations.js"></script>
+<script src="voice.js"></script>
+<script src="settings-extra.js"></script>
+<script src="projects.js"></script>
+<script src="usage-page.js"></script>
 <script src="webapps.js"></script>
 <script src="clickup.js"></script>
 <script src="files.js"></script>

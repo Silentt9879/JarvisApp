@@ -1,7 +1,8 @@
 // JARVIS - Electron main process.
 // Owns the window and the one live JarvisSession; the window talks to it only
 // through the narrow IPC surface exposed in preload.cjs.
-import { app, BrowserWindow, ipcMain, shell, Menu, dialog, net, nativeTheme, Tray, powerSaveBlocker, desktopCapturer, screen, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Menu, dialog, net, nativeTheme, Tray, powerSaveBlocker, desktopCapturer, screen, safeStorage, Notification } from 'electron';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -28,6 +29,7 @@ import { createTranscriber } from './voice.mjs';
 import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
 // The window's modes (no bypassPermissions), shared with the chat's starting mode.
 import { WINDOW_MODES } from './permission-mode.mjs';
+import { createFeatures } from './features.mjs';
 import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis } from './updates.mjs';
 import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
@@ -59,6 +61,8 @@ if (process.platform === 'win32' && typeof app.setToastActivatorCLSID === 'funct
 const DEFAULT_CWD = 'C:\\Users\\bantu\\Downloads\\BantuApps';
 
 // ---------------------------------------------------------------- config + log
+// A test run can use a throwaway data folder (JARVIS_USERDATA), so it never touches the real settings.
+if (process.env.JARVIS_USERDATA) app.setPath('userData', process.env.JARVIS_USERDATA);
 const userDir = app.getPath('userData');
 const configPath = path.join(userDir, 'config.json');
 const logPath = path.join(userDir, 'jarvis.log');
@@ -70,9 +74,10 @@ function loadConfig() {
   if (process.env.JARVIS_CAPTURE && process.env.JARVIS_CAPTURE_CWD) {
     return { cwd: process.env.JARVIS_CAPTURE_CWD, phone: {} };
   }
+  // The whole file, so every setting is visible (budget, phone web app, update notes, ...).
   try {
     const c = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    return { cwd: c.cwd || DEFAULT_CWD, phone: c.phone || {} };
+    return { ...c, cwd: c.cwd || DEFAULT_CWD, phone: c.phone || {} };
   } catch {
     return { cwd: DEFAULT_CWD, phone: {} };
   }
@@ -231,7 +236,7 @@ const remote = createRemote({
     presence.set(asleep ? 'asleep' : 'awake');
   },
   interrupt: () => { toWindow({ kind: 'remote_stop' }); ensureSession().interrupt(); },
-  respond: (id, decision, verdict) => { toWindow({ kind: 'prompt_remote', id, verdict }); ensureSession().respond(id, decision); },
+  respond: (id, decision, verdict) => { toWindow({ kind: 'prompt_remote', id, verdict }); features.noteDecision(id, decision, 'Telegram'); ensureSession().respond(id, decision); },
   workspace: () => loadConfig().cwd,
   screens: captureScreens,
   diff: (query) => diffReport(loadConfig().cwd, query),
@@ -288,6 +293,29 @@ const inInbox = (p) => {
 
 // Voice notes are transcribed here, with a model kept beside the config (voice.mjs).
 const voice = createTranscriber({ cacheDir: path.join(userDir, 'models'), log });
+
+// The features of 2026-10-07 (activity, usage, routines, the phone web app, ...). See features.mjs.
+// Created once, before any window; their IPC is registered now so the first window can use it.
+const features = createFeatures({
+  app, ipcMain, shell, dialog, Notification, safeStorage, userDir, srcDir: SRC, configPath,
+  firstRun: !fs.existsSync(configPath),
+  log, loadConfig, saveConfig, query,
+  claudeExe: () => claudeExe(),
+  remote, voice,
+  getWin: () => win,
+  isCapture: !!process.env.JARVIS_CAPTURE,
+  showWindow: () => showWindow(),
+  showView: (view) => toWindow({ kind: 'navigate', view }),
+  respondAny: (id, decision) => respondAny(id, decision),
+  interruptAll: () => interruptAll(),
+  submitMessage: (payload) => submitMessage(payload, null),
+  startSignIn: () => startSignInWindow(),
+  authState: async () => noteAccount(await authStatus(claudeExe())),
+  githubOn: async () => !!(await resolveToken(tokenStore)).source,
+  telegramOn: () => { const t = phoneConfig().telegram || {}; return !!(t.token && (t.chatId || t.groupId)); },
+  updateInfo: () => lastUpdateInfo,
+});
+features.registerIpc();
 
 /** A JPEG of every screen, at its real resolution (capped at 2560 wide for Telegram). */
 async function captureScreens() {
@@ -420,6 +448,7 @@ ipcMain.handle('jarvis:setStartup', (_e, on) => {
 
 function send(evt) {
   toWindow(evt);
+  features.onEvent(evt);
   let claimed = false;
   try { claimed = remote.event(evt); } catch (e) { log('remote:', e?.message || e); }
   try { phone.event(evt, { claimed }); } catch (e) { log('phone watcher:', e?.message || e); }
@@ -530,6 +559,14 @@ function createWindow() {
       win.webContents.once('did-finish-load', () => setTimeout(() => {
         win.webContents.executeJavaScript(`window.__jarvisAutoprompt && window.__jarvisAutoprompt(${JSON.stringify(process.env.JARVIS_AUTOPROMPT)});`);
       }, 3500));
+    }
+    // JARVIS_CAPTURE_SCRIPT=<file.js> runs that script in the window before the screenshot - for
+    // showing a dialog or Settings on a tab. Capture runs only, like the other aids above.
+    if (process.env.JARVIS_CAPTURE_SCRIPT && fs.existsSync(process.env.JARVIS_CAPTURE_SCRIPT)) {
+      const scriptText = fs.readFileSync(process.env.JARVIS_CAPTURE_SCRIPT, 'utf8');
+      win.webContents.once('did-finish-load', () => setTimeout(() => {
+        win.webContents.executeJavaScript(scriptText).catch((e) => log('capture script failed:', e?.message || e));
+      }, Number(process.env.JARVIS_CAPTURE_SCRIPT_AT || 4000)));
     }
     // JARVIS_DEMO=crew plays a scripted set of agent events into the Agents floor, so a capture
     // can show minions at work without a real (paid) agent run. Capture runs only.
@@ -708,6 +745,94 @@ function ensureSession() {
   return session;
 }
 
+// Side-by-side chats: each extra chat window (File > New chat window, or the button in the chat)
+// has its own session. The main window keeps `session`, which Telegram and the phone web app use.
+const paneSessions = new Map(); // window id -> that window's session
+let paneCount = 0;
+/** The chat session for the window that sent an IPC call (the main one when unknown). */
+function sessionFor(e) {
+  const wc = e?.sender;
+  if (!wc || !win || wc.id === win.webContents.id) return ensureSession();
+  let s = paneSessions.get(wc.id);
+  if (!s) {
+    const { cwd } = loadConfig();
+    s = new JarvisSession({
+      cwd,
+      exe: claudeExe(),
+      emit: (evt) => {
+        if (!wc.isDestroyed()) wc.send('jarvis:event', evt);
+        features.onEvent(evt, { pane: true });
+      },
+      log,
+    });
+    paneSessions.set(wc.id, s);
+    wc.once('destroyed', () => {
+      try { s.close(); } catch { /* already gone */ }
+      paneSessions.delete(wc.id);
+    });
+  }
+  return s;
+}
+/** Answer a permission request, whichever session is waiting on it. */
+function respondAny(id, decision) {
+  if (session?.pending?.has(id)) return session.respond(id, decision);
+  for (const s of paneSessions.values()) if (s.pending?.has(id)) return s.respond(id, decision);
+  return undefined;
+}
+function interruptAll() {
+  session?.interrupt();
+  for (const s of paneSessions.values()) s.interrupt();
+}
+/**
+ * A message to the chat, from the window, Telegram or the phone web app. Power-down words and
+ * the sign-in check are handled first; every message is noted with where it came from.
+ */
+function submitMessage(payload, e = null) {
+  const atts = Array.isArray(payload?.attachments) ? payload.attachments : [];
+  const r = signedOut ? { ok: false, error: SIGNED_OUT } : sessionFor(e).send(payload);
+  features.noteUser(payload?.text, payload?.origin || 'desk');
+  // Every message is noted with where it came from, so its reply can go back there.
+  try {
+    remote.noteSend(payload?.origin === 'telegram' ? 'telegram' : 'desk', r, { text: typeof payload?.text === 'string' ? payload.text : '', attachments: atts });
+  } catch (err) { log('remote:', err?.message || err); }
+  return r;
+}
+/** Sign-in opens its own console window, as Settings does. */
+function startSignInWindow() {
+  if (!fs.existsSync(claudeExe())) return { ok: false, error: 'Claude Code is not installed here.' };
+  if (process.env.JARVIS_CAPTURE) return { ok: true, started: true };
+  const r = startLogin(claudeExe());
+  log(r.ok ? 'sign-in window opened' : `could not open the sign-in window: ${r.error}`);
+  return r;
+}
+let lastUpdateInfo = null; // the newest JARVIS version seen by the last check, for the health page
+/** A second chat window, so two chats can sit side by side. */
+function openPane() {
+  paneCount += 1;
+  const dark = nativeTheme.shouldUseDarkColors;
+  const pw = new BrowserWindow({
+    width: 980,
+    height: 900,
+    minWidth: 380,
+    minHeight: 480,
+    title: `JARVIS - chat ${paneCount + 1}`,
+    backgroundColor: dark ? '#0d0e10' : '#f7f8f9',
+    icon: windowIcon(),
+    show: false,
+    webPreferences: {
+      preload: path.join(SRC, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: true,
+    },
+  });
+  pw.loadFile(path.join(SRC, 'renderer', 'index.html'), { query: { pane: String(paneCount) } });
+  pw.once('ready-to-show', () => pw.show());
+  return { ok: true };
+}
+ipcMain.handle('window:newChat', () => openPane());
+
 /** `claude.exe --version`, so the window can show it before the session's first reply. */
 let ccVersion = null;
 function claudeVersion() {
@@ -736,6 +861,7 @@ ipcMain.handle('updates:check', async (_e, tool) => {
   if (tool === 'jarvis') {
     const { token } = await resolveToken(tokenStore);
     return jarvisStatus(app.getVersion(), { token })
+      .then((s) => { lastUpdateInfo = s; return s; })
       .catch((e) => ({ current: app.getVersion(), available: false, needsSignIn: !!e.needsSignIn, error: e.message }));
   }
   if (tool === 'vscode') return vscodeStatus();
@@ -777,6 +903,8 @@ ipcMain.handle('updates:run', async (_e, tool) => {
     });
     if (r.ok && !r.upToDate) {
       // The updater waits for this process to exit, then installs and opens JARVIS again.
+      // The window shows these notes once JARVIS is back on the new version ("What's new").
+      saveConfig({ whatsNewPending: { version: r.version, notes: String(r.notes || '').slice(0, 4000) } });
       log(`system update to v${r.version} downloaded - JARVIS closes so it can install`);
       setTimeout(() => app.quit(), 500);
     }
@@ -841,6 +969,7 @@ ipcMain.handle('jarvis:setWorkspace', (_e, dir) => {
  */
 async function shutdownChildren() {
   try { remote.stop(); } catch { /* shutting down */ }
+  try { await features.stop(); } catch { /* shutting down */ }
   try { session?.close(); } catch { /* shutting down */ }
   try { shutdownWebApps(); } catch { /* shutting down */ }
   await Promise.race([shutdownDevices().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
@@ -898,7 +1027,7 @@ ipcMain.handle('jarvis:start', async (_e, opts) => {
     if (signedOut) { toWindow({ kind: 'status', state: 'closed' }); return { ok: false, error: SIGNED_OUT }; }
   }
   remote.sessionStarted();
-  ensureSession().start(opts || {});
+  sessionFor(_e).start(opts || {});
   return true;
 });
 /**
@@ -941,24 +1070,19 @@ ipcMain.handle('jarvis:send', (_e, payload) => {
     powerDown('desk');
     return { ok: true };
   }
-  const r = signedOut ? { ok: false, error: SIGNED_OUT } : ensureSession().send(payload);
-  // Every message is noted with where it came from, so its reply can go back there.
-  try {
-    remote.noteSend(payload?.origin === 'telegram' ? 'telegram' : 'desk', r, { text: typeof payload?.text === 'string' ? payload.text : '', attachments: atts });
-  } catch (e) { log('remote:', e?.message || e); }
-  return r;
+  return submitMessage(payload, _e);
 });
-ipcMain.handle('jarvis:interrupt', () => ensureSession().interrupt());
-ipcMain.handle('jarvis:respond', (_e, id, decision) => { ensureSession().respond(id, decision); return true; });
-ipcMain.handle('jarvis:setModel', (_e, model) => ensureSession().setModel(model));
+ipcMain.handle('jarvis:interrupt', (_e) => sessionFor(_e).interrupt());
+ipcMain.handle('jarvis:respond', (_e, id, decision) => { features.noteDecision(id, decision, 'desk'); sessionFor(_e).respond(id, decision); return true; });
+ipcMain.handle('jarvis:setModel', (_e, model) => sessionFor(_e).setModel(model));
 ipcMain.handle('jarvis:setMode', (_e, mode) => {
   // Deliberately no bypass: the window only offers modes that still check before acting.
   if (!WINDOW_MODES.includes(mode)) return false;
-  return ensureSession().setPermissionMode(mode);
+  return sessionFor(_e).setPermissionMode(mode);
 });
-ipcMain.handle('jarvis:setEffort', (_e, level) => ensureSession().setEffort(level));
-ipcMain.handle('jarvis:setThinking', (_e, on) => ensureSession().setThinking(on));
-ipcMain.handle('jarvis:context', (_e, detail) => ensureSession().refreshContext(detail === 'full' ? 'full' : 'summary'));
+ipcMain.handle('jarvis:setEffort', (_e, level) => sessionFor(_e).setEffort(level));
+ipcMain.handle('jarvis:setThinking', (_e, on) => sessionFor(_e).setThinking(on));
+ipcMain.handle('jarvis:context', (_e, detail) => sessionFor(_e).refreshContext(detail === 'full' ? 'full' : 'summary'));
 ipcMain.handle('jarvis:sessions', async () => {
   try { return await listRecent(loadConfig().cwd); }
   catch (e) { log('listSessions failed', e?.message || e); return []; }
@@ -1005,7 +1129,7 @@ ipcMain.handle('jarvis:renameSession', async (_e, id, title) => {
 /** Undo the file changes made since a user message. dryRun lists them without touching anything. */
 ipcMain.handle('jarvis:rewind', async (_e, uuid, dryRun) => {
   if (!isSessionId(uuid)) return { canRewind: false, error: 'That message has no id to rewind to.' };
-  const r = await ensureSession().rewindFiles(uuid, dryRun !== false);
+  const r = await sessionFor(_e).rewindFiles(uuid, dryRun !== false);
   if (dryRun === false) log('rewind', uuid, JSON.stringify({ ok: r.canRewind, error: r.error || null, skippedLinks: r.skippedLinks || 0 }));
   return r;
 });
@@ -1877,6 +2001,8 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
     createTray();
     // Idle until remote control is switched on; then it listens. See remote.mjs.
     remote.start();
+    // Routines' timer and the phone web app (if it is switched on). See features.mjs.
+    features.start().catch((e) => log('features:', e?.message || e));
     syncBackground();
     if (remote.ready) presence.set('awake');
     // Restarted by a system update (the updater passes --updated): say so in the chat, so

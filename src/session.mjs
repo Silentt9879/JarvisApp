@@ -602,6 +602,11 @@ export class JarvisSession {
         return;
       }
 
+      case 'rate_limit_event':
+        // The plan's session and weekly limits, as the request reports them. Shown on AI Core.
+        this.emit({ kind: 'rate_limit', info: m.rate_limit_info || null });
+        return;
+
       case 'result':
         // Without state events (older Claude Code), a result is the best "turn over" signal.
         if (!this.stateEvents) this.running = false;

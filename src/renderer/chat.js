@@ -781,6 +781,15 @@
     const t = (text != null ? text : input.value).trim();
     const atts = fromComposer ? ui.attachments.slice() : attachments.slice();
     if (!t && !atts.length) return;
+    // /usage opens AI Core's usage section instead of going to the model. Its figures come from
+    // Claude Code at no cost, so nothing is sent and nothing is spent.
+    if (/^\/usage\s*$/i.test(t) && !atts.length) {
+      if (fromComposer) { input.value = ''; autosize(); }
+      closeSlash();
+      JV.show('core');
+      JV.focusUsage?.();
+      return;
+    }
     // /delete runs here in the window, not in Claude Code: the app owns its session list.
     const del = /^\/delete(?:\s+([\s\S]*))?$/i.exec(t);
     if (del && !atts.length) {

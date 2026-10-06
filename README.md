@@ -17,7 +17,36 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.6.2
+## 🆕 What's new in v1.7.0
+
+**Simplified**
+
+- 🩺 **Health.** One place that says what is in order and what needs setting up, with a button for each fix. Click the status pill at the top.
+- 👋 **A walk-through for new installs.** Sign in, pick a folder and set up the phone, in plain steps. Every step can be skipped.
+- 🆕 **What's new.** After an update, JARVIS shows what changed.
+- 🗂️ **Settings in tabs, with search.**
+- 🔊 **Replies read aloud, and "JARVIS" to start.** Hands-free, listening on this PC only, and only while you have it on.
+- ⏰ **Routines.** Have JARVIS do something on its own at a set time, read-only by default, and get the result on your phone or as a notification.
+- 🪟 **Two chats side by side.** Open a chat in a new window and put it beside this one.
+- ✅ **Allow or deny from the notification.** No need to open JARVIS for an approval.
+- 📱 **A phone web app.** Read the chat and answer approvals from your phone's browser on your Wi-Fi. Off until you turn it on, and protected by an access code.
+- 💸 **Usage and budget.** The estimated cost today and this week, and an optional daily limit that tells you once when it is passed.
+- 📜 **Activity log.** Everything JARVIS did, searchable and exportable, with passwords and tokens hidden.
+- 💬 **Saved prompts.** Reuse the prompts you ask often from the chat. Blanks such as `{file}` are filled in each time.
+- 🔤 **Text size and high contrast** in Settings.
+- 📁 **New project.** Starters for Node, Python, Flutter and .NET, each with a CLAUDE.md and a git repository.
+- 📦 **A smaller installer.** The GPU runtime the speech model does not use is no longer packed (about 37 MB).
+
+**Technical**
+
+- New modules: `src/features.mjs` (the wiring), `activity.mjs`, `usage.mjs`, `prompts.mjs`, `routines.mjs` (runs through the agent SDK in plan mode unless allowed to edit), `health.mjs`, `companion.mjs` (token-protected, rate-limited, constant-time code check; only the page shell is served without the code), `projects.mjs`, `store.mjs`, and `src/companion/index.html` for the phone.
+- Renderer: `dialogs.js`, `welcome.js`, `health.js`, `activity.js`, `automations.js`, `voice.js` with `wakeword-core.js` (energy segmenter and whole-word wake word), `settings-extra.js`, `projects.js`.
+- `main.mjs`: `sessionFor(e)` gives each window its own session; `window:newChat` opens a second window; `submitMessage` is shared by the window, Telegram and the phone app; `loadConfig` returns the whole config (it had been dropping every key but two); `JARVIS_USERDATA` and `JARVIS_CAPTURE_SCRIPT` help test runs.
+- Tests: `scripts/features-test.mjs` (42 checks), `scripts/features-wiring-test.mjs` (11 checks, a real config file and the phone app over HTTP), `updates-test` (54). `npm test` runs them all except the undo test, which is skipped until the workspace policy file is back.
+
+<details>
+<summary><b>Earlier: v1.6.2</b></summary>
+
 
 **Simplified**
 
@@ -29,6 +58,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - `updates.mjs` `launchUpdater`: a process started from JARVIS dies when JARVIS quits (reproduced on this PC; a `detached` PowerShell never ran at all). The updater is now started through WMI (`Win32_Process.Create`) by a short launcher, and JARVIS quits only after Windows confirms the start. `jarvisUpdate` returns an error, and the window stays open, if the start is refused.
 - `scripts/updates-test.mjs`: 54 checks, including the WMI start and the refused-start path.
 - Reproduction: a hidden PowerShell launched from Node was gone within seconds of Node exiting; the WMI-started one ran to completion.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.6.1</b></summary>

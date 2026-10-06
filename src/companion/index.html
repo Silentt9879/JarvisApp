@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="referrer" content="no-referrer" />
+<title>JARVIS</title>
+<style>
+  :root { color-scheme: light dark; --bg:#0d0e10; --surface:#15171a; --surface-2:#1c1f23; --text:#e6edf3; --text-2:#a4abb3; --muted:#727a83; --accent:#4b94f0; --ok:#48b25f; --err:#e5544b; --warn:#cf9236; --rule:rgba(255,255,255,.08); }
+  @media (prefers-color-scheme: light) { :root { --bg:#f7f8f9; --surface:#fff; --surface-2:#f2f4f6; --text:#1f2328; --text-2:#555d66; --muted:#7b838c; --accent:#1266d4; --rule:rgba(10,20,30,.1); } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--rule); display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--surface); position: sticky; top: 0; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  #status { font-size: 12.5px; color: var(--text-2); }
+  #status.live::before { content: "● "; color: var(--ok); }
+  #status.busy::before { content: "● "; color: var(--warn); }
+  main { flex: 1; overflow: auto; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 88%; padding: 9px 12px; border-radius: 14px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--rule); border-bottom-left-radius: 4px; }
+  .msg.note { align-self: center; font-size: 12.5px; color: var(--muted); background: none; }
+  .ask { background: var(--surface); border: 1px solid var(--warn); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .ask b { font-size: 14px; }
+  .ask small { color: var(--text-2); font-size: 12.5px; word-break: break-word; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { font: inherit; border-radius: 10px; border: 1px solid var(--rule); background: var(--surface-2); color: var(--text); padding: 9px 14px; cursor: pointer; min-height: 40px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--err); }
+  button:disabled { opacity: .5; cursor: default; }
+  footer { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--rule); padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); display: flex; gap: 8px; align-items: flex-end; }
+  textarea { flex: 1; resize: none; font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--rule); border-radius: 12px; padding: 10px 12px; min-height: 44px; max-height: 160px; }
+  #gate { padding: 24px 16px; max-width: 460px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+  #gate input { font: inherit; font-size: 16px; padding: 12px; border-radius: 10px; border: 1px solid var(--rule); background: var(--surface-2); color: var(--text); letter-spacing: .04em; }
+  #gate p { color: var(--text-2); font-size: 13.5px; margin: 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>JARVIS</h1>
+  <span id="status">Connecting…</span>
+</header>
+
+<section id="gate" class="hidden">
+  <h2 style="font-size:18px;margin:0">Enter your access code</h2>
+  <p>It is shown on the PC: JARVIS Settings, Phone web app, Show the access code.</p>
+  <input id="code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Access code" aria-label="Access code" />
+  <button id="connect" class="primary">Connect</button>
+  <p id="gateMsg"></p>
+</section>
+
+<main id="chat" class="hidden" aria-live="polite"></main>
+
+<footer id="bar" class="hidden">
+  <textarea id="text" rows="1" placeholder="Message JARVIS…" aria-label="Message JARVIS"></textarea>
+  <button id="stop" class="danger" title="Stop what JARVIS is doing">Stop</button>
+  <button id="send" class="primary">Send</button>
+</footer>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const status = $('status');
+  const chat = $('chat');
+  let code = '';
+  let es = null;
+  let current = null; // the assistant bubble that text is streaming into
+  const seen = new Set();
+
+  // The code comes in the address once; keep it out of the address bar and history afterwards.
+  const fromUrl = new URLSearchParams(location.search).get('k') || '';
+  if (fromUrl) {
+    code = fromUrl;
+    sessionStorage.setItem('jarvis-code', fromUrl);
+    history.replaceState(null, '', location.pathname);
+  } else {
+    code = sessionStorage.getItem('jarvis-code') || '';
+  }
+
+  function say(text, cls = 'note') {
+    const d = document.createElement('div');
+    d.className = `msg ${cls}`;
+    d.textContent = text;
+    chat.appendChild(d);
+    scroll();
+    return d;
+  }
+  function scroll() { chat.scrollTop = chat.scrollHeight; }
+
+  async function api(path, body) {
+    const res = await fetch(path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { Authorization: `Bearer ${code}`, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await res.json(); } catch { /* empty */ }
+    if (res.status === 401) throw Object.assign(new Error('That access code is not right.'), { auth: true });
+    if (res.status === 429) throw new Error(data.error || 'Too many requests. Wait a minute.');
+    if (!res.ok) throw new Error(data.error || 'That did not go through.');
+    return data;
+  }
+
+  function showChat() {
+    $('gate').classList.add('hidden');
+    chat.classList.remove('hidden');
+    $('bar').classList.remove('hidden');
+  }
+  function showGate(msg) {
+    $('gate').classList.remove('hidden');
+    chat.classList.add('hidden');
+    $('bar').classList.add('hidden');
+    $('gateMsg').textContent = msg || '';
+    if (es) { es.close(); es = null; }
+  }
+
+  function renderAsk(item) {
+    if (seen.has(item.id)) return;
+    seen.add(item.id);
+    const box = document.createElement('div');
+    box.className = 'ask';
+    box.dataset.id = item.id;
+    const title = document.createElement('b');
+    title.textContent = `JARVIS wants to use ${item.tool || 'a tool'}`;
+    const detail = document.createElement('small');
+    detail.textContent = item.detail || '';
+    const row = document.createElement('div');
+    row.className = 'row';
+    const yes = document.createElement('button');
+    yes.className = 'primary';
+    yes.textContent = 'Allow';
+    const no = document.createElement('button');
+    no.className = 'danger';
+    no.textContent = 'Deny';
+    const answer = async (type) => {
+      yes.disabled = no.disabled = true;
+      try {
+        await api('/api/respond', { id: item.id, decision: { type } });
+        box.remove();
+        say(type === 'deny' ? 'Denied.' : 'Allowed.');
+      } catch (e) {
+        yes.disabled = no.disabled = false;
+        say(e.message);
+      }
+    };
+    yes.onclick = () => answer('allow');
+    no.onclick = () => answer('deny');
+    row.append(yes, no);
+    box.append(title, detail, row);
+    chat.appendChild(box);
+    scroll();
+  }
+
+  function handle(e) {
+    switch (e.kind) {
+      case 'text_start':
+        current = null;
+        break;
+      case 'text_delta':
+        if (!current) current = say('', 'msg assistant');
+        current.textContent += e.text || '';
+        scroll();
+        break;
+      case 'text_final':
+        if (current) { current.textContent = e.text || current.textContent; current = null; }
+        else if (e.text) say(e.text, 'msg assistant');
+        break;
+      case 'permission':
+        renderAsk({ id: e.id, tool: e.displayName || e.toolName, detail: e.detail });
+        break;
+      case 'question':
+        say('JARVIS has a question. Answer it at the PC for now.');
+        break;
+      case 'status':
+        status.className = e.state === 'ready' ? 'live' : e.state === 'closed' ? '' : 'busy';
+        status.textContent = { ready: 'Ready', starting: 'Starting…', waiting: 'Waiting for you', closed: 'Not running' }[e.state] || e.state;
+        break;
+      case 'tool_use':
+        if (e.name) say(`Working: ${e.name}${e.detail ? ` · ${e.detail}` : ''}`, 'note');
+        break;
+      case 'error':
+        say(e.message || 'Something went wrong.', 'note');
+        break;
+      default: break;
+    }
+  }
+
+  function connectEvents() {
+    if (es) es.close();
+    es = new EventSource(`/api/events?k=${encodeURIComponent(code)}`);
+    es.onmessage = (m) => { try { handle(JSON.parse(m.data)); } catch { /* ignore a bad frame */ } };
+    es.onerror = () => { status.textContent = 'Reconnecting…'; };
+  }
+
+  async function load() {
+    const s = await api('/api/state');
+    chat.replaceChildren();
+    status.textContent = '';
+    for (const t of s.transcript || []) {
+      if (t.role === 'user') say(t.text, 'msg user');
+      else say(t.text, 'msg assistant');
+    }
+    for (const w of s.waiting || []) renderAsk({ id: w.id, tool: w.tool, detail: w.detail });
+    handle({ kind: 'status', state: s.status || 'ready' });
+    showChat();
+    connectEvents();
+    scroll();
+  }
+
+  async function connect() {
+    code = $('code').value.trim() || code;
+    if (!code) { $('gateMsg').textContent = 'Type the access code first.'; return; }
+    $('connect').disabled = true;
+    try {
+      await load();
+      sessionStorage.setItem('jarvis-code', code);
+    } catch (e) {
+      sessionStorage.removeItem('jarvis-code');
+      showGate(e.auth ? 'That access code is not right. Check the PC and try again.' : e.message);
+    } finally {
+      $('connect').disabled = false;
+    }
+  }
+
+  async function send() {
+    const text = $('text').value.trim();
+    if (!text) return;
+    $('send').disabled = true;
+    $('text').value = '';
+    say(text, 'msg user');
+    try {
+      await api('/api/send', { text });
+    } catch (e) {
+      say(e.message, 'note');
+      $('text').value = text;
+    } finally {
+      $('send').disabled = false;
+      $('text').focus();
+    }
+  }
+
+  $('connect').onclick = connect;
+  $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+  $('send').onclick = send;
+  $('text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  $('stop').onclick = async () => {
+    try { await api('/api/interrupt', {}); say('Stopped.'); } catch (e) { say(e.message, 'note'); }
+  };
+
+  if (code) connect();
+  else showGate('');
+})();
+</script>
+</body>
+</html>

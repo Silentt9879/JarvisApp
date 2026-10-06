@@ -66,6 +66,8 @@
   }
 
   window.jarvis.onEvent((e) => {
+    // The main process can ask the window to show a view (after a routine, or the budget alert).
+    if (e.kind === 'navigate') { JV.show(e.view); return; }
     ingest(e);
     JV.emit(e.kind, e);
     react(e);
@@ -333,7 +335,7 @@
 
   // ------------------------------------------------------------- settings
   let settingsReturn = null; // where keyboard focus goes back to when Settings closes
-  function openSettings() {
+  function openSettings(tab, anchor) {
     const a = state.account || {};
     const dl = $('settingsInfo');
     dl.replaceChildren();
@@ -355,6 +357,9 @@
     JV.loadUpdates?.();
     if ($('settingsVeil').hidden) settingsReturn = document.activeElement;
     $('settingsVeil').hidden = false;
+    JV.settingsRefresh?.();
+    // Opened on a tab (from Health, say), optionally scrolled to one section. A click passes an event, not a tab.
+    if (typeof tab === 'string') JV.settingsGo?.(tab, typeof anchor === 'string' ? anchor : null);
     $('settingsClose').focus();
   }
   function closeSettings() {
@@ -695,6 +700,19 @@
     JV.startOrb();
 
     state.info = await window.jarvis.info();
+    // The features of 2026-10-07. Each one sets itself up from what it needs; see its file.
+    JV.applyPrefs?.();
+    JV.initSettingsExtra?.();
+    JV.initActivity?.();
+    JV.initAutomations?.();
+    JV.initHealth?.();
+    JV.initVoice?.();
+    JV.initProjects?.();
+    JV.initUsagePage?.();
+    $('newWindow').onclick = () => window.jarvis.newChatWindow().catch(() => {});
+    // A chat window opened beside the main one: no sidebar, just the conversation.
+    if (new URLSearchParams(location.search).get('pane')) document.body.classList.add('pane');
+    JV.initWelcome?.();
     window.jarvis.claudeVersion().then((v) => { if (v && !state.version) { state.version = v; JV.emit('init', {}); } });
     if (!state.info.exeFound) JV.chatError('Claude Code was not found inside the app. Reinstall JARVIS.', false);
     state.sessionStart = Date.now();
