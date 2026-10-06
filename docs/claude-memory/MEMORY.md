@@ -1,0 +1,11 @@
+- [JARVIS app](jarvis-app.md) — "the JARVIS app" = Downloads\JARVIS_App (Electron + Telegram remote), build/swap steps, feature backlog
+- [Install JARVIS updates myself](jarvis-install-updates-myself.md) — after a build, I run brand-bot + swap-update.ps1 myself; user doesn't do steps
+- [Call me JARVIS](call-me-jarvis.md) — go by JARVIS, MCU-style voice (calm British butler, dry wit)
+- [JARVIS GitHub releases](jarvis-release-pushes.md) — push as "Update vX.Y.Z": bump, tag, README "What's new" (simplified + technical), installer uploaded via Node (no python/gh)
+- [JARVIS sidebar trimmed](jarvis-sidebar-trimmed.md) — 2026-10-07 (v1.7.3): Automations, Memory, Activity, Workspace, Knowledge Base off the sidebar; GitHub Desktop, Devices, AI Core under Overview
+- [Memory copy on GitHub](jarvis-memory-github-copy.md) — the memory notes are also committed to JarvisApp at docs/claude-memory; this PC folder is the source of truth
+- [JARVIS update announcements](jarvis-update-announcements.md) — frame JARVIS changes as a "system update" and say whether to close the PC app or Telegram side
+- [JARVIS git policy missing](jarvis-git-policy-missing.md) — the workspace has no .claude\jarvis\git-risk-policy.json, so Source Control confirms every write; sc-undo test skipped
+- [JARVIS feature sprint](jarvis-feature-sprint.md) — 2026-10-07 "do all of them": the 15 features plus usage on AI Core, shipped as v1.7.0
+- [Claude usage facts](jarvis-usage-command-facts.md) — /usage costs nothing and gives session and weekly percentages; a real request costs about 5-10 cents
+- [JARVIS feature lessons](jarvis-feature-lessons.md) — the config loader that hid settings, Git Bash quoting traps, capture-mode screenshots, removed-element crashes, the update window fix
