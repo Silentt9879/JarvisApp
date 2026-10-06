@@ -611,6 +611,18 @@
             <button class="btn small" id="updCancelJarvis">Not now</button>
             <button class="btn btn-primary small" id="updYesJarvis">Update now</button>
           </div>
+          <div class="upd-connect" id="updConnect" hidden>
+            <div>
+              <b>Connect GitHub once</b>
+              <small>JARVIS keeps its updates on your private GitHub account. Paste a token with read access to <b>JarvisApp</b> (GitHub → Settings → Developer settings → Fine-grained tokens). It is stored encrypted on this PC.</small>
+            </div>
+            <div class="upd-connect-row" id="updConnectForm">
+              <input type="password" id="updTokenIn" placeholder="Paste your GitHub token" autocomplete="off" spellcheck="false">
+              <button class="btn btn-primary small" id="updTokenSave">Connect</button>
+            </div>
+            <small class="upd-err" id="updTokenErr" hidden></small>
+            <button class="btn small" id="updDisconnect" hidden>Disconnect GitHub</button>
+          </div>
         </div>
 
         <div class="upd-card" id="updVscode">

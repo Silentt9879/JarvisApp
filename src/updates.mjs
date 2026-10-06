@@ -7,9 +7,8 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-// Only the installers live here, in a public repo, so the app can download them without a login.
-// The source code stays in Silentt9879/JarvisApp (private).
-export const JARVIS_REPO = 'Silentt9879/JarvisReleases';
+// The source repo is private, so JARVIS signs in to GitHub to read its releases.
+export const JARVIS_REPO = 'Silentt9879/JarvisApp';
 export const VSCODE_ID = 'Microsoft.VisualStudioCode';
 export const CLAUDE_PKG = '@anthropic-ai/claude-code';
 // The installer name electron-builder gives the release (see "artifactName" in package.json).
@@ -18,6 +17,14 @@ const INSTALLER = /^JARVIS-Setup-\d+\.\d+\.\d+\.exe$/i;
 export const JARVIS_INSTALL_EXE = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'JARVIS', 'JARVIS.exe');
 
 const MIN = 60_000;
+
+/** Thrown when GitHub will not show JARVIS's releases to this sign-in. The window offers to connect. */
+export class NeedsSignIn extends Error {
+  constructor(message) {
+    super(message);
+    this.needsSignIn = true;
+  }
+}
 
 /** "1.5.0" -> [1, 5, 0]; anything without a version gives null. */
 export function parseVersion(s) {
@@ -122,15 +129,93 @@ export async function claudeUpdate({ run = runCommand } = {}) {
   return { ok: r.ok, output: tail(r.output), error: r.ok ? null : 'Claude Code did not update. Check your internet connection and try again.' };
 }
 
-// ------------------------------------------------------------------ JARVIS
+// ------------------------------------------------------------------ GitHub sign-in
 
-/** The newest published release, or { release: null } when none has been published yet. */
-export async function latestJarvisRelease({ fetchImpl = fetch, repo = JARVIS_REPO } = {}) {
-  const res = await fetchImpl(`https://api.github.com/repos/${repo}/releases/latest`, {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'JARVIS-app' },
+/** The GitHub token for JARVIS's releases: one saved in Settings, or the one Git already uses here. */
+export async function resolveToken({ file, safe, spawnImpl } = {}) {
+  const saved = loadToken(file, { safe });
+  if (saved) return { token: saved, source: 'saved' };
+  const fromGit = await gitCredentialToken({ spawnImpl });
+  if (fromGit) return { token: fromGit, source: 'git' };
+  return { token: null, source: null };
+}
+
+/** Ask Git's credential store for the github.com sign-in. Never prompts; gives null if there is none. */
+export function gitCredentialToken({ spawnImpl = spawn, timeoutMs = 10_000 } = {}) {
+  return new Promise((resolve) => {
+    let out = '';
+    let child;
+    try {
+      child = spawnImpl('git', ['credential', 'fill'], { windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    } catch {
+      resolve(null);
+      return;
+    }
+    const timer = setTimeout(() => { child.kill(); resolve(null); }, timeoutMs);
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => { clearTimeout(timer); resolve(null); });
+    child.on('close', () => { clearTimeout(timer); resolve(/^password=(.+)$/m.exec(out)?.[1]?.trim() || null); });
+    child.stdin.end('protocol=https\nhost=github.com\n\n');
+  });
+}
+
+/** Where a pasted token is kept: encrypted by Windows for this user, never plain text. */
+export function savedTokenPath(userDir) {
+  return path.join(userDir, 'github-token.bin');
+}
+
+export function saveToken(file, token, { safe }) {
+  if (!safe?.isEncryptionAvailable?.()) throw new Error('This PC cannot keep the token safely, so it was not saved.');
+  fs.writeFileSync(file, safe.encryptString(String(token).trim()));
+}
+
+export function loadToken(file, { safe }) {
+  try {
+    if (!fs.existsSync(file) || !safe?.isEncryptionAvailable?.()) return null;
+    return safe.decryptString(fs.readFileSync(file)) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearToken(file) {
+  fs.rmSync(file, { force: true });
+}
+
+function ghHeaders(token, accept = 'application/vnd.github+json') {
+  const h = { Accept: accept, 'User-Agent': 'JARVIS-app' };
+  if (token) h.Authorization = `Bearer ${token}`;
+  return h;
+}
+
+/** Does this token open the JARVIS repo at all? Used before a token is saved. */
+export async function tokenCanSeeJarvis({ fetchImpl = fetch, repo = JARVIS_REPO, token } = {}) {
+  const res = await fetchImpl(`https://api.github.com/repos/${repo}`, {
+    headers: ghHeaders(token),
     signal: AbortSignal.timeout(20_000),
   });
-  if (res.status === 404) return { release: null };
+  return res.ok;
+}
+
+// ------------------------------------------------------------------ JARVIS
+
+/**
+ * The newest published release, or { release: null } when the repo has none yet.
+ * A private repo answers 404 to anyone who is not signed in, so that means "connect first".
+ */
+export async function latestJarvisRelease({ fetchImpl = fetch, repo = JARVIS_REPO, token = null } = {}) {
+  const res = await fetchImpl(`https://api.github.com/repos/${repo}/releases/latest`, {
+    headers: ghHeaders(token),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (res.status === 404 || res.status === 401) {
+    if (!(await tokenCanSeeJarvis({ fetchImpl, repo, token }).catch(() => false))) {
+      throw new NeedsSignIn(token
+        ? 'GitHub did not accept this sign-in for JARVIS. Connect again with a token that can read JarvisApp.'
+        : 'Connect your GitHub account once, so JARVIS can check for updates.');
+    }
+    return { release: null };
+  }
   if (!res.ok) throw new Error(`GitHub answered ${res.status}. Try again later.`);
   const j = await res.json();
   const asset = (j.assets || []).find((a) => INSTALLER.test(a.name));
@@ -139,7 +224,7 @@ export async function latestJarvisRelease({ fetchImpl = fetch, repo = JARVIS_REP
     release: {
       version: (/\d+\.\d+\.\d+/.exec(j.tag_name || '') || [])[0] || null,
       notes: String(j.body || '').trim(),
-      installer: asset ? { name: asset.name, url: asset.browser_download_url, size: asset.size, sha256: sha ? sha[1].toLowerCase() : null } : null,
+      installer: asset ? { name: asset.name, apiUrl: asset.url, size: asset.size, sha256: sha ? sha[1].toLowerCase() : null } : null,
     },
   };
 }
@@ -158,12 +243,13 @@ export async function jarvisStatus(current, deps = {}) {
 }
 
 /**
- * Download the installer to `dest`, checking it against GitHub's SHA-256 when the release
- * has one. A file that does not match is deleted, never run.
+ * Download the installer to `dest` through GitHub's API (the only route that works for a
+ * private repo), checking it against the release's SHA-256 when there is one. A file that
+ * does not match is deleted, never run.
  */
-export async function downloadInstaller(installer, dest, { fetchImpl = fetch, onProgress } = {}) {
-  const res = await fetchImpl(installer.url, {
-    headers: { 'User-Agent': 'JARVIS-app' },
+export async function downloadInstaller(installer, dest, { fetchImpl = fetch, onProgress, token = null } = {}) {
+  const res = await fetchImpl(installer.apiUrl, {
+    headers: ghHeaders(token, 'application/octet-stream'),
     signal: AbortSignal.timeout(30 * MIN),
   });
   if (!res.ok || !res.body) throw new Error(`The download did not start (${res.status}). Try again.`);
@@ -226,12 +312,12 @@ export function launchUpdater(script, { spawnImpl = spawn } = {}) {
  * The whole JARVIS update: check, download, verify, then hand over to the updater. The
  * caller quits JARVIS after this returns, so the installer can replace the files.
  */
-export async function jarvisUpdate({ currentVersion, tempDir, pid, logPath, onProgress, deps = {}, spawnImpl } = {}) {
-  const { release } = await latestJarvisRelease(deps);
+export async function jarvisUpdate({ currentVersion, tempDir, pid, logPath, onProgress, token = null, fetchImpl, spawnImpl } = {}) {
+  const { release } = await latestJarvisRelease({ fetchImpl, token });
   if (!release?.installer) return { ok: false, error: 'There is no update to install yet.' };
   if (compareVersions(release.version, currentVersion) <= 0) return { ok: true, upToDate: true };
   const dest = path.join(tempDir, release.installer.name);
-  await downloadInstaller(release.installer, dest, { fetchImpl: deps.fetchImpl, onProgress });
+  await downloadInstaller(release.installer, dest, { fetchImpl, onProgress, token });
   launchUpdater(updaterCommand({
     installerPath: dest,
     waitPid: pid,

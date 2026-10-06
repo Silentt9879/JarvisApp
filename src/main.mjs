@@ -1,7 +1,7 @@
 // JARVIS - Electron main process.
 // Owns the window and the one live JarvisSession; the window talks to it only
 // through the narrow IPC surface exposed in preload.cjs.
-import { app, BrowserWindow, ipcMain, shell, Menu, dialog, net, nativeTheme, Tray, powerSaveBlocker, desktopCapturer, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Menu, dialog, net, nativeTheme, Tray, powerSaveBlocker, desktopCapturer, screen, safeStorage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -28,7 +28,7 @@ import { createTranscriber } from './voice.mjs';
 import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
 // The window's modes (no bypassPermissions), shared with the chat's starting mode.
 import { WINDOW_MODES } from './permission-mode.mjs';
-import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate } from './updates.mjs';
+import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis } from './updates.mjs';
 import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -729,24 +729,49 @@ ipcMain.handle('jarvis:info', () => {
 });
 
 // Settings > Updates. Checks only look; nothing installs until the user presses Update.
-ipcMain.handle('updates:check', (_e, tool) => {
-  if (tool === 'jarvis') return jarvisStatus(app.getVersion()).catch((e) => ({ current: app.getVersion(), available: false, error: e.message }));
+// The JARVIS repo is private, so its checks and downloads use a GitHub sign-in (see updates.mjs).
+const GITHUB_TOKEN_FILE = savedTokenPath(userDir);
+const tokenStore = { file: GITHUB_TOKEN_FILE, safe: safeStorage };
+ipcMain.handle('updates:check', async (_e, tool) => {
+  if (tool === 'jarvis') {
+    const { token } = await resolveToken(tokenStore);
+    return jarvisStatus(app.getVersion(), { token })
+      .catch((e) => ({ current: app.getVersion(), available: false, needsSignIn: !!e.needsSignIn, error: e.message }));
+  }
   if (tool === 'vscode') return vscodeStatus();
   if (tool === 'claude') return claudeStatus();
   return { error: 'Unknown tool.' };
 });
+ipcMain.handle('updates:connection', async () => {
+  const { source } = await resolveToken(tokenStore);
+  return { connected: !!source, source, savedByJarvis: source === 'saved' };
+});
+ipcMain.handle('updates:connect', async (_e, token) => {
+  const t = String(token || '').trim();
+  if (!t) return { ok: false, error: 'Paste your GitHub token first.' };
+  try {
+    if (!(await tokenCanSeeJarvis({ token: t }))) return { ok: false, error: 'GitHub did not accept that token for JARVIS. Check that it can read JarvisApp.' };
+    saveToken(GITHUB_TOKEN_FILE, t, { safe: safeStorage });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+ipcMain.handle('updates:disconnect', () => { clearToken(GITHUB_TOKEN_FILE); return { ok: true }; });
 ipcMain.handle('updates:run', async (_e, tool) => {
   if (tool === 'vscode') return vscodeUpdate();
   if (tool === 'claude') return claudeUpdate();
   if (tool !== 'jarvis') return { ok: false, error: 'Unknown tool.' };
   const progress = (p) => { if (win && !win.isDestroyed()) win.webContents.send('updates:progress', { tool: 'jarvis', ...p }); };
   try {
+    const { token } = await resolveToken(tokenStore);
     const r = await jarvisUpdate({
       currentVersion: app.getVersion(),
       tempDir: app.getPath('temp'),
       pid: process.pid,
       logPath,
       onProgress: progress,
+      token,
     });
     if (r.ok && !r.upToDate) {
       // The updater waits for this process to exit, then installs and opens JARVIS again.

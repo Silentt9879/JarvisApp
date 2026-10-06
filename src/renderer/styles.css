@@ -1893,6 +1893,13 @@ body.still .web-card::before { animation: none; }
 .upd-progress small { display: block; margin-top: 6px; font-size: 11.5px; color: var(--text-2); }
 .upd-bar.indeterminate span { width: 30%; }
 #updSec .upd-intro { margin-bottom: 12px; }
+.upd-connect { margin-top: 10px; padding: 10px 12px; border-radius: var(--r); border: 1px dashed var(--accent-line); background: var(--accent-softer); display: flex; flex-direction: column; gap: 8px; }
+.upd-connect > div > b { display: block; font-size: 12.5px; font-weight: 600; }
+.upd-connect small { font-size: 11.5px; color: var(--text-2); line-height: 1.45; }
+.upd-connect-row { display: flex; gap: 8px; }
+.upd-connect-row input { flex: 1; min-width: 0; font: 12px var(--mono); padding: 6px 9px; border-radius: 6px; border: 1px solid var(--rule); background: var(--surface); color: var(--text); }
+.upd-connect .upd-err { color: var(--err); }
+.upd-connect > .btn { align-self: flex-start; }
 
 /* phone alerts, now inside Settings: the strip loses its own card */
 .set-sec .alert-bar { padding: 0; border: 0; background: none; }

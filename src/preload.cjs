@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('jarvis', {
   // Settings > Updates: 'jarvis' | 'vscode' | 'claude'. Progress for the JARVIS download comes as events.
   updateCheck: (tool) => ipcRenderer.invoke('updates:check', tool),
   updateRun: (tool) => ipcRenderer.invoke('updates:run', tool),
+  // GitHub sign-in for JARVIS's private releases: saved token (encrypted), or Git's own sign-in.
+  updateConnection: () => ipcRenderer.invoke('updates:connection'),
+  updateConnect: (token) => ipcRenderer.invoke('updates:connect', token),
+  updateDisconnect: () => ipcRenderer.invoke('updates:disconnect'),
   onUpdateProgress: (cb) => {
     const handler = (_e, p) => cb(p);
     ipcRenderer.on('updates:progress', handler);

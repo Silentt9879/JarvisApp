@@ -52,6 +52,7 @@
 
   function describe(tool, s) {
     if (!s) return { text: 'Could not check right now. Try again in a moment.', kind: 'warn', go: false };
+    if (s.needsSignIn) return { text: s.error, kind: 'warn', go: false, connect: true };
     if (s.error) return { text: s.error, kind: 'warn', go: false };
     if (tool === 'jarvis') {
       if (s.available) return { text: `Version ${s.latest} is ready to install. You have ${s.current}.`, kind: 'ok', go: true, label: LABEL.jarvis };
@@ -81,6 +82,7 @@
       const d = describe(tool, s);
       note(tool, d.text, d.kind);
       setGo(tool, d.go, d.label);
+      if (tool === 'jarvis') await showConnect(!!d.connect);
     } catch (e) {
       note(tool, `Could not check: ${e.message}`, 'warn');
     } finally {
@@ -115,6 +117,48 @@
     } finally {
       setBusy(tool, false);
     }
+  }
+
+  // ------------------------------------------------------------- GitHub connection (JARVIS only)
+
+  // Shows the token box only when GitHub will not give JARVIS its updates. Once connected it
+  // stays out of the way, with a Disconnect button when the token was pasted here.
+  async function showConnect(needed) {
+    const box = $('updConnect');
+    const conn = await api.updateConnection().catch(() => ({ connected: false }));
+    const pasted = conn.connected && conn.savedByJarvis;
+    box.hidden = !(needed || pasted);
+    $('updConnectForm').hidden = !needed;
+    $('updDisconnect').hidden = !pasted;
+    $('updTokenErr').hidden = true;
+  }
+
+  async function connectGithub() {
+    const input = $('updTokenIn');
+    const btn = $('updTokenSave');
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    try {
+      const r = await api.updateConnect(input.value);
+      if (!r?.ok) {
+        const err = $('updTokenErr');
+        err.textContent = r?.error || 'That did not work. Check the token and try again.';
+        err.hidden = false;
+        return;
+      }
+      input.value = '';
+      JV.notify('GitHub is connected. Checking for JARVIS updates…', { level: 'ok' });
+      await checkAll();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Connect';
+    }
+  }
+
+  async function disconnectGithub() {
+    await api.updateDisconnect();
+    JV.notify('GitHub is disconnected. JARVIS will ask you to connect before it can update.', { level: 'ok' });
+    await checkAll();
   }
 
   // ------------------------------------------------------------- JARVIS (asks once)
@@ -183,6 +227,9 @@
     $(CARD.vscode.go).onclick = () => runTool('vscode');
     $(CARD.claude.go).onclick = () => runTool('claude');
     $('updCancelJarvis').onclick = closeJarvisAsk;
+    $('updTokenSave').onclick = connectGithub;
+    $('updTokenIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') connectGithub(); });
+    $('updDisconnect').onclick = disconnectGithub;
     $('updYesJarvis').onclick = runJarvis;
     api.onUpdateProgress?.((p) => {
       if (p.tool !== 'jarvis' || !p.total) return;
