@@ -504,6 +504,12 @@ function createWindow() {
     }
     // Opened again by a system update: always show the window, never just the tray.
     else if (!launchHidden || process.argv.includes('--updated')) { win.maximize(); win.show(); shownOnce = true; }
+    // Opened by the updater, Windows often shows a window it did not start in the foreground:
+    // it can sit behind other apps, or only in the tray. So bring it to the front too.
+    if (!capture && process.argv.includes('--updated')) {
+      win.show(); win.focus();
+      if (app.focus) app.focus({ steal: true });
+    }
   });
 
   // While remote control is on, closing hides to the tray: the window is what submits a

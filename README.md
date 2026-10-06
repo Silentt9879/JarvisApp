@@ -17,7 +17,20 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.7.0
+## 🆕 What's new in v1.7.2
+
+**Simplified**
+
+- 🔁 **Update brings JARVIS back in front.** After an update, JARVIS opens its window on top, instead of only in the tray.
+
+**Technical**
+
+- `main.mjs` `createWindow`: when started with `--updated`, the window is shown, focused and brought forward with `app.focus({ steal: true })`. Windows can leave a window started by a background process behind other apps.
+- The updater's final window check wrote nothing to `update.log` after the 1.7.1 update. This fix does not depend on it; the cause of that gap is still open.
+- `scripts/updates-test.mjs`: 54 checks.
+
+<details>
+<summary><b>Earlier: v1.7.0</b></summary>
 
 **Simplified**
 
@@ -43,6 +56,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - Renderer: `dialogs.js`, `welcome.js`, `health.js`, `activity.js`, `automations.js`, `voice.js` with `wakeword-core.js` (energy segmenter and whole-word wake word), `settings-extra.js`, `projects.js`.
 - `main.mjs`: `sessionFor(e)` gives each window its own session; `window:newChat` opens a second window; `submitMessage` is shared by the window, Telegram and the phone app; `loadConfig` returns the whole config (it had been dropping every key but two); `JARVIS_USERDATA` and `JARVIS_CAPTURE_SCRIPT` help test runs.
 - Tests: `scripts/features-test.mjs` (42 checks), `scripts/features-wiring-test.mjs` (11 checks, a real config file and the phone app over HTTP), `updates-test` (54). `npm test` runs them all except the undo test, which is skipped until the workspace policy file is back.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.6.2</b></summary>
