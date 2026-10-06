@@ -1,0 +1,240 @@
+// Updates for JARVIS itself and the two tools it works with (VS Code, Claude Code).
+// Nothing here runs on its own: each step starts from a button in Settings > Updates.
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+
+export const JARVIS_REPO = 'Silentt9879/JarvisApp';
+export const VSCODE_ID = 'Microsoft.VisualStudioCode';
+export const CLAUDE_PKG = '@anthropic-ai/claude-code';
+// The installer name electron-builder gives the release (see "artifactName" in package.json).
+const INSTALLER = /^JARVIS-Setup-\d+\.\d+\.\d+\.exe$/i;
+// Where the installer puts JARVIS for this user (perUser, productName JARVIS).
+export const JARVIS_INSTALL_EXE = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'JARVIS', 'JARVIS.exe');
+
+const MIN = 60_000;
+
+/** "1.5.0" -> [1, 5, 0]; anything without a version gives null. */
+export function parseVersion(s) {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(s || ''));
+  return m ? m.slice(1).map(Number) : null;
+}
+
+/** -1, 0 or 1. An unknown version compares as equal, so nothing is offered by mistake. */
+export function compareVersions(a, b) {
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  if (!x || !y) return 0;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+  return 0;
+}
+
+/** The last part of a command's output - enough to show, never a wall of text. */
+function tail(text, max = 1500) {
+  const s = String(text || '').trim();
+  return s.length > max ? `…${s.slice(-max)}` : s;
+}
+
+/**
+ * Run a command and collect what it printed. `shell` lets Windows find the .cmd shims
+ * (code.cmd, npm.cmd). Arguments here are fixed strings, never user input.
+ */
+export function runCommand(file, args, { timeoutMs = 2 * MIN, cwd } = {}) {
+  return new Promise((resolve) => {
+    const env = { ...process.env };
+    delete env.ELECTRON_RUN_AS_NODE;
+    let out = '';
+    let child;
+    try {
+      child = spawn(file, args, { shell: true, windowsHide: true, env, cwd });
+    } catch (e) {
+      resolve({ ok: false, code: null, output: e.message });
+      return;
+    }
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, code: null, output: out + e.message }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ ok: code === 0, code, output: out }); });
+  });
+}
+
+// ------------------------------------------------------------------ VS Code
+
+export async function vscodeStatus({ run = runCommand } = {}) {
+  const local = await run('code', ['--version'], { timeoutMs: 30_000 });
+  const installed = local.ok ? (local.output.match(/\d+\.\d+\.\d+/) || [])[0] || null : null;
+  const shown = await run('winget', ['show', '--id', VSCODE_ID, '-e', '--accept-source-agreements'], { timeoutMs: MIN });
+  const latest = shown.ok ? (/Version:\s*(\d+\.\d+\.\d+)/.exec(shown.output) || [])[1] || null : null;
+  return {
+    installed,
+    latest,
+    available: !!installed && compareVersions(latest, installed) > 0,
+    // Not on this PC, or winget cannot see it: say so plainly and let the user decide.
+    error: !installed ? 'Visual Studio Code is not installed on this PC.'
+      : !latest ? 'Could not check for a newer version right now. Try again in a minute.' : null,
+  };
+}
+
+export async function vscodeUpdate({ run = runCommand } = {}) {
+  const r = await run('winget', [
+    'upgrade', '--id', VSCODE_ID, '-e', '--silent',
+    '--accept-package-agreements', '--accept-source-agreements',
+  ], { timeoutMs: 20 * MIN });
+  // winget exits with an error when there is nothing to upgrade - that is still "done".
+  const nothingToDo = /No applicable update|No newer package|up to date/i.test(r.output);
+  const ok = r.ok || nothingToDo;
+  return { ok, upToDate: nothingToDo, output: tail(r.output), error: ok ? null : 'The update did not finish. Close VS Code and try again.' };
+}
+
+// ------------------------------------------------------------------ Claude Code
+
+/**
+ * The Claude Code command on this PC (if any), and the newest version on npm. JARVIS's own
+ * sessions use the copy built into the app, which is updated with each JARVIS release; this
+ * button is for the `claude` command you use in a terminal.
+ */
+export async function claudeStatus({ run = runCommand } = {}) {
+  const local = await run('claude', ['--version'], { timeoutMs: 30_000 });
+  const installed = local.ok ? (local.output.match(/\d+\.\d+\.\d+/) || [])[0] || null : null;
+  const npm = await run('npm', ['view', CLAUDE_PKG, 'version'], { timeoutMs: MIN });
+  const latest = npm.ok ? (npm.output.match(/\d+\.\d+\.\d+/) || [])[0] || null : null;
+  return {
+    installed,
+    latest,
+    // Missing counts as "available": pressing the button installs it.
+    available: !installed || compareVersions(latest, installed) > 0,
+    error: !latest ? 'Could not check for a newer version right now. Try again in a minute.' : null,
+  };
+}
+
+export async function claudeUpdate({ run = runCommand } = {}) {
+  const probe = await run('claude', ['--version'], { timeoutMs: 30_000 });
+  // `claude update` for a Claude Code that is already here; otherwise install it from npm.
+  const r = probe.ok
+    ? await run('claude', ['update'], { timeoutMs: 10 * MIN })
+    : await run('npm', ['install', '-g', `${CLAUDE_PKG}@latest`], { timeoutMs: 10 * MIN });
+  return { ok: r.ok, output: tail(r.output), error: r.ok ? null : 'Claude Code did not update. Check your internet connection and try again.' };
+}
+
+// ------------------------------------------------------------------ JARVIS
+
+/** The newest published release, or { release: null } when none has been published yet. */
+export async function latestJarvisRelease({ fetchImpl = fetch, repo = JARVIS_REPO } = {}) {
+  const res = await fetchImpl(`https://api.github.com/repos/${repo}/releases/latest`, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'JARVIS-app' },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (res.status === 404) return { release: null };
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}. Try again later.`);
+  const j = await res.json();
+  const asset = (j.assets || []).find((a) => INSTALLER.test(a.name));
+  const sha = /^sha256:([0-9a-f]{64})$/i.exec(asset?.digest || '');
+  return {
+    release: {
+      version: (/\d+\.\d+\.\d+/.exec(j.tag_name || '') || [])[0] || null,
+      notes: String(j.body || '').trim(),
+      installer: asset ? { name: asset.name, url: asset.browser_download_url, size: asset.size, sha256: sha ? sha[1].toLowerCase() : null } : null,
+    },
+  };
+}
+
+export async function jarvisStatus(current, deps = {}) {
+  const { release } = await latestJarvisRelease(deps);
+  if (!release) return { current, latest: null, available: false, notes: '', error: null };
+  if (!release.installer) return { current, latest: release.version, available: false, notes: '', error: 'The newest release has no installer yet.' };
+  return {
+    current,
+    latest: release.version,
+    available: compareVersions(release.version, current) > 0,
+    notes: release.notes,
+    error: null,
+  };
+}
+
+/**
+ * Download the installer to `dest`, checking it against GitHub's SHA-256 when the release
+ * has one. A file that does not match is deleted, never run.
+ */
+export async function downloadInstaller(installer, dest, { fetchImpl = fetch, onProgress } = {}) {
+  const res = await fetchImpl(installer.url, {
+    headers: { 'User-Agent': 'JARVIS-app' },
+    signal: AbortSignal.timeout(30 * MIN),
+  });
+  if (!res.ok || !res.body) throw new Error(`The download did not start (${res.status}). Try again.`);
+  const total = Number(res.headers.get('content-length')) || installer.size || 0;
+  const hash = createHash('sha256');
+  let got = 0;
+  const tap = async function* (source) {
+    for await (const chunk of source) {
+      got += chunk.length;
+      hash.update(chunk);
+      onProgress?.({ received: got, total });
+      yield chunk;
+    }
+  };
+  try {
+    await pipeline(Readable.fromWeb(res.body), tap, fs.createWriteStream(dest));
+    const sizeOk = !installer.size || got === installer.size;
+    const hashOk = !installer.sha256 || hash.digest('hex') === installer.sha256;
+    if (!sizeOk || !hashOk) throw new Error('The download was incomplete or changed, so it was thrown away. Press Update again.');
+  } catch (e) {
+    fs.rmSync(dest, { force: true });
+    throw e;
+  }
+  return dest;
+}
+
+/**
+ * The PowerShell that installs the update after JARVIS has closed, then opens it again.
+ * Passed encoded, so no path needs quoting. The log sits beside the app's own log.
+ */
+export function updaterCommand({ installerPath, waitPid, relaunchExe, logPath }) {
+  const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+  return [
+    `function Log($m) { "$(Get-Date -Format s) $m" | Out-File -Append -Encoding utf8 ${q(logPath)} }`,
+    `Log 'update: waiting for JARVIS to close'`,
+    `try { Wait-Process -Id ${Number(waitPid)} -Timeout 60 -ErrorAction Stop } catch { Log 'update: JARVIS did not close in time, installing anyway' }`,
+    `Start-Sleep -Seconds 2`,
+    `Log 'update: installing'`,
+    `$p = Start-Process -FilePath ${q(installerPath)} -ArgumentList '/S' -Wait -PassThru`,
+    `Log "update: installer finished (exit $($p.ExitCode))"`,
+    `Start-Sleep -Seconds 1`,
+    `if (Test-Path ${q(relaunchExe)}) { Start-Process -FilePath ${q(relaunchExe)} -ArgumentList '--updated'; Log 'update: JARVIS opened again' }`,
+    `else { Log 'update: could not find JARVIS to open again' }`,
+  ].join('\n');
+}
+
+/** Start the updater detached, so it outlives JARVIS. */
+export function launchUpdater(script, { spawnImpl = spawn } = {}) {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  const child = spawnImpl('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  return child;
+}
+
+/**
+ * The whole JARVIS update: check, download, verify, then hand over to the updater. The
+ * caller quits JARVIS after this returns, so the installer can replace the files.
+ */
+export async function jarvisUpdate({ currentVersion, tempDir, pid, logPath, onProgress, deps = {}, spawnImpl } = {}) {
+  const { release } = await latestJarvisRelease(deps);
+  if (!release?.installer) return { ok: false, error: 'There is no update to install yet.' };
+  if (compareVersions(release.version, currentVersion) <= 0) return { ok: true, upToDate: true };
+  const dest = path.join(tempDir, release.installer.name);
+  await downloadInstaller(release.installer, dest, { fetchImpl: deps.fetchImpl, onProgress });
+  launchUpdater(updaterCommand({
+    installerPath: dest,
+    waitPid: pid,
+    relaunchExe: JARVIS_INSTALL_EXE,
+    logPath,
+  }), { spawnImpl });
+  return { ok: true, version: release.version };
+}

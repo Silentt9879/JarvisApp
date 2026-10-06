@@ -577,6 +577,70 @@
     <h3 id="settingsTitle">Settings <button class="icon-btn" id="settingsClose" title="Close (Esc)" aria-label="Close settings"><i data-icon="x"></i></button></h3>
     <div class="modal-body">
 
+      <section class="set-sec" id="updSec">
+        <div class="upd-head">
+          <div>
+            <div class="pop-sec">Updates</div>
+            <small class="upd-sub" id="updLast">Checking what is new…</small>
+          </div>
+          <button class="btn small" id="updCheckAll">Check for updates</button>
+        </div>
+        <p class="upd-intro">Checking is always safe. Nothing is installed until you press <b>Update</b>.</p>
+
+        <div class="upd-card" id="updJarvis">
+          <div class="upd-row">
+            <span class="upd-badge" aria-hidden="true">J</span>
+            <div class="upd-main">
+              <b>JARVIS</b>
+              <small id="updNoteJarvis">Checking…</small>
+            </div>
+            <div class="upd-act">
+              <button class="btn btn-primary small" id="updGoJarvis" hidden>Update JARVIS</button>
+            </div>
+          </div>
+          <div class="upd-progress" id="updBarJarvis" hidden>
+            <div class="upd-bar"><span></span></div>
+            <small id="updPctJarvis">Starting…</small>
+          </div>
+          <div class="upd-confirm" id="updConfirmJarvis" hidden>
+            <div>
+              <b>Update JARVIS to <span id="updNewJarvis"></span>?</b>
+              <small>JARVIS downloads the update, closes, installs it and opens again by itself, in about a minute. Anything you are typing will be lost. If you chat with JARVIS on Telegram, it will say hello when it is back.</small>
+              <small class="upd-whatsnew" id="updWhatsNewJarvis"></small>
+            </div>
+            <button class="btn small" id="updCancelJarvis">Not now</button>
+            <button class="btn btn-primary small" id="updYesJarvis">Update now</button>
+          </div>
+        </div>
+
+        <div class="upd-card" id="updVscode">
+          <div class="upd-row">
+            <span class="upd-badge" aria-hidden="true">VS</span>
+            <div class="upd-main">
+              <b>VS Code</b>
+              <small id="updNoteVscode">Checking…</small>
+            </div>
+            <div class="upd-act">
+              <button class="btn btn-primary small" id="updGoVscode" hidden>Update VS Code</button>
+            </div>
+          </div>
+          <small class="upd-tip" id="updTipVscode">Save your work in VS Code first. It may restart once.</small>
+        </div>
+
+        <div class="upd-card" id="updClaude">
+          <div class="upd-row">
+            <span class="upd-badge" aria-hidden="true">CC</span>
+            <div class="upd-main">
+              <b>Claude Code</b>
+              <small id="updNoteClaude">Checking…</small>
+            </div>
+            <div class="upd-act">
+              <button class="btn btn-primary small" id="updGoClaude" hidden>Update Claude Code</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="set-sec">
         <div class="pop-sec">Workspace</div>
         <div class="ws-row">
@@ -727,6 +791,7 @@
 <script src="pages.js"></script>
 <script src="phone-screen.js"></script>
 <script src="devices.js"></script>
+<script src="updates.js"></script>
 <script src="webapps.js"></script>
 <script src="clickup.js"></script>
 <script src="files.js"></script>

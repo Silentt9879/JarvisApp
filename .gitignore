@@ -2,6 +2,7 @@
 # it is produced by `npm run pack` and never belongs in history.
 dist/
 dist-next/
+dist-installer/
 out/
 release/
 

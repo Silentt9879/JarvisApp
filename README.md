@@ -17,7 +17,21 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.5.0
+## 🆕 What's new in v1.6.0
+
+**Simplified**
+
+- 📦 **A proper installer.** Download `JARVIS-Setup-1.6.0.exe` from the Releases page and double-click it. Click Next a few times and JARVIS is installed, with a desktop icon and a Start menu entry. No administrator rights needed.
+- ⬆️ **Update from Settings.** Open **Settings → Updates** and press **Check**. If a newer JARVIS is out, press **Update**: JARVIS asks once, closes for about a minute, installs the new version and opens again by itself.
+- 🆚 **VS Code and Claude Code too.** The same Updates section checks both, and one press updates each.
+
+**Technical**
+
+- New `src/updates.mjs`: `jarvisStatus` / `jarvisUpdate` (GitHub `releases/latest`, the `JARVIS-Setup-x.y.z.exe` asset, SHA-256 checked against the release digest, a mismatched download is deleted and never run); `vscodeStatus` / `vscodeUpdate` (winget `show` / `upgrade`); `claudeStatus` / `claudeUpdate` (`claude update` when the command exists, otherwise `npm i -g @anthropic-ai/claude-code@latest`). The updater is a detached PowerShell that waits for JARVIS to exit, runs the installer with `/S`, then reopens JARVIS with `--updated` so it announces the update.
+- NSIS target in `package.json` (`npm run dist` writes `dist-installer/`, per-user, no directory page), `build/installer.nsh` for the setup wording, `src/renderer/updates.js` and an Updates section in Settings, 3 IPC handlers in `main.mjs`, `scripts/updates-test.mjs` (35 checks, commands and GitHub stubbed).
+
+<details>
+<summary><b>Earlier: v1.5.0</b></summary>
 
 **Simplified**
 
@@ -30,6 +44,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - New `src/notes.mjs` (`NoteStore` on `notes.json` in the user data folder; `sendNote` through the existing `telegram.mjs`), `src/renderer/notes.js`, 3 IPC handlers in `main.mjs`, `scripts/notes-test.mjs` (38 checks: store, Telegram send with the transport stubbed, and the real renderer driven through save / send / failure / drafts / delete).
 - New `src/auth.mjs` wrapping `claude auth status --json` / `logout` / `login` (the last opens its own console window via `cmd start`, since the CLI drives a browser); errors are scrubbed of key-shaped strings before they reach the window or the log. 4 IPC handlers, `scripts/auth-test.mjs` (22 checks), verified against a packaged build.
 - New `src/permission-mode.mjs`: `startingMode(cwd)` reads `permissions.defaultMode` from local → project → user settings, the same precedence Claude Code itself uses; `session.mjs` passes the result as `permissionMode` instead of a hard-coded `'default'`. Still never `bypassPermissions`. `scripts/permission-mode-test.mjs`.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.4.0</b></summary>

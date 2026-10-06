@@ -1859,6 +1859,41 @@ body.still .web-card::before { animation: none; }
 .ws-confirm b { display: block; font-size: 12.5px; font-weight: 600; }
 .ws-confirm b span { font-family: var(--mono); font-weight: 500; }
 
+/* Settings > Updates: one card per tool, a plain status line, and the Update button only when there is something to install */
+.upd-intro { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.upd-intro b { color: var(--text-2); font-weight: 600; }
+.upd-card { margin-bottom: 8px; padding: 11px 12px; border-radius: var(--r); border: 1px solid var(--rule); background: var(--surface-2); }
+.upd-row { display: flex; align-items: center; gap: 10px; }
+.upd-main { flex: 1; min-width: 0; }
+.upd-main b { display: block; font-size: 13px; font-weight: 600; color: var(--text); }
+.upd-main small { display: block; margin-top: 3px; font-size: 11.5px; color: var(--text-2); line-height: 1.45; }
+.upd-main small[data-kind="ok"] { color: var(--ok); }
+.upd-main small[data-kind="warn"] { color: var(--warn); }
+.upd-main small[data-kind="err"] { color: var(--err); }
+.upd-act { display: flex; gap: 6px; flex-shrink: 0; }
+.upd-tip { display: block; margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+.upd-bar { margin-top: 10px; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.upd-bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .3s ease; }
+.upd-bar.indeterminate span { width: 30% !important; animation: upd-slide 1.2s ease-in-out infinite; }
+@keyframes upd-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+.upd-confirm { margin-top: 10px; padding: 10px 12px; border-radius: var(--r); border: 1px solid var(--accent-line); background: var(--accent-softer); display: flex; align-items: center; gap: 10px; }
+.upd-confirm > div { flex: 1; min-width: 0; }
+.upd-confirm b { display: block; font-size: 12.5px; font-weight: 600; }
+.upd-confirm small { display: block; margin-top: 3px; font-size: 11.5px; color: var(--text-2); line-height: 1.45; }
+.upd-confirm .upd-whatsnew { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .upd-bar.indeterminate span { animation: none; width: 100% !important; opacity: .5; } }
+@media (max-width: 520px) { .upd-row, .upd-confirm { flex-wrap: wrap; } .upd-act { width: 100%; justify-content: flex-end; } }
+.upd-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.upd-head .pop-sec { padding-left: 0; padding-right: 0; }
+.upd-sub { display: block; margin-top: -4px; font-size: 11.5px; color: var(--muted); }
+.upd-badge { flex-shrink: 0; min-width: 34px; height: 34px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; background: var(--accent-softer); border: 1px solid var(--accent-line); color: var(--accent); font: 600 11.5px var(--mono); }
+.upd-card .upd-main b { font-size: 13.5px; }
+.upd-progress { margin-top: 10px; }
+.upd-progress .upd-bar { margin-top: 0; }
+.upd-progress small { display: block; margin-top: 6px; font-size: 11.5px; color: var(--text-2); }
+.upd-bar.indeterminate span { width: 30%; }
+#updSec .upd-intro { margin-bottom: 12px; }
+
 /* phone alerts, now inside Settings: the strip loses its own card */
 .set-sec .alert-bar { padding: 0; border: 0; background: none; }
 .pa-min { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }

@@ -352,6 +352,7 @@
     $('prefMotion').checked = !!JV.prefs.reduceMotion;
     $('pref24h').checked = !!JV.prefs.h24;
     loadStartup();
+    JV.loadUpdates?.();
     if ($('settingsVeil').hidden) settingsReturn = document.activeElement;
     $('settingsVeil').hidden = false;
     $('settingsClose').focus();

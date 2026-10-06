@@ -28,6 +28,7 @@ import { createTranscriber } from './voice.mjs';
 import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
 // The window's modes (no bypassPermissions), shared with the chat's starting mode.
 import { WINDOW_MODES } from './permission-mode.mjs';
+import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate } from './updates.mjs';
 import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -725,6 +726,38 @@ function claudeVersion() {
 ipcMain.handle('jarvis:info', () => {
   const { cwd } = loadConfig();
   return { cwd, cwdExists: fs.existsSync(cwd), version: app.getVersion(), electron: process.versions.electron, exeFound: fs.existsSync(claudeExe()), capture: !!process.env.JARVIS_CAPTURE };
+});
+
+// Settings > Updates. Checks only look; nothing installs until the user presses Update.
+ipcMain.handle('updates:check', (_e, tool) => {
+  if (tool === 'jarvis') return jarvisStatus(app.getVersion()).catch((e) => ({ current: app.getVersion(), available: false, error: e.message }));
+  if (tool === 'vscode') return vscodeStatus();
+  if (tool === 'claude') return claudeStatus();
+  return { error: 'Unknown tool.' };
+});
+ipcMain.handle('updates:run', async (_e, tool) => {
+  if (tool === 'vscode') return vscodeUpdate();
+  if (tool === 'claude') return claudeUpdate();
+  if (tool !== 'jarvis') return { ok: false, error: 'Unknown tool.' };
+  const progress = (p) => { if (win && !win.isDestroyed()) win.webContents.send('updates:progress', { tool: 'jarvis', ...p }); };
+  try {
+    const r = await jarvisUpdate({
+      currentVersion: app.getVersion(),
+      tempDir: app.getPath('temp'),
+      pid: process.pid,
+      logPath,
+      onProgress: progress,
+    });
+    if (r.ok && !r.upToDate) {
+      // The updater waits for this process to exit, then installs and opens JARVIS again.
+      log(`system update to v${r.version} downloaded - JARVIS closes so it can install`);
+      setTimeout(() => app.quit(), 500);
+    }
+    return r;
+  } catch (e) {
+    log(`system update failed: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
 });
 
 // The caption buttons' colours, matched to the header (--surface and --text-2 in styles.css).

@@ -14,6 +14,14 @@ contextBridge.exposeInMainWorld('jarvis', {
   startup: () => ipcRenderer.invoke('jarvis:startup'),
   setStartup: (on) => ipcRenderer.invoke('jarvis:setStartup', !!on),
   claudeVersion: () => ipcRenderer.invoke('jarvis:claudeVersion'),
+  // Settings > Updates: 'jarvis' | 'vscode' | 'claude'. Progress for the JARVIS download comes as events.
+  updateCheck: (tool) => ipcRenderer.invoke('updates:check', tool),
+  updateRun: (tool) => ipcRenderer.invoke('updates:run', tool),
+  onUpdateProgress: (cb) => {
+    const handler = (_e, p) => cb(p);
+    ipcRenderer.on('updates:progress', handler);
+    return () => ipcRenderer.removeListener('updates:progress', handler);
+  },
   start: (opts) => ipcRenderer.invoke('jarvis:start', opts),
   send: (payload) => ipcRenderer.invoke('jarvis:send', payload),
   interrupt: () => ipcRenderer.invoke('jarvis:interrupt'),
