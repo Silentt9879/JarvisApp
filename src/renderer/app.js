@@ -314,7 +314,7 @@
   // Digits are read from e.code, not e.key, so they work on any keyboard layout. None of
   // these combinations does anything by default in this window (it has no menu), so taking
   // them costs nothing - including while typing in the composer.
-  const PRIMARY = ['chat', 'command', 'tasks', 'source', 'files', 'memory'];
+  const PRIMARY = ['chat', 'command', 'automations', 'notes', 'files'];
   document.addEventListener('keydown', (e) => {
     if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
     const key = e.key.toLowerCase();

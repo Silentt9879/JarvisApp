@@ -300,8 +300,23 @@ export function updaterCommand({ installerPath, waitPid, relaunchExe, logPath, i
     `$p = Start-Process -FilePath ${q(installerPath)} -ArgumentList '/S' -Wait -PassThru`,
     `Log "update: installer finished (exit $($p.ExitCode))"`,
     `Start-Sleep -Seconds 1`,
-    `if (Test-Path ${q(relaunchExe)}) { Start-Process -FilePath ${q(relaunchExe)} -ArgumentList '--updated'; Log 'update: JARVIS opened again' }`,
-    `else { Log 'update: could not find JARVIS to open again' }`,
+    // Open JARVIS again, and check that a JARVIS process really appears (a start that fails
+    // silently is the thing this guards against). Up to three tries, then Explorer starts it.
+    `$exe = ${q(relaunchExe)}`,
+    `if (-not (Test-Path $exe)) { Log 'update: could not find JARVIS to open again' }`,
+    `else {`,
+    `  $up = $false`,
+    `  for ($try = 1; $try -le 3 -and -not $up; $try++) {`,
+    `    try { Start-Process -FilePath $exe -ArgumentList '--updated' -WorkingDirectory (Split-Path -Parent $exe) -ErrorAction Stop | Out-Null } catch { Log "update: start attempt $try failed: $($_.Exception.Message)" }`,
+    `    for ($i = 0; $i -lt 15 -and -not $up; $i++) { Start-Sleep -Milliseconds 1000; if (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }) { $up = $true } }`,
+    `  }`,
+    `  if ($up) { Log 'update: JARVIS opened again' } else { Log 'update: JARVIS did not start itself; asking Explorer to open it'; Start-Process -FilePath 'explorer.exe' -ArgumentList $exe | Out-Null }`,
+    // The window must come up too, not just the tray icon. If none is showing after a while, start
+    // JARVIS once more: a second start only brings the running window forward (single-instance).
+    `  $shown = $false`,
+    `  for ($i = 0; $i -lt 20 -and -not $shown; $i++) { Start-Sleep -Milliseconds 1000; if (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe -and $_.MainWindowHandle -ne 0 }) { $shown = $true } }`,
+    `  if ($shown) { Log 'update: JARVIS window is showing' } else { Log 'update: no window yet; starting JARVIS again to bring it forward'; Start-Process -FilePath $exe -ArgumentList '--updated' -WorkingDirectory (Split-Path -Parent $exe) | Out-Null }`,
+    `}`,
   ].join('\n');
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "jarvis-app",
   "productName": "JARVIS",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "JARVIS - a desktop app for Claude Code in the BantuApps workspace",
   "main": "src/main.mjs",
   "type": "module",

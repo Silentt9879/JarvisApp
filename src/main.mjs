@@ -502,7 +502,8 @@ function createWindow() {
       win.setBounds({ x: -5000, y: 0, width: sized ? Number(sized[1]) : 1600, height: sized ? Number(sized[2]) : 960 });
       win.showInactive();
     }
-    else if (!launchHidden) { win.maximize(); win.show(); shownOnce = true; }
+    // Opened again by a system update: always show the window, never just the tray.
+    else if (!launchHidden || process.argv.includes('--updated')) { win.maximize(); win.show(); shownOnce = true; }
   });
 
   // While remote control is on, closing hides to the tray: the window is what submits a
