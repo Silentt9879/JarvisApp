@@ -17,7 +17,29 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.3.0
+## 🆕 What's new in v1.4.0
+
+**Simplified**
+
+- 🧑‍🏭 **Watch your agents work.** The Agents page has an **Agent floor**: every specialist JARVIS sends out sits at a desk as a little minion with its own name (Kevin, Otto, Bob…). A speech bubble says what it is doing right now ("Reading HttpService.dart", "Running dotnet build"), with a timer and its last few steps. Idle ones nap on the bench.
+- 🟢 **"N agents" in the chat box.** See who is working without leaving the chat. Click it to watch, and click a name to jump to its desk.
+- 🗂️ **A tidier Agents page.** Specialists are grouped (Mobile apps, Web apps, APIs, Support crew) as small cards; the full brief is one click away.
+- 🐙 **GitHub Desktop** (was Source Control): **Undo** the last commit, right-click for **Discard all** / **Stash all**, **Pull origin** beside the branch, and history times you can read ("Yesterday 6:07 PM").
+- 📱 **A phone in its own window**, and drag it onto JARVIS's left edge to snap the two side by side.
+- ▶️ **Web apps:** Run starts `dotnet watch`, and a busy port or a failed start is explained in plain words.
+- 🔄 Reload buttons spin while they reload, right-click Cut / Copy / Paste works everywhere, and the big clock is back.
+
+**Technical**
+
+- `src/session.mjs` forwards the SDK's `task_started` / `task_progress` / `task_notification` / `task_updated` system messages as `agent_task` events (ambient and `skip_transcript` tasks dropped).
+- New `src/renderer/crew-model.js` (no DOM): a run is keyed by its Agent `tool_use` id, and its steps are the tool calls whose `parent` is that id. A background run (`is_backgrounded`, or a "launched" result) ends only on its task notification; going idle closes a foreground run that missed its result; a closed session stops them all. `scripts/crew-test.mjs`, 27 checks.
+- New `src/renderer/crew.js` draws the floor (desks updated in place, not redrawn), the bench and the chat-bar pill and panel. It owns `state.agentActive`, so the cards, the nav badge and the Overview count a background agent until it really ends. `JV.minionName(agent)` gives fixed names, with a pool for new agents.
+- GitHub Desktop: `undoLastCommit()` is `git reset --soft HEAD~1`, offered only for an unpushed commit. `discardAll()` copies the changes to the Recycle Bin first, then restores tracked files (`git restore --source=HEAD --staged --worktree -- .`) and removes new ones (`git clean -f`). Both go through `git-risk-policy.json`. Tests: `scripts/sc-undo-discard-test.mjs`.
+- Devices: `phone.html` / `phone.js` share the decoder in `phone-screen.js`; snap-docking geometry is in `src/dock.mjs` (`scripts/dock-test.mjs`). Web apps: `src/webapps.mjs` checks the port first and names its owner (`scripts/webapps-test.mjs`).
+- `JV.spinWhile(btn, work)` spins a reload icon for the whole reload and at least one full turn. Capture aid `JARVIS_DEMO=crew` plays a scripted floor for screenshots.
+
+<details>
+<summary><b>Earlier: v1.3.0</b></summary>
 
 **Simplified**
 
@@ -33,6 +55,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - In the group (`onGroupText()`), only the owner's Wake up, Power down and /status are obeyed. An unnamed command goes to the only PC that can answer it. Otherwise each PC posts an inline button that only the owner can press and that expires after 2 min.
 - Settings → Phone alerts adds **PC name**, **Find my group** and **Leave group**. Tests: `scripts/presence-test.mjs` (new) and `scripts/remote-test.mjs`.
 
+</details>
+
 ---
 
 ## ✨ What it does
@@ -41,10 +65,11 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 |---|---|
 | 💬 **Chat** | Talk to JARVIS. Attach images and files, pick the model and effort level, and approve each action |
 | 📱 **Telegram remote** | Send messages, photos, files and voice notes from your phone, and approve actions with one tap |
-| 🔀 **Source Control** | Changes, commits, branches, push and pull, plus pull requests and checks from GitHub |
+| 🧑‍🏭 **Agents** | Watch the specialists work as minions on the Agent floor, or from the "N agents" pill in the chat box |
+| 🐙 **GitHub Desktop** | Changes, commits, Undo, stashes, branches, push and pull, plus pull requests and checks from GitHub |
 | ✅ **Tasks** | Your ClickUp board, synced and grouped by sprint |
 | 📂 **Files** | Read any workspace file, and double-click to open it in VS Code |
-| 📲 **Devices** | Live phone screens with `flutter run`, and web apps with `dotnet watch` |
+| 📲 **Devices** | Live phone screens with `flutter run` (also in their own window), and web apps with `dotnet watch` |
 | ↩️ **Undo** | Undo every file change made since any message, in one click |
 
 ---
