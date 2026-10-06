@@ -612,16 +612,33 @@
             <button class="btn btn-primary small" id="updYesJarvis">Update now</button>
           </div>
           <div class="upd-connect" id="updConnect" hidden>
-            <div>
-              <b>Connect GitHub once</b>
-              <small>JARVIS keeps its updates on your private GitHub account. Paste a token with read access to <b>JarvisApp</b> (GitHub → Settings → Developer settings → Fine-grained tokens). It is stored encrypted on this PC.</small>
+            <div class="upd-connect-head" id="updConnectAsk">
+              <span class="upd-badge" aria-hidden="true">GH</span>
+              <div>
+                <b>You're not signed in yet</b>
+                <small>No worries, this takes about a minute, and you only do it once on this PC. JARVIS keeps its updates in your private GitHub account, so it needs your permission to read them.</small>
+              </div>
             </div>
+            <ol class="upd-steps" id="updConnectSteps">
+              <li><span>1</span> Press <b>Open GitHub</b>. It opens in your browser.</li>
+              <li><span>2</span> Press <b>Generate token</b>, then copy the long code it shows you.</li>
+              <li><span>3</span> Paste the code below and press <b>Sign in</b>.</li>
+            </ol>
             <div class="upd-connect-row" id="updConnectForm">
-              <input type="password" id="updTokenIn" placeholder="Paste your GitHub token" autocomplete="off" spellcheck="false">
-              <button class="btn btn-primary small" id="updTokenSave">Connect</button>
+              <button class="btn small" id="updOpenGithub">Open GitHub</button>
+              <input type="password" id="updTokenIn" placeholder="Paste the code here" autocomplete="off" spellcheck="false">
+              <button class="btn btn-primary small" id="updTokenSave">Sign in</button>
             </div>
+            <small class="upd-safe">Your code is locked to this PC and JARVIS only reads its own updates with it.</small>
             <small class="upd-err" id="updTokenErr" hidden></small>
-            <button class="btn small" id="updDisconnect" hidden>Disconnect GitHub</button>
+            <div class="upd-signed" id="updSignedIn" hidden>
+              <span class="upd-tick" aria-hidden="true"><i data-icon="check"></i></span>
+              <div>
+                <b>You're signed in to GitHub</b>
+                <small>JARVIS can check for and download its updates.</small>
+              </div>
+              <button class="btn small" id="updDisconnect" hidden>Sign out</button>
+            </div>
           </div>
         </div>
 

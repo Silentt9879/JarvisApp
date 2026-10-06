@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   updateConnection: () => ipcRenderer.invoke('updates:connection'),
   updateConnect: (token) => ipcRenderer.invoke('updates:connect', token),
   updateDisconnect: () => ipcRenderer.invoke('updates:disconnect'),
+  updateOpenGithub: () => ipcRenderer.invoke('updates:openGithub'),
   onUpdateProgress: (cb) => {
     const handler = (_e, p) => cb(p);
     ipcRenderer.on('updates:progress', handler);

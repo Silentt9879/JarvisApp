@@ -750,7 +750,7 @@ ipcMain.handle('updates:connect', async (_e, token) => {
   const t = String(token || '').trim();
   if (!t) return { ok: false, error: 'Paste your GitHub token first.' };
   try {
-    if (!(await tokenCanSeeJarvis({ token: t }))) return { ok: false, error: 'GitHub did not accept that token for JARVIS. Check that it can read JarvisApp.' };
+    if (!(await tokenCanSeeJarvis({ token: t }))) return { ok: false, error: 'That code did not work for JARVIS. Make sure you copied the whole code, and that it can read JarvisApp.' };
     saveToken(GITHUB_TOKEN_FILE, t, { safe: safeStorage });
     return { ok: true };
   } catch (e) {
@@ -758,6 +758,8 @@ ipcMain.handle('updates:connect', async (_e, token) => {
   }
 });
 ipcMain.handle('updates:disconnect', () => { clearToken(GITHUB_TOKEN_FILE); return { ok: true }; });
+// The page where the token is made, opened in the browser (a fixed address, never from the window).
+ipcMain.handle('updates:openGithub', () => shell.openExternal('https://github.com/settings/tokens?type=beta'));
 ipcMain.handle('updates:run', async (_e, tool) => {
   if (tool === 'vscode') return vscodeUpdate();
   if (tool === 'claude') return claudeUpdate();

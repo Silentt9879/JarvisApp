@@ -124,13 +124,21 @@
   // Shows the token box only when GitHub will not give JARVIS its updates. Once connected it
   // stays out of the way, with a Disconnect button when the token was pasted here.
   async function showConnect(needed) {
-    const box = $('updConnect');
     const conn = await api.updateConnection().catch(() => ({ connected: false }));
-    const pasted = conn.connected && conn.savedByJarvis;
-    box.hidden = !(needed || pasted);
-    $('updConnectForm').hidden = !needed;
-    $('updDisconnect').hidden = !pasted;
+    const signedIn = !!conn.connected;
+    // Not signed in: the friendly steps. Signed in: a short "all set" line, and Sign out
+    // only when the code was pasted here (a Git sign-in is managed by Git itself).
+    $('updConnect').hidden = !(needed || (signedIn && conn.savedByJarvis));
+    $('updConnectAsk').hidden = signedIn;
+    $('updConnectSteps').hidden = signedIn;
+    $('updConnectForm').hidden = signedIn;
+    $('updSignedIn').hidden = !signedIn;
+    $('updDisconnect').hidden = !(signedIn && conn.savedByJarvis);
     $('updTokenErr').hidden = true;
+  }
+
+  function friendlyError(msg) {
+    return msg || 'That code did not work. Make sure you copied the whole code, then try again.';
   }
 
   async function connectGithub() {
@@ -142,12 +150,12 @@
       const r = await api.updateConnect(input.value);
       if (!r?.ok) {
         const err = $('updTokenErr');
-        err.textContent = r?.error || 'That did not work. Check the token and try again.';
+        err.textContent = friendlyError(r?.error);
         err.hidden = false;
         return;
       }
       input.value = '';
-      JV.notify('GitHub is connected. Checking for JARVIS updates…', { level: 'ok' });
+      JV.notify("You're signed in. Checking for JARVIS updates now.", { level: 'ok' });
       await checkAll();
     } finally {
       btn.disabled = false;
@@ -157,7 +165,7 @@
 
   async function disconnectGithub() {
     await api.updateDisconnect();
-    JV.notify('GitHub is disconnected. JARVIS will ask you to connect before it can update.', { level: 'ok' });
+    JV.notify('You are signed out of GitHub. Sign in again to get JARVIS updates.', { level: 'ok' });
     await checkAll();
   }
 
@@ -230,6 +238,7 @@
     $('updTokenSave').onclick = connectGithub;
     $('updTokenIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') connectGithub(); });
     $('updDisconnect').onclick = disconnectGithub;
+    $('updOpenGithub').onclick = () => api.updateOpenGithub();
     $('updYesJarvis').onclick = runJarvis;
     api.onUpdateProgress?.((p) => {
       if (p.tool !== 'jarvis' || !p.total) return;
