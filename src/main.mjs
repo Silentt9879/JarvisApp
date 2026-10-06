@@ -15,6 +15,8 @@ import { inSnapZone, dockWidth, dockLayout, followLayout, afterPhoneResize, stil
 import { readDraft, readClickUp, syncClickUp } from './tasks.mjs';
 import { createGitHub } from './github.mjs';
 import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode } from './files.mjs';
+import { NoteStore, sendNote, telegramReady } from './notes.mjs';
+import { authStatus, authLogout, startLogin } from './auth.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
 import os from 'node:os';
 import { call as telegramCall, sendTelegram, verifyToken, discoverChat, discoverGroup, isToken, isChatId } from './telegram.mjs';
@@ -24,6 +26,8 @@ import { diffReport, morningBrief } from './reports.mjs';
 import { createDeployWatcher } from './deploys.mjs';
 import { createTranscriber } from './voice.mjs';
 import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
+// The window's modes (no bypassPermissions), shared with the chat's starting mode.
+import { WINDOW_MODES } from './permission-mode.mjs';
 import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -52,7 +56,6 @@ if (process.platform === 'win32' && typeof app.setToastActivatorCLSID === 'funct
   try { app.setToastActivatorCLSID(IDENTITY.toastActivator); } catch { /* an older Electron: random, as before */ }
 }
 const DEFAULT_CWD = 'C:\\Users\\bantu\\Downloads\\BantuApps';
-const WINDOW_MODES = ['default', 'acceptEdits', 'plan', 'auto']; // deliberately no bypassPermissions
 
 // ---------------------------------------------------------------- config + log
 const userDir = app.getPath('userData');
@@ -783,6 +786,38 @@ async function shutdownChildren() {
   await Promise.race([shutdownDevices().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
 }
 ipcMain.handle('jarvis:claudeVersion', () => (fs.existsSync(claudeExe()) ? claudeVersion() : null));
+
+// ---------------------------------------------------------------- IPC: the account
+// Claude Code owns the credentials; JARVIS only asks who is signed in, and runs its own
+// sign-in and sign-out commands. Nothing secret crosses this boundary.
+ipcMain.handle('jarvis:authStatus', () => (fs.existsSync(claudeExe()) ? authStatus(claudeExe()) : { ok: false, loggedIn: false, error: 'Claude Code is not installed here.' }));
+ipcMain.handle('jarvis:authLogin', () => {
+  if (!fs.existsSync(claudeExe())) return { ok: false, error: 'Claude Code is not installed here.' };
+  if (process.env.JARVIS_CAPTURE) { log('capture: would open the sign-in window'); return { ok: true, started: true }; }
+  const r = startLogin(claudeExe());
+  log(r.ok ? 'sign-in window opened' : `could not open the sign-in window: ${r.error}`);
+  return r;
+});
+ipcMain.handle('jarvis:authLogout', async () => {
+  if (!fs.existsSync(claudeExe())) return { ok: false, error: 'Claude Code is not installed here.' };
+  if (process.env.JARVIS_CAPTURE) { log('capture: would sign out'); return { ok: false, error: 'Signing out is disabled during a screenshot run.' }; }
+  const r = await authLogout(claudeExe());
+  if (!r.ok) { log('sign out failed:', r.error); return r; }
+  // The running claude.exe holds the old credentials; it goes with them, and the next
+  // start brings up a fresh one. The window is told, so the chat does not look alive.
+  try { session?.close(); } catch { /* already gone */ }
+  session = null;
+  log('signed out of the Anthropic account');
+  // Window only: the phone and the Telegram watchers must not be told a turn just ended.
+  toWindow({ kind: 'status', state: 'ready' });
+  return { ok: true };
+});
+/** Restart JARVIS itself - how a new sign-in is picked up everywhere at once. */
+ipcMain.handle('jarvis:restartApp', () => {
+  log('restarting at the window\'s request');
+  setTimeout(async () => { await shutdownChildren(); app.relaunch(); app.exit(0); }, 400);
+  return { ok: true, restarting: true };
+});
 ipcMain.handle('jarvis:start', (_e, opts) => { remote.sessionStarted(); ensureSession().start(opts || {}); return true; });
 /**
  * "Power down", typed at the desk or sent from the phone or the group: JARVIS goes to sleep.
@@ -1636,6 +1671,31 @@ ipcMain.handle('jarvis:openDoc', async (_e, root, rel) => {
   catch { return false; }
 });
 ipcMain.handle('jarvis:openLogs', () => shell.openPath(userDir));
+
+// ---------------------------------------------------------------- IPC: notes
+// Written in the window, kept in notes.json beside the config, and optionally sent to the
+// same Telegram chat the phone alerts use. The window never sees the token - only whether
+// a chat is set up, and what it is called.
+const notes = new NoteStore(userDir);
+function telegramStatus() {
+  const tg = phoneConfig().telegram;
+  return { ready: telegramReady(tg), name: tg.name || null };
+}
+ipcMain.handle('jarvis:notes', () => {
+  try { return { ok: true, notes: notes.list(), telegram: telegramStatus() }; }
+  catch (e) { return { ok: false, error: String(e?.message || e), notes: [], telegram: telegramStatus() }; }
+});
+ipcMain.handle('jarvis:noteSave', async (_e, note, opts) => {
+  // Saved first, always: a note is not lost because Telegram is down.
+  const r = notes.save({ id: note?.id, text: note?.text });
+  if (!r.ok) return r;
+  if (!(opts && opts.telegram)) return { ...r, telegram: telegramStatus() };
+  const sent = await sendNote(phoneConfig().telegram, r.note);
+  if (sent.ok) { notes.markSent(r.note.id); log('note sent to Telegram'); }
+  else log('note not sent to Telegram:', sent.error);
+  return { ok: true, note: { ...r.note, sentAt: sent.ok ? Date.now() : r.note.sentAt }, sent, telegram: telegramStatus() };
+});
+ipcMain.handle('jarvis:noteDelete', (_e, id) => notes.remove(typeof id === 'string' ? id : ''));
 
 // ---------------------------------------------------------------- IPC: files (read-only) + VS Code
 let fileIndex = null;

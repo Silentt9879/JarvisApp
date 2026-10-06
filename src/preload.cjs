@@ -129,6 +129,17 @@ contextBridge.exposeInMainWorld('jarvis', {
   telegramVerify: (token) => ipcRenderer.invoke('jarvis:telegramVerify', token),
   telegramFindChat: () => ipcRenderer.invoke('jarvis:telegramFindChat'),
   telegramFindGroup: () => ipcRenderer.invoke('jarvis:telegramFindGroup'),
+  // The Anthropic account: who is signed in, and the two buttons beside it. Claude Code
+  // keeps the credentials; none of them comes through here.
+  authStatus: () => ipcRenderer.invoke('jarvis:authStatus'),
+  authLogin: () => ipcRenderer.invoke('jarvis:authLogin'),
+  authLogout: () => ipcRenderer.invoke('jarvis:authLogout'),
+  restartApp: () => ipcRenderer.invoke('jarvis:restartApp'),
+  // Notes: written here, kept in notes.json, and sent to Telegram when asked. The window
+  // is told only whether a Telegram chat is set up, never the token.
+  notes: () => ipcRenderer.invoke('jarvis:notes'),
+  noteSave: (note, opts) => ipcRenderer.invoke('jarvis:noteSave', note, opts),
+  noteDelete: (id) => ipcRenderer.invoke('jarvis:noteDelete', id),
   // ASP.NET sites and APIs: dotnet watch run, shown in the window.
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),

@@ -215,8 +215,10 @@
   function renderOperator() {
     const a = state.account || {};
     $('opName').textContent = a.email ? a.email.split('@')[0] : 'Operator';
-    $('opPlan').textContent = JV.planName(a) || 'Signed in';
-    $('operator').title = [a.email, a.organization].filter(Boolean).join('\n') || 'Signed-in account';
+    $('opPlan').textContent = a.signedOut ? 'Not signed in' : (JV.planName(a) || 'Signed in');
+    $('operator').title = a.signedOut
+      ? 'Not signed in - sign in from Settings (Ctrl+,)'
+      : ([a.email, a.organization].filter(Boolean).join('\n') || 'Signed-in account');
   }
   $('operator').onclick = () => JV.show('core');
 
@@ -240,7 +242,7 @@
     if (q.length < 2) { sRes.hidden = true; return; }
     const ql = q.toLowerCase();
     const groups = [];
-    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['GitHub Desktop', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Agents', 'agents'], ['Workspace', 'workspace'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
+    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['GitHub Desktop', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Notes', 'notes'], ['Agents', 'agents'], ['Workspace', 'workspace'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
       .filter(([n]) => n.toLowerCase().includes(ql)).map(([n, v]) => ({ title: n, sub: 'Go to view', run: () => JV.show(v) }));
     if (views.length) groups.push(['Views', views]);
     const sessions = state.sessions.filter((s) => s.title.toLowerCase().includes(ql)).slice(0, 6).map((s) => ({ title: s.title, sub: JV.ago(s.lastModified), run: () => JV.chat.resumeSession(s.id, s.title) }));
@@ -336,13 +338,14 @@
     const dl = $('settingsInfo');
     dl.replaceChildren();
     const rows = [
-      ['Account', a.email || '–'],
-      ['Plan', JV.planName(a) || '–'],
+      // The account itself is the section above; this is what the running session is using.
+      ['Session', a.email ? `${a.email}${JV.planName(a) ? ` · ${JV.planName(a)}` : ''}` : 'No session yet'],
       ['JARVIS app', state.info ? `v${state.info.version} · Electron ${state.info.electron}` : '–'],
       ['Claude Code', state.version ? `v${state.version}` : '–'],
     ];
     for (const [k, v] of rows) { dl.appendChild(el('dt', null, k)); dl.appendChild(el('dd', null, v)); }
     renderWorkspace();
+    loadAccount();
     renderThemeSeg();
     JV.loadAlerts?.();
     $('prefNotify').checked = !!JV.prefs.notify;
@@ -395,6 +398,90 @@
     e.currentTarget.disabled = false;
     if (r?.unchanged) { $('wsConfirm').hidden = true; return; }
     JV.notify(r?.error || 'Could not switch to that folder.', { level: 'err', action: openSettings });
+  };
+
+  // ------------------------------------------------------------- the account
+  // Who JARVIS works as, with one button beside it - sign out when signed in, sign in when
+  // not. Claude Code holds the credentials and runs both commands; the window only asks it
+  // who is signed in. Signing in happens in a console window of its own (the CLI drives a
+  // browser), so the answer is waited for by asking again every few seconds.
+  let acct = null;
+  let acctPolling = 0;
+  function renderAccount() {
+    const who = $('acctWho');
+    const btn = $('acctBtn');
+    const note = $('acctNote');
+    btn.hidden = false;
+    btn.disabled = false;
+    btn.className = 'btn small';
+    if (!acct) { who.textContent = 'Checking…'; btn.hidden = true; return; }
+    if (acct.ok && acct.loggedIn) {
+      who.textContent = acct.email || 'Signed in';
+      note.textContent = [JV.planName(acct), acct.orgName].filter(Boolean).join(' · ')
+        || 'The Anthropic account JARVIS works as.';
+      btn.textContent = 'Sign out';
+      return;
+    }
+    who.textContent = acctPolling ? 'Waiting for the sign-in window…' : 'Not signed in';
+    note.textContent = acct.error
+      ? acct.error
+      : (acctPolling
+        ? 'Finish signing in in the window that opened, and this will catch up on its own.'
+        : 'JARVIS cannot work until an Anthropic account is signed in.');
+    btn.className = 'btn btn-primary small';
+    btn.textContent = acctPolling ? 'Waiting…' : 'Sign in';
+    btn.disabled = !!acctPolling;
+  }
+  async function loadAccount() {
+    acct = await window.jarvis.authStatus();
+    renderAccount();
+    return acct;
+  }
+  JV.loadAccount = loadAccount;
+  $('acctBtn').onclick = async () => {
+    if (acct?.loggedIn) {
+      $('acctEmail').textContent = acct.email || 'this account';
+      $('acctRestart').hidden = true;
+      $('acctConfirm').hidden = false;
+      $('acctGo').focus();
+      return;
+    }
+    const r = await window.jarvis.authLogin();
+    if (!r?.ok) { JV.notify(r?.error || 'Could not open the sign-in window.', { level: 'err' }); return; }
+    // The CLI is asking its own questions now; watch for the answer for five minutes.
+    const until = Date.now() + 300000;
+    clearInterval(acctPolling);
+    acctPolling = setInterval(async () => {
+      const r2 = await loadAccount();
+      if (r2?.loggedIn) {
+        clearInterval(acctPolling); acctPolling = 0;
+        $('acctNew').textContent = r2.email || 'your account';
+        $('acctRestart').hidden = false;
+        renderAccount();
+        JV.notify(`Signed in as ${r2.email || 'your account'}. Restart JARVIS to use it.`, { level: 'ok', action: openSettings });
+      } else if (Date.now() > until) { clearInterval(acctPolling); acctPolling = 0; renderAccount(); }
+    }, 3000);
+    renderAccount();
+  };
+  $('acctCancel').onclick = () => { $('acctConfirm').hidden = true; $('acctBtn').focus(); };
+  $('acctGo').onclick = async (e) => {
+    e.currentTarget.disabled = true;
+    e.currentTarget.textContent = 'Signing out…';
+    const r = await window.jarvis.authLogout();
+    e.currentTarget.disabled = false;
+    e.currentTarget.textContent = 'Sign out';
+    $('acctConfirm').hidden = true;
+    if (!r?.ok) { JV.notify(r?.error || 'Could not sign out.', { level: 'err', action: openSettings }); return; }
+    state.account = { signedOut: true };
+    renderOperator();
+    await loadAccount();
+    JV.notify('Signed out. Sign in again from Settings to carry on.', { level: 'warn', action: openSettings });
+  };
+  $('acctRestartGo').onclick = async (e) => {
+    e.currentTarget.disabled = true;
+    const r = await window.jarvis.restartApp();
+    if (r?.restarting) e.currentTarget.textContent = 'Restarting…';
+    else e.currentTarget.disabled = false;
   };
 
   // ------------------------------------------------------------- appearance

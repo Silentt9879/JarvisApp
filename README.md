@@ -17,7 +17,22 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.4.0
+## 🆕 What's new in v1.5.0
+
+**Simplified**
+
+- 📝 **Notes.** A new sidebar page for jotting something down: write it, hit Save, and it's kept. Tick **Send to Telegram** and it also goes to the same chat your phone alerts use - the note is saved either way, even if Telegram is down. Switching notes never loses an unfinished edit (parked as a draft, marked "unsaved"), and Delete asks once in the button itself before it removes anything.
+- 👤 **Sign in / sign out, from Settings.** A new **Account** section shows who JARVIS is signed in as. **Sign out** asks first, then stops the session cleanly. **Sign in** opens a window for the browser-based flow and watches for you to finish, then offers to restart JARVIS so every part picks up the new account. Nothing you sign in with is ever stored by JARVIS or shown in a log.
+- 🎛️ **Chats open in the mode you set.** If your own Claude Code settings say `"defaultMode": "auto"` (or `acceptEdits`, or `plan`), a new or resumed chat now starts there instead of always asking first - the same settings files, read in the same order, as the terminal uses.
+
+**Technical**
+
+- New `src/notes.mjs` (`NoteStore` on `notes.json` in the user data folder; `sendNote` through the existing `telegram.mjs`), `src/renderer/notes.js`, 3 IPC handlers in `main.mjs`, `scripts/notes-test.mjs` (38 checks: store, Telegram send with the transport stubbed, and the real renderer driven through save / send / failure / drafts / delete).
+- New `src/auth.mjs` wrapping `claude auth status --json` / `logout` / `login` (the last opens its own console window via `cmd start`, since the CLI drives a browser); errors are scrubbed of key-shaped strings before they reach the window or the log. 4 IPC handlers, `scripts/auth-test.mjs` (22 checks), verified against a packaged build.
+- New `src/permission-mode.mjs`: `startingMode(cwd)` reads `permissions.defaultMode` from local → project → user settings, the same precedence Claude Code itself uses; `session.mjs` passes the result as `permissionMode` instead of a hard-coded `'default'`. Still never `bypassPermissions`. `scripts/permission-mode-test.mjs`.
+
+<details>
+<summary><b>Earlier: v1.4.0</b></summary>
 
 **Simplified**
 
@@ -57,6 +72,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 </details>
 
+</details>
+
 ---
 
 ## ✨ What it does
@@ -69,6 +86,7 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 | 🐙 **GitHub Desktop** | Changes, commits, Undo, stashes, branches, push and pull, plus pull requests and checks from GitHub |
 | ✅ **Tasks** | Your ClickUp board, synced and grouped by sprint |
 | 📂 **Files** | Read any workspace file, and double-click to open it in VS Code |
+| 📝 **Notes** | Write something down, save it, and send it to your Telegram |
 | 📲 **Devices** | Live phone screens with `flutter run` (also in their own window), and web apps with `dotnet watch` |
 | ↩️ **Undo** | Undo every file change made since any message, in one click |
 

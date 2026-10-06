@@ -27,6 +27,7 @@
       <button id="navSource" data-view="source"><i data-icon="github"></i><span>GitHub Desktop</span><em class="nbadge" id="nbSource" hidden></em></button>
       <button id="navFiles" data-view="files"><i data-icon="code"></i><span>Files</span></button>
       <button id="navMemory" data-view="memory"><i data-icon="memory"></i><span>Memory</span><em class="nbadge" id="nbMemory"></em></button>
+      <button id="navNotes" data-view="notes"><i data-icon="edit"></i><span>Notes</span><em class="nbadge" id="nbNotes"></em></button>
 
       <button class="nav-more" id="navMore" title="More views" aria-expanded="false"><i data-icon="chevron"></i><span>More</span></button>
       <div class="nav-group" id="navGroup">
@@ -347,6 +348,36 @@
         </div>
       </section>
 
+      <!-- ========================================================== NOTES -->
+      <section class="view" id="view-notes">
+        <div class="page">
+          <div class="page-head">
+            <h2>Notes</h2>
+            <p>Somewhere to write things down. Saved here, and sent to your Telegram if you ask. <span class="muted" id="noteTg"></span></p>
+          </div>
+          <div class="files-layout">
+            <aside class="files-side">
+              <button class="btn btn-primary btn-block" id="noteNew"><i data-icon="plus"></i><span>New note</span></button>
+              <ul class="file-list note-list" id="noteList"></ul>
+            </aside>
+            <div class="file-view">
+              <div class="file-head">
+                <div class="file-title"><b id="noteTitle">New note</b><small id="noteWhen"></small></div>
+                <div class="file-acts">
+                  <label class="switch" id="noteSendWrap" title="Also send this note to your Telegram">
+                    <input type="checkbox" id="noteSend" /><span class="track"></span><span>Send to Telegram</span>
+                  </label>
+                  <button class="btn btn-primary file-btn" id="noteSave"><i data-icon="check"></i><span>Save</span></button>
+                  <button class="btn btn-danger file-btn" id="noteDelete" hidden><i data-icon="trash"></i><span>Delete</span></button>
+                </div>
+              </div>
+              <div class="note-msg" id="noteMsg" hidden></div>
+              <textarea class="note-edit" id="noteText" placeholder="Write your note, sir…" spellcheck="true"></textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ============================================ GITHUB DESKTOP (was Source Control) -->
       <section class="view" id="view-source">
         <div class="page">
@@ -649,6 +680,32 @@
       </section>
 
       <section class="set-sec">
+        <div class="pop-sec">Account</div>
+        <div class="ws-row">
+          <div class="ws-path">
+            <b id="acctWho">Checking…</b>
+            <small id="acctNote">The Anthropic account JARVIS works as. Claude Code keeps the sign-in; JARVIS never sees it.</small>
+          </div>
+          <button class="btn small" id="acctBtn" hidden></button>
+        </div>
+        <div class="ws-confirm" id="acctConfirm" hidden>
+          <div>
+            <b>Sign out of <span id="acctEmail"></span>?</b>
+            <small>The current session stops, and JARVIS cannot work until you sign in again. Your conversations, notes and settings stay.</small>
+          </div>
+          <button class="btn small" id="acctCancel">Cancel</button>
+          <button class="btn btn-danger small" id="acctGo">Sign out</button>
+        </div>
+        <div class="ws-confirm" id="acctRestart" hidden>
+          <div>
+            <b>Signed in as <span id="acctNew"></span>.</b>
+            <small>Restart JARVIS so every part of it works as the new account.</small>
+          </div>
+          <button class="btn btn-primary small" id="acctRestartGo">Restart JARVIS</button>
+        </div>
+      </section>
+
+      <section class="set-sec">
         <div class="pop-sec">About</div>
         <dl class="kv" id="settingsInfo"></dl>
       </section>
@@ -673,6 +730,7 @@
 <script src="webapps.js"></script>
 <script src="clickup.js"></script>
 <script src="files.js"></script>
+<script src="notes.js"></script>
 <script src="git.js"></script>
 <script src="github.js"></script>
 <script src="crew-model.js"></script>

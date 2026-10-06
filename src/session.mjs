@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { startingMode } from './permission-mode.mjs';
 
 /** An async-iterable queue: the SDK reads the user's messages from it. */
 class InputQueue {
@@ -151,6 +152,13 @@ export class JarvisSession {
     this.emit({ kind: 'status', state: 'starting' });
     this.emit({ kind: 'tasks', list: [] });
 
+    // Start where the user's own Claude Code settings say (permissions.defaultMode), as the
+    // terminal does - it used to be hard-coded to ask mode. Never bypassPermissions.
+    const start = startingMode(this.cwd);
+    if (start.asked && start.asked !== start.mode) {
+      this.log('[permission]', `settings ask for "${start.asked}", which the window does not allow - starting in "${start.mode}"`);
+    }
+
     const options = {
       cwd: this.cwd,
       pathToClaudeCodeExecutable: this.exe,
@@ -159,7 +167,7 @@ export class JarvisSession {
       settingSources: ['user', 'project', 'local'],
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       includePartialMessages: true,
-      permissionMode: 'default',
+      permissionMode: start.mode,
       // Backups of every file Claude edits, so a message's changes can be undone (rewindFiles).
       enableFileCheckpointing: true,
       // session_state_changed: the reliable "turn over" signal when messages were queued.
