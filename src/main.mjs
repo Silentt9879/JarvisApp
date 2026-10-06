@@ -830,7 +830,7 @@ ipcMain.handle('jarvis:setWorkspace', (_e, dir) => {
   // Give the reply a moment to reach the window, then stop everything this app started -
   // app.exit skips window-all-closed, and claude.exe, a dotnet watch or a flutter run left
   // behind would keep running against the old folder.
-  setTimeout(async () => { await shutdownChildren(); app.relaunch(); app.exit(0); }, 400);
+  setTimeout(async () => { await shutdownChildren(); app.relaunch({ args: [...process.argv.slice(1), '--restarted'] }); app.exit(0); }, 400);
   return { ok: true, restarting: true };
 });
 
@@ -850,7 +850,17 @@ ipcMain.handle('jarvis:claudeVersion', () => (fs.existsSync(claudeExe()) ? claud
 // ---------------------------------------------------------------- IPC: the account
 // Claude Code owns the credentials; JARVIS only asks who is signed in, and runs its own
 // sign-in and sign-out commands. Nothing secret crosses this boundary.
-ipcMain.handle('jarvis:authStatus', () => (fs.existsSync(claudeExe()) ? authStatus(claudeExe()) : { ok: false, loggedIn: false, error: 'Claude Code is not installed here.' }));
+// Signed out: nothing can be sent until the account is back, so the window and the phone are
+// told plainly, instead of "the session is not running". A readable "not signed in" answer
+// sets it; a failed check never does (that would look like signed out when it is not).
+let signedOut = false;
+const SIGNED_OUT = "You're signed out. Sign in from Settings to carry on.";
+function noteAccount(r) {
+  if (r?.ok && r.loggedIn === true) signedOut = false;
+  else if (r?.ok && r.loggedIn === false && !r.unreadable) signedOut = true;
+  return r;
+}
+ipcMain.handle('jarvis:authStatus', async () => (fs.existsSync(claudeExe()) ? noteAccount(await authStatus(claudeExe())) : { ok: false, loggedIn: false, error: 'Claude Code is not installed here.' }));
 ipcMain.handle('jarvis:authLogin', () => {
   if (!fs.existsSync(claudeExe())) return { ok: false, error: 'Claude Code is not installed here.' };
   if (process.env.JARVIS_CAPTURE) { log('capture: would open the sign-in window'); return { ok: true, started: true }; }
@@ -867,18 +877,30 @@ ipcMain.handle('jarvis:authLogout', async () => {
   // start brings up a fresh one. The window is told, so the chat does not look alive.
   try { session?.close(); } catch { /* already gone */ }
   session = null;
+  signedOut = true;
   log('signed out of the Anthropic account');
   // Window only: the phone and the Telegram watchers must not be told a turn just ended.
-  toWindow({ kind: 'status', state: 'ready' });
+  // "closed" (not "ready"): the window then knows to start a session again, which is refused
+  // with the plain sign-in message until the account is back.
+  toWindow({ kind: 'status', state: 'closed' });
   return { ok: true };
 });
 /** Restart JARVIS itself - how a new sign-in is picked up everywhere at once. */
 ipcMain.handle('jarvis:restartApp', () => {
   log('restarting at the window\'s request');
-  setTimeout(async () => { await shutdownChildren(); app.relaunch(); app.exit(0); }, 400);
+  setTimeout(async () => { await shutdownChildren(); app.relaunch({ args: [...process.argv.slice(1), '--restarted'] }); app.exit(0); }, 400);
   return { ok: true, restarting: true };
 });
-ipcMain.handle('jarvis:start', (_e, opts) => { remote.sessionStarted(); ensureSession().start(opts || {}); return true; });
+ipcMain.handle('jarvis:start', async (_e, opts) => {
+  // Starting with nobody signed in would only fail inside the session; say so here instead.
+  if (fs.existsSync(claudeExe())) {
+    noteAccount(await authStatus(claudeExe()));
+    if (signedOut) { toWindow({ kind: 'status', state: 'closed' }); return { ok: false, error: SIGNED_OUT }; }
+  }
+  remote.sessionStarted();
+  ensureSession().start(opts || {});
+  return true;
+});
 /**
  * "Power down", typed at the desk or sent from the phone or the group: JARVIS goes to sleep.
  * The window closes and the session, the web apps and the phone mirrors stop, but the
@@ -919,7 +941,7 @@ ipcMain.handle('jarvis:send', (_e, payload) => {
     powerDown('desk');
     return { ok: true };
   }
-  const r = ensureSession().send(payload);
+  const r = signedOut ? { ok: false, error: SIGNED_OUT } : ensureSession().send(payload);
   // Every message is noted with where it came from, so its reply can go back there.
   try {
     remote.noteSend(payload?.origin === 'telegram' ? 'telegram' : 'desk', r, { text: typeof payload?.text === 'string' ? payload.text : '', attachments: atts });
@@ -1864,7 +1886,8 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
       remote.announce(`✅ System update installed - JARVIS v${app.getVersion()} is back online and listening.`);
     } else {
       // Opened at the desk (or at login): a hello on the phone, so it buzzes when the PC side comes up.
-      remote.announce(`👋 ${greeting(new Date(), pcLabel())}`).then((m) => { if (m) log('greeting sent to the phone'); });
+      // Not after an in-app restart (sign-in, folder change): the phone already knows JARVIS is up.
+      if (!process.argv.includes('--restarted')) remote.announce(`👋 ${greeting(new Date(), pcLabel())}`).then((m) => { if (m) log('greeting sent to the phone'); });
     }
   });
   app.on('window-all-closed', async () => {

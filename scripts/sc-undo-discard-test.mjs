@@ -7,13 +7,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import {
   lastCommit, undoLastCommit, discardAll, changedFiles, stageFiles, stageAll, commit, repoDetail,
 } from '../src/git.mjs';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const POLICY = path.resolve(HERE, '..', '..', 'BantuApps', '.claude', 'jarvis', 'git-risk-policy.json');
+// The undo and discard rules live in the workspace's policy file (src/git-policy.mjs explains why),
+// not in this repo. Point JARVIS_POLICY_FILE at it to run this test. Without it, the test is
+// SKIPPED and says so - it is not faked, because a missing policy correctly blocks undo.
+const POLICY = process.env.JARVIS_POLICY_FILE || '';
+if (!POLICY || !fs.existsSync(POLICY)) {
+  console.log('sc-undo-discard-test: SKIPPED - no git risk policy found. Set JARVIS_POLICY_FILE to your workspace\'s .claude\\jarvis\\git-risk-policy.json to run it.');
+  process.exit(0);
+}
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jv-sc-undo-'));
 const ws = path.join(root, 'ws');

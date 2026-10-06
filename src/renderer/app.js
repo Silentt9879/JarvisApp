@@ -391,14 +391,16 @@
     $('wsGo').focus();
   };
   $('wsCancel').onclick = () => { wsPending = null; $('wsConfirm').hidden = true; $('wsChange').focus(); };
+  // Same rule as the account buttons: keep the button before the await, and always give it back.
   $('wsGo').onclick = async (e) => {
     if (!wsPending) return;
-    e.currentTarget.disabled = true;
-    const r = await window.jarvis.setWorkspace(wsPending);
-    if (r?.ok && r.restarting) { $('wsGo').textContent = 'Restarting…'; return; }
-    e.currentTarget.disabled = false;
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const r = await window.jarvis.setWorkspace(wsPending).catch((err) => ({ ok: false, error: err.message }));
+    if (r?.ok && r.restarting) { btn.textContent = 'Restarting…'; return; }
+    btn.disabled = false;
     if (r?.unchanged) { $('wsConfirm').hidden = true; return; }
-    JV.notify(r?.error || 'Could not switch to that folder.', { level: 'err', action: openSettings });
+    if (!r?.ok) JV.notify(r?.error || 'Could not switch to that folder. Try again in a moment.', { level: 'err', action: openSettings });
   };
 
   // ------------------------------------------------------------- the account
@@ -465,24 +467,28 @@
     renderAccount();
   };
   $('acctCancel').onclick = () => { $('acctConfirm').hidden = true; $('acctBtn').focus(); };
+  // The button is read before the first await: after it, e.currentTarget is already null.
   $('acctGo').onclick = async (e) => {
-    e.currentTarget.disabled = true;
-    e.currentTarget.textContent = 'Signing out…';
-    const r = await window.jarvis.authLogout();
-    e.currentTarget.disabled = false;
-    e.currentTarget.textContent = 'Sign out';
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Signing out…';
+    let r = null;
+    try { r = await window.jarvis.authLogout(); } catch (err) { r = { ok: false, error: err.message }; }
+    btn.disabled = false;
+    btn.textContent = 'Sign out';
     $('acctConfirm').hidden = true;
-    if (!r?.ok) { JV.notify(r?.error || 'Could not sign out.', { level: 'err', action: openSettings }); return; }
+    if (!r?.ok) { JV.notify(r?.error || 'Could not sign out. Try again in a moment.', { level: 'err', action: openSettings }); return; }
     state.account = { signedOut: true };
     renderOperator();
     await loadAccount();
-    JV.notify('Signed out. Sign in again from Settings to carry on.', { level: 'warn', action: openSettings });
+    JV.notify("You're signed out. Sign in from Settings to carry on.", { level: 'warn', action: openSettings });
   };
   $('acctRestartGo').onclick = async (e) => {
-    e.currentTarget.disabled = true;
-    const r = await window.jarvis.restartApp();
-    if (r?.restarting) e.currentTarget.textContent = 'Restarting…';
-    else e.currentTarget.disabled = false;
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const r = await window.jarvis.restartApp().catch(() => null);
+    if (r?.restarting) btn.textContent = 'Restarting…';
+    else btn.disabled = false;
   };
 
   // ------------------------------------------------------------- appearance

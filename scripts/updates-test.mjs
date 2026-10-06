@@ -269,6 +269,28 @@ const SHA = 'ab'.repeat(32);
   const got = await resolveToken({ file: path.join(tmp, 'absent.bin'), safe: fakeSafe, spawnImpl: fakeGit });
   ok(got.token === 'gho_fromgit' && got.source === 'git', 'with no saved token, the Git sign-in is used');
 }
+{
+  // Settings must never open a Git sign-in window or ask a question in a terminal.
+  let env = null;
+  const spy = (file, args, opts) => { env = opts.env; const c = fakeGit(); return c; };
+  function fakeGit() {
+    const c = new EventEmitter();
+    c.stdout = new EventEmitter();
+    c.stdin = { end() { setImmediate(() => c.emit('close', 1)); } };
+    c.kill = () => {};
+    return c;
+  }
+  await gitCredentialToken({ spawnImpl: spy });
+  ok(env?.GCM_INTERACTIVE === 'never' && env?.GIT_TERMINAL_PROMPT === '0', 'Git is told never to prompt (no sign-in window from Settings)');
+}
+{
+  // The updater closes anything still running from the install folder first, so a leftover
+  // process cannot lock the files the installer has to replace.
+  const script = updaterCommand({ installerPath: 'C:\\x\\setup.exe', waitPid: 1, relaunchExe: 'C:\\JARVIS.exe', logPath: 'C:\\l.txt', installDir: 'C:\\Users\\me\\Programs\\JARVIS\\' });
+  ok(script.includes("$dir = 'C:\\Users\\me\\Programs\\JARVIS\\'"), 'the install folder (with its trailing slash) is named');
+  ok(script.includes('Stop-Process -Force') && script.includes('StringComparison]::OrdinalIgnoreCase'), 'anything running from that folder is stopped');
+  ok(script.indexOf('Stop-Process') < script.indexOf("-ArgumentList '/S'"), 'the stop happens before the installer runs');
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`updates-test: ${pass} passed, ${fail} failed`);

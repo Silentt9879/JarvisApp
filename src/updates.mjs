@@ -146,7 +146,11 @@ export function gitCredentialToken({ spawnImpl = spawn, timeoutMs = 10_000 } = {
     let out = '';
     let child;
     try {
-      child = spawnImpl('git', ['credential', 'fill'], { windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+      // Never a prompt: no terminal question, and no Git Credential Manager sign-in window from Settings.
+      child = spawnImpl('git', ['credential', 'fill'], {
+        windowsHide: true,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
+      });
     } catch {
       resolve(null);
       return;
@@ -280,13 +284,18 @@ export async function downloadInstaller(installer, dest, { fetchImpl = fetch, on
  * The PowerShell that installs the update after JARVIS has closed, then opens it again.
  * Passed encoded, so no path needs quoting. The log sits beside the app's own log.
  */
-export function updaterCommand({ installerPath, waitPid, relaunchExe, logPath }) {
+export function updaterCommand({ installerPath, waitPid, relaunchExe, logPath, installDir = path.dirname(JARVIS_INSTALL_EXE) + path.sep }) {
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
   return [
     `function Log($m) { "$(Get-Date -Format s) $m" | Out-File -Append -Encoding utf8 ${q(logPath)} }`,
     `Log 'update: waiting for JARVIS to close'`,
     `try { Wait-Process -Id ${Number(waitPid)} -Timeout 60 -ErrorAction Stop } catch { Log 'update: JARVIS did not close in time, installing anyway' }`,
     `Start-Sleep -Seconds 2`,
+    // Safety net: anything still running from the install folder (the agent's claude.exe, say)
+    // would lock its files, so close it first. Trailing separator, so "JARVIS2" is not matched.
+    `$dir = ${q(installDir)}`,
+    `for ($i = 0; $i -lt 20; $i++) { $left = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) }); if ($left.Count -eq 0) { break }; $left | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }`,
+    `Log 'update: nothing left running from the install folder'`,
     `Log 'update: installing'`,
     `$p = Start-Process -FilePath ${q(installerPath)} -ArgumentList '/S' -Wait -PassThru`,
     `Log "update: installer finished (exit $($p.ExitCode))"`,

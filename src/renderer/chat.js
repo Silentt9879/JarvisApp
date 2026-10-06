@@ -808,7 +808,7 @@
         renderAttach();
         autosize();
       }
-      errorCard(r?.error || 'The message could not be sent - the session is not running.', !r?.error);
+      errorCard(r?.error || 'That message did not go through. Try again in a moment.', !r?.error);
       JV.emit('send_failed', {});
     }
   }

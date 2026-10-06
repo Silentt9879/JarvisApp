@@ -4,13 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 
 let pass = 0; const fails = [];
 const check = (n, c, extra) => {
   if (c) { pass += 1; console.log('PASS  ' + n); }
   else { fails.push(n); console.log('FAIL  ' + n + (extra ? '\n        ' + String(extra).slice(0, 300) : '')); }
 };
-const APP = process.env.P9_APP || 'C:/Users/bantu/Downloads/JarvisApp';
+// The app folder is the one this test lives in (P9_APP overrides it), so it runs on any PC.
+const APP = process.env.P9_APP || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..').replace(/\\/g, '/');
 const read = (p) => fs.readFileSync(p, 'utf8');
 const tick = async (n = 8) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setImmediate(r)); };
 const N = await import(`file:///${APP}/src/notes.mjs`);

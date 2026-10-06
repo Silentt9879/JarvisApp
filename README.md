@@ -17,7 +17,25 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.6.0
+## 🆕 What's new in v1.6.1
+
+**Simplified**
+
+- 🔐 **Signing out no longer breaks the chat.** After you sign out, JARVIS says "You're signed out. Sign in from Settings to carry on", on the PC and on Telegram, instead of "the session is not running".
+- 🧭 **Buttons don't get stuck.** Sign out, Restart in this folder and their error messages come back properly.
+- 🔑 **Friendlier GitHub sign-in.** When JARVIS needs to sign in, Settings walks you through three steps. It never pops up Git's own sign-in window.
+- 👋 **No repeat greeting.** The phone is greeted when JARVIS starts, not every time it restarts or updates.
+- 🧪 **`npm test` finishes.** The source-control undo test is skipped, with a message, until the workspace's git risk policy file is back.
+
+**Technical**
+
+- `main.mjs`: a `signedOut` flag, set by a readable "not signed in" answer (`noteAccount`) and by sign-out. `jarvis:send` and `jarvis:start` refuse with `SIGNED_OUT`. Sign-out sends the window status `closed` (not `ready`). Restarts relaunch with `--restarted`, which skips the greeting.
+- `renderer/app.js`: the sign-out, restart and workspace buttons read `e.currentTarget` before their `await` (it is null after one), and always restore the button and show errors.
+- `updates.mjs`: the Git credential helper runs with `GCM_INTERACTIVE=never`. The updater stops anything still running from the install folder before the silent install. `scripts/updates-test.mjs`: 51 checks.
+- Tests: `notes-test` and `auth-test` find the app from their own folder. `sc-undo-discard-test` runs only when `JARVIS_POLICY_FILE` points at the workspace policy.
+
+<details>
+<summary><b>Earlier: v1.6.0</b></summary>
 
 **Simplified**
 
@@ -29,6 +47,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 - New `src/updates.mjs`: `jarvisStatus` / `jarvisUpdate` (GitHub `releases/latest`, the `JARVIS-Setup-x.y.z.exe` asset, SHA-256 checked against the release digest, a mismatched download is deleted and never run); `vscodeStatus` / `vscodeUpdate` (winget `show` / `upgrade`); `claudeStatus` / `claudeUpdate` (`claude update` when the command exists, otherwise `npm i -g @anthropic-ai/claude-code@latest`). The updater is a detached PowerShell that waits for JARVIS to exit, runs the installer with `/S`, then reopens JARVIS with `--updated` so it announces the update.
 - NSIS target in `package.json` (`npm run dist` writes `dist-installer/`, per-user, no directory page), `build/installer.nsh` for the setup wording, `src/renderer/updates.js` and an Updates section in Settings, 3 IPC handlers in `main.mjs`, `scripts/updates-test.mjs` (35 checks, commands and GitHub stubbed).
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.5.0</b></summary>
