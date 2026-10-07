@@ -17,7 +17,18 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.7.3
+## 🆕 What's new in v1.7.4
+
+**Simplified**
+
+- 🔗 **Clickup.** The Tasks page in the More group is now called Clickup and shows the ClickUp logo in place of the checklist icon.
+
+**Technical**
+
+- `renderer/index.html`: the `navTasks` button is labelled "Clickup" with icon key `clickup`. `renderer/core.js`: new `ICONS.clickup` (the simple-icons ClickUp mark, CC0), drawn solid in `currentColor` like the GitHub mark.
+
+<details>
+<summary><b>Earlier: v1.7.3</b></summary>
 
 **Simplified**
 
@@ -29,6 +40,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - `renderer/app.js`: `PRIMARY` (Ctrl+1 to Ctrl+5) has `source` in place of `automations`. `renderNavBadges` no longer writes the Workspace, Knowledge or Memory badges, which are gone (writing to them would throw), and the `memory` listener that drove only those is removed.
 - The views and their modules are unchanged. Automations and Activity can no longer be opened from the sidebar or search.
 - `npm test` passes in full. A capture run (`JARVIS_CAPTURE`) confirmed the new sidebar order.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.7.2</b></summary>
