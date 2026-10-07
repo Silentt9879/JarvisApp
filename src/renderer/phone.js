@@ -3,11 +3,16 @@
    so it looks and behaves the same; the decoder and touch handling are phone-screen.js.
 
    While this window is open the main process sends this phone's video here and nowhere
-   else. Closing it - or "Back into JARVIS" - returns the phone to its card. */
+   else. Closing it - or "Back into JARVIS" - returns the phone to its card.
+
+   The phone itself can change under this window: unplugged and a different one plugged
+   into the same cable, say for testing. `serial` is therefore `let`, not `const` - every
+   function below reads it live, so a switch (see `adopt`) takes effect everywhere at once
+   without re-wiring a thing. */
 (() => {
   'use strict';
   const { el } = JV;
-  const serial = new URLSearchParams(location.search).get('serial') || '';
+  let serial = new URLSearchParams(location.search).get('serial') || '';
   const LABELS = 'jarvis.deviceLabels';
 
   // The theme Settings pinned, as in the main window (data-theme on <html>), and the window
@@ -52,11 +57,19 @@
   c.label.onchange = () => { saveLabel(c.label.value.trim()); setTitle(); };
   const id = el('div', 'dev-id');
   c.model = el('b', null, serial);
+  c.serialEl = el('small', null, serial);
   id.appendChild(c.model);
-  id.appendChild(el('small', null, serial));
+  id.appendChild(c.serialEl);
   c.status = el('span', 'pill', 'Connecting…');
+  // Its own icon-row (not a lone icon-btn): that class floats right with margin-left:auto,
+  // which is right for a single trailing button but would shove the status pill after it
+  // out of place here.
+  const headActs = el('div', 'icon-row');
+  c.switchBtn = iconBtn('swap', 'Switch to a different phone', () => openSwitcher());
+  headActs.appendChild(c.switchBtn);
   head.appendChild(c.label);
   head.appendChild(id);
+  head.appendChild(headActs);
   head.appendChild(c.status);
   root.appendChild(head);
 
@@ -115,18 +128,22 @@
     root.classList.toggle('live', level === 'ok');
   }
 
-  function setOverlay(icon, title, sub, action) {
+  /** `actions` is one {label, run} or a list of them - a picker needs more than one. */
+  function setOverlay(icon, title, sub, actions) {
     c.overlay.hidden = false;
     c.ov.replaceChildren();
     if (icon) c.ov.appendChild(JV.icon(icon));
     c.ov.appendChild(el('div', 'ov-title', title));
     if (sub) c.ov.appendChild(el('div', 'ov-sub', sub));
-    if (action) {
+    const list = Array.isArray(actions) ? actions : actions ? [actions] : [];
+    if (list.length) {
       const row = el('div', 'ov-acts');
-      const b = el('button', 'btn small', action.label);
-      b.type = 'button';
-      b.onclick = action.run;
-      row.appendChild(b);
+      for (const a of list) {
+        const b = el('button', 'btn small', a.label);
+        b.type = 'button';
+        b.onclick = a.run;
+        row.appendChild(b);
+      }
       c.ov.appendChild(row);
     }
   }
@@ -170,7 +187,9 @@
     c.starting = false;
     if (!r?.ok) {
       setStatus('Not live', 'bad');
-      setOverlay('alert', 'The screen could not start', r?.error || 'Unplug and plug the phone back in, then try again.', { label: 'Try again', run: startScreen });
+      setOverlay('alert', 'The screen could not start', r?.error || 'Unplug and plug the phone back in, then try again.',
+        { label: 'Try again', run: startScreen });
+      watchForReplacement(); // it may have been swapped for a different phone, not just reseated
       return;
     }
     // The stream may already have been running for the card in JARVIS: no fresh start
@@ -180,15 +199,77 @@
     c.screen.resync();
   }
 
+  // ------------------------------------------------------------- a replacement phone
+  // Unplugging phone A and plugging in phone B used to leave this window stuck - it only
+  // ever asked for the one serial from its URL, forever, however many times "Try again" was
+  // pressed. Now, whenever the screen cannot come up, it watches adb's device list: the same
+  // phone reappearing is retried as before; a single new, unclaimed phone is adopted
+  // automatically; more than one is offered as a choice rather than guessed at.
+  let watchTimer = null;
+  function stopWatch() { clearInterval(watchTimer); watchTimer = null; }
+
+  async function candidates() {
+    let list = [];
+    try { ({ list = [] } = await window.jarvis.devices()); } catch { return { mine: null, others: [] }; }
+    return {
+      mine: list.find((d) => d.serial === serial && d.state === 'device') || null,
+      others: list.filter((d) => d.serial !== serial && d.state === 'device' && !d.popped),
+    };
+  }
+
+  function watchForReplacement() {
+    if (watchTimer || c.live) return;
+    watchTimer = setInterval(async () => {
+      if (c.live) { stopWatch(); return; }
+      const { mine, others } = await candidates();
+      if (watchTimer == null) return; // stopped (or switched by hand) while that call was out
+      if (mine) { stopWatch(); startScreen(); return; }
+      if (others.length === 1) { stopWatch(); adopt(others[0]); }
+      else if (others.length > 1) { stopWatch(); offerChoice(others); }
+    }, 2000);
+  }
+
+  /** Point this window at a different phone - a detected replacement, or one picked by hand. */
+  async function adopt(d) {
+    const was = serial;
+    const r = await window.jarvis.phoneWindow(was, 'rebind', d.serial);
+    if (!r?.ok) { setOverlay('alert', 'Could not switch phones', r?.error || '', { label: 'Try again', run: () => adopt(d) }); return; }
+    serial = d.serial;
+    saveLabel(c.label.value.trim()); // keep any name already typed, now filed under the new serial
+    c.label.value = labels()[serial] || '';
+    c.model.textContent = d.model || serial;
+    c.serialEl.textContent = serial;
+    c.state = d.state;
+    c.run = d.flutter || null;
+    setTitle();
+    renderRun();
+    setOverlay('phone', 'Switched phones', `Was ${was}. Now ${d.model || d.serial}.`);
+    startScreen();
+  }
+
+  function offerChoice(list) {
+    setOverlay('phone', 'More than one new phone', 'Pick the one this window should show.',
+      list.map((d) => ({ label: d.model || d.serial, run: () => adopt(d) })));
+  }
+
+  /** The header button: switch on purpose, any time, not only when the old phone is gone. */
+  async function openSwitcher() {
+    const { others } = await candidates();
+    if (!others.length) { setOverlay('phone', 'No other phone to switch to', 'Plug another one in, or wait for it to be noticed.', { label: 'Back', run: () => (c.live ? (c.overlay.hidden = true) : startScreen()) }); return; }
+    stopWatch();
+    offerChoice(others);
+  }
+
   window.jarvis.onVideo((p) => { if (p.serial === serial) c.screen?.packet(p); });
   window.jarvis.onEvent((e) => { if (e && (!e.serial || e.serial === serial)) JV.emit(e.kind, e); });
 
-  JV.on('mirror_start', () => { c.live = true; setStatus('Live', 'ok'); });
+  JV.on('mirror_start', () => { stopWatch(); c.live = true; setStatus('Live', 'ok'); });
   JV.on('mirror_end', (e) => {
     c.live = false;
     c.screen?.close();
     setStatus('Not live', e.reason && e.reason !== 'stopped' ? 'bad' : '');
     setOverlay('alert', 'The screen stopped', e.reason && e.reason !== 'stopped' ? e.reason : 'It was stopped.', { label: 'Start it again', run: startScreen });
+    if (e.reason && e.reason !== 'stopped') watchForReplacement(); // it may have been unplugged, not just dropped
   });
   JV.on('flutter_state', (e) => { c.run = { app: e.app, name: e.name, state: e.state, since: e.since }; renderRun(); });
 
@@ -219,12 +300,14 @@
     renderRun();
     if (!d) {
       setStatus('Not connected', 'bad');
-      setOverlay('phone', 'This phone is not connected', 'Plug it back in, then try again.', { label: 'Try again', run: () => location.reload() });
+      setOverlay('phone', 'This phone is not connected', 'Plug it back in, or plug a different one in and it will be picked up.', { label: 'Look again', run: startScreen });
+      watchForReplacement();
       return;
     }
     if (d.state !== 'device') {
       setStatus(d.state, 'busy');
-      setOverlay('phone', 'Allow USB debugging', 'Unlock the phone and tap Allow, then try again.', { label: 'Try again', run: () => location.reload() });
+      setOverlay('phone', 'Allow USB debugging', 'Unlock the phone and tap Allow, then try again.', { label: 'Try again', run: startScreen });
+      watchForReplacement();
       return;
     }
     startScreen();

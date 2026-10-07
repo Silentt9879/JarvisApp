@@ -113,7 +113,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   // The right-click menu: cut | copy | paste on this page, exactly as the keyboard does.
   edit: (cmd) => ipcRenderer.invoke('jarvis:edit', cmd),
   // A phone in its own window: open | focus | close | dock.
-  phoneWindow: (serial, action) => ipcRenderer.invoke('jarvis:phoneWindow', serial, action),
+  phoneWindow: (serial, action, extra) => ipcRenderer.invoke('jarvis:phoneWindow', serial, action, extra),
   flutterRun: (serial, app) => ipcRenderer.invoke('jarvis:flutterRun', serial, app),
   flutterCmd: (serial, cmd) => ipcRenderer.invoke('jarvis:flutterCmd', serial, cmd),
   flutterLog: (serial) => ipcRenderer.invoke('jarvis:flutterLog', serial),

@@ -17,7 +17,21 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.9.0
+## 🆕 What's new in v1.10.0
+
+**Simplified**
+
+- 🔄 **A popped-out phone now follows a cable swap.** Unplug phone A and plug in phone B, and the phone window used to sit forever on "device not found". It now notices on its own: one new, unclaimed phone is picked up automatically; the same phone coming back just resumes; and if more than one new phone shows up, it asks which rather than guessing.
+- 🔀 **Switch phones on purpose, any time.** A new button beside the phone's name opens the same picker - no need to unplug anything first.
+
+**Technical**
+
+- `src/renderer/phone.js`: `serial` is now `let`, read live everywhere rather than fixed from the URL for the window's life. `watchForReplacement()` polls `devices()` only while the screen is down; `adopt(d)` calls the new `phoneWindow(old, 'rebind', new)` IPC, then updates the model, serial, label and title in place and restarts the screen. `offerChoice()` renders one button per candidate when more than one is possible, reusing `setOverlay`'s new multi-action form. The header's new swap icon (`core.js`) opens the same picker on demand.
+- `src/main.mjs`: the `jarvis:phoneWindow` IPC gains a `rebind` action that moves the window's `phoneWindows` map entry to the new serial (refusing a phone that already has its own window), tells the Devices view both cards' new state, and leaves the old slot free. `pw.currentSerial` is now the one source of truth for which phone a window shows - `wireDocking`, the close handler and the window-error logger all read it live, so docking and video keep following the right phone after a switch instead of the serial the window opened with.
+- `scripts/phone-switch-test.mjs`: 18 checks driving the real renderer (auto-adopt, the same phone returning, an ambiguous choice, a phone already popped elsewhere being left alone, the manual switch button) plus source checks on the main-process bookkeeping.
+
+<details>
+<summary><b>Earlier: v1.9.0</b></summary>
 
 **Simplified**
 
@@ -32,6 +46,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - `scripts/deliver-update.mjs` (`npm run deliver`): writes the note for `dist-installer\JARVIS-Setup-<version>.exe` with this version's README notes, and refuses an installer older than the source.
 - `scripts/updates-test.mjs`: 27 new checks (81 in all). Two capture runs against a throwaway data folder showed the pill appearing while JARVIS ran, and the question after one press. The install itself was not run from a delivery; it is the same updater script as before.
 - A JARVIS older than v1.9.0 does not read the note, so the first move to v1.9.0 is the installer run by hand (or a GitHub release).
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.8.0</b></summary>

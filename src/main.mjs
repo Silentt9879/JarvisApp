@@ -1252,6 +1252,11 @@ function openPhoneWindow(serial) {
       backgroundThrottling: false,
     },
   });
+  // The phone this window currently shows. Fixed at open, but can change later if the
+  // window rebinds itself to a replacement phone (see the 'rebind' action below) - every
+  // closure that outlives a possible rebind reads it from here, never from the `serial`
+  // parameter, so it never goes stale.
+  pw.currentSerial = serial;
   phoneWindows.set(serial, pw);
   pw.loadFile(path.join(SRC, 'renderer', 'phone.html'), { query: { serial } });
   pw.once('ready-to-show', () => {
@@ -1263,14 +1268,15 @@ function openPhoneWindow(serial) {
   pw.webContents.on('will-navigate', (e) => e.preventDefault());
   pw.webContents.on('console-message', (e, lvl, msg) => {
     const level = e?.level ?? lvl;
-    if (level === 'error' || level === 3) log('[phone window error]', serial, String(e?.message ?? msg));
+    if (level === 'error' || level === 3) log('[phone window error]', pw.currentSerial, String(e?.message ?? msg));
   });
   pw.on('closed', () => {
-    if (phoneWindows.get(serial) === pw) phoneWindows.delete(serial);
-    toWindow({ kind: 'phone_docked', serial });
-    log('phone window closed', serial);
+    const cur = pw.currentSerial;
+    if (phoneWindows.get(cur) === pw) phoneWindows.delete(cur);
+    toWindow({ kind: 'phone_docked', serial: cur });
+    log('phone window closed', cur);
   });
-  wireDocking(serial, pw);
+  wireDocking(pw);
   toWindow({ kind: 'phone_popped', serial });
   log('phone window opened', serial);
   return { ok: true };
@@ -1330,7 +1336,7 @@ function snapHint(on, width = 0) {
   if (win && !win.isDestroyed()) win.webContents.send('jarvis:event', { kind: 'phone_snap_hint', on, width });
 }
 
-function wireDocking(serial, pw) {
+function wireDocking(pw) {
   pw.on('move', () => {
     if (ours() || dock) return;
     const area = jarvisArea();
@@ -1341,11 +1347,12 @@ function wireDocking(serial, pw) {
   pw.on('moved', () => {
     snapHint(false);
     if (ours()) return;
+    const serial = pw.currentSerial;
     if (dock?.serial === serial) { if (!stillDocked(pw.getBounds(), dock.at)) undockPhone(); return; }
     if (!dock && inSnapZone(pw.getBounds(), jarvisArea())) dockPhone(serial, pw);
   });
   pw.on('resized', () => {
-    if (ours() || dock?.serial !== serial || !win || win.isDestroyed()) return;
+    if (ours() || dock?.serial !== pw.currentSerial || !win || win.isDestroyed()) return;
     const p = pw.getBounds();
     const j = win.getBounds();
     dock.width = p.width;
@@ -1353,7 +1360,7 @@ function wireDocking(serial, pw) {
   });
   pw.on('closed', () => {
     snapHint(false);
-    if (dock?.serial === serial) undockPhone();
+    if (dock?.serial === pw.currentSerial) undockPhone();
   });
 }
 
@@ -1386,8 +1393,8 @@ ipcMain.handle('jarvis:edit', (e, cmd) => {
   return true;
 });
 
-/** open | focus | close | dock (close it and bring JARVIS forward). */
-ipcMain.handle('jarvis:phoneWindow', (_e, serial, action) => {
+/** open | focus | close | dock (close it and bring JARVIS forward) | rebind (switch phone). */
+ipcMain.handle('jarvis:phoneWindow', (_e, serial, action, extra) => {
   if (!isSerial(serial)) return { ok: false, error: 'Not a device serial.' };
   const pw = phoneWindows.get(serial);
   const alive = pw && !pw.isDestroyed();
@@ -1396,6 +1403,24 @@ ipcMain.handle('jarvis:phoneWindow', (_e, serial, action) => {
   if (action === 'close' || action === 'dock') {
     if (alive) pw.close();
     if (action === 'dock' && win && !win.isDestroyed()) { win.show(); win.focus(); }
+    return { ok: true };
+  }
+  if (action === 'rebind') {
+    // The window keeps running, now pointed at a different phone - unplugged and replaced,
+    // or picked by hand. The window itself drives this (it notices the replacement); this
+    // only moves the bookkeeping, so every event and video packet for the new serial finds
+    // this window from here on, and the old slot is free for the Devices card to reclaim.
+    if (!alive) return { ok: false, error: 'That window is not open.' };
+    if (!isSerial(extra)) return { ok: false, error: 'Not a device serial.' };
+    if (extra === serial) return { ok: true };
+    if (phoneWindows.has(extra)) return { ok: false, error: 'That phone already has its own window.' };
+    phoneWindows.delete(serial);
+    phoneWindows.set(extra, pw);
+    pw.currentSerial = extra;
+    if (dock && dock.serial === serial) dock.serial = extra;
+    toWindow({ kind: 'phone_docked', serial });
+    toWindow({ kind: 'phone_popped', serial: extra });
+    log('phone window switched phone', serial, '->', extra);
     return { ok: true };
   }
   return { ok: false, error: 'Unknown action.' };
