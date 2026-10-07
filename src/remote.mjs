@@ -63,6 +63,7 @@ const HELP = [
   '/screen - a screenshot of the PC',
   '/diff - what has changed in the repos; /diff <repo> for the patch',
   '/brief - the morning brief now; /brief off, /brief on, /brief 07:30',
+  '/deleteapp - remove this install (and old builds) so a fresh download has nothing in the way; Update does this for you instead',
   '/help - this list',
   'Power down - put JARVIS on the PC to sleep; Wake up brings it back',
   '',
@@ -146,6 +147,7 @@ const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.s
  * @param o.saveIncoming  (name, Buffer) => Promise<string> - keep a photo or file from the phone on the PC; its path
  * @param o.readAttachment (path) => Promise<Buffer|null> - a file attached at the desk, for the mirror; null if too big
  * @param o.transcribe    (oggBuffer) => Promise<{ ok, text, error }> - voice notes
+ * @param o.deleteApp     () => Promise<{ ok, error? }> - /deleteapp: removes this install, quits JARVIS; optional
  * @param o.voiceReady    () => boolean - the speech model is loaded (no first-time download)
  * @param o.powerDown     (from) => void - "Power down" was sent: put JARVIS on the PC to sleep
  * @param o.wakeUp        (from) => void - "Wake up" was sent: open JARVIS again
@@ -590,6 +592,7 @@ export function createRemote(o) {
       if (name === 'brief') { await onBrief(arg); return; }
       if (name === 'sessions') { await showSessions(); return; }
       if (name === 'switch') { await switchTo(arg); return; }
+      if (name === 'deleteapp') { await onDeleteApp(); return; }
       // anything else is a Claude Code command and goes through as typed
     }
     if (!o.submit(text)) { await say('The JARVIS window is not open, so I could not take that.'); return; }
@@ -765,6 +768,15 @@ export function createRemote(o) {
     try { r = await o.diff(query); } catch (e) { await say(`I could not read the repositories: ${e?.message || e}`); return; }
     await reply(r.text);
     if (r.file && !await sendFile('sendDocument', 'document', r.file)) await say('The patch would not upload - it may be too large. Open GitHub Desktop in JARVIS at the desk.');
+  }
+
+  /** Stops JARVIS, removes this install (and, in a dev checkout, old builds). Nothing reopens. */
+  async function onDeleteApp() {
+    if (!o.deleteApp) { await say('/deleteapp is not available in this JARVIS.'); return; }
+    if (busyNow()) { await say('I am in the middle of something. /stop first, then /deleteapp.'); return; }
+    await say('🧹 Stopping JARVIS and removing this install (old builds too). Grab the new one from a GitHub Release once it is gone - or just press Update next time instead.');
+    const r = await o.deleteApp();
+    if (!r.ok) await say(`Could not do that: ${r.error}`);
   }
 
   async function onBrief(arg) {

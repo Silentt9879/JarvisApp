@@ -1,7 +1,7 @@
 {
   "name": "jarvis-app",
   "productName": "JARVIS",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "JARVIS - a desktop app for Claude Code in the BantuApps workspace",
   "main": "src/main.mjs",
   "type": "module",
@@ -13,6 +13,7 @@
     "deliver": "node scripts/deliver-update.mjs",
     "smoke": "node scripts/smoke.mjs",
     "shortcuts": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/shortcuts.ps1",
+    "clean": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/clean-and-run.ps1",
     "brand-bot": "node scripts/telegram-brand.mjs",
     "test": "node scripts/content-test.mjs && node scripts/remote-test.mjs && node scripts/presence-test.mjs && node scripts/deploy-test.mjs && node scripts/gitai-test.mjs && node scripts/sc-undo-discard-test.mjs && node scripts/webapps-test.mjs && node scripts/dock-test.mjs && node scripts/crew-test.mjs && node scripts/permission-mode-test.mjs && node scripts/notes-test.mjs && node scripts/auth-test.mjs && node scripts/phone-switch-test.mjs && node scripts/analysis-test.mjs && node scripts/updates-test.mjs && node scripts/features-test.mjs && node scripts/features-wiring-test.mjs"
   },

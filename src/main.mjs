@@ -31,7 +31,7 @@ import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
 // The window's modes (no bypassPermissions), shared with the chat's starting mode.
 import { WINDOW_MODES } from './permission-mode.mjs';
 import { createFeatures } from './features.mjs';
-import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis, readDelivery, newerDelivery, clearDelivery, DELIVERY_FILE } from './updates.mjs';
+import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis, readDelivery, newerDelivery, clearDelivery, DELIVERY_FILE, deleteAppCommand, launchUpdater, JARVIS_INSTALL_EXE } from './updates.mjs';
 import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -244,6 +244,23 @@ const remote = createRemote({
   brief: buildBrief,
   briefSet: (patch) => { const next = { ...briefConfig(), ...patch }; saveConfig({ brief: next }); log('morning brief:', next.on ? `on at ${next.at}` : 'off'); return next; },
   sessions: () => listRecent(loadConfig().cwd),
+  // /deleteapp (Telegram only): removes this install, and - in a dev checkout - old
+  // installer builds, so a GitHub Release download or Update has nothing old in the way.
+  // Nothing is relaunched; JARVIS quits once the cleanup is safely started.
+  deleteApp: async () => {
+    if (process.env.JARVIS_CAPTURE) return { ok: false, error: 'A screenshot run never deletes the install.' };
+    const distDir = app.isPackaged ? null : path.join(APP_ROOT, 'dist-installer');
+    const started = await launchUpdater(deleteAppCommand({
+      waitPid: process.pid,
+      installDir: path.dirname(JARVIS_INSTALL_EXE),
+      distDir,
+      logPath,
+    }));
+    if (!started.ok) return { ok: false, error: started.error };
+    log('deleteapp: removing this install - JARVIS closes now');
+    setTimeout(() => app.quit(), 500);
+    return { ok: true };
+  },
   currentSession: () => session?.sessionId || null,
   // Through the window, like /new: it redraws the transcript the same way a click would.
   switchSession: async (id, title) => {

@@ -415,6 +415,35 @@ export function updaterCommand({ installerPath, waitPid, relaunchExe, logPath, i
 }
 
 /**
+ * The PowerShell that removes JARVIS from this PC after it closes: the installed copy
+ * (through its own uninstaller, so Windows' list of installed programs stays correct),
+ * and - only on this dev PC, where `distDir` is given - old installer builds sitting in
+ * dist-installer. Nothing is relaunched: unlike an update, there is nothing left to open,
+ * so the next copy comes from a manual download or a release page.
+ */
+export function deleteAppCommand({ waitPid, installDir = path.dirname(JARVIS_INSTALL_EXE), distDir = null, logPath }) {
+  const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+  return [
+    `function Log($m) { "$(Get-Date -Format s) $m" | Out-File -Append -Encoding utf8 ${q(logPath)} }`,
+    `Log 'deleteapp: waiting for JARVIS to close'`,
+    `try { Wait-Process -Id ${Number(waitPid)} -Timeout 60 -ErrorAction Stop } catch { Log 'deleteapp: JARVIS is closed (or did not close in time)' }`,
+    `Start-Sleep -Seconds 1`,
+    `Get-Process -Name JARVIS -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
+    `Start-Sleep -Milliseconds 500`,
+    `$dir = ${q(installDir)}`,
+    `$uninst = Join-Path $dir 'Uninstall JARVIS.exe'`,
+    `if (Test-Path $uninst) { Log 'deleteapp: running the uninstaller'; Start-Process -FilePath $uninst -ArgumentList '/S' -Wait }`,
+    `Start-Sleep -Milliseconds 500`,
+    `if (Test-Path $dir) { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue; Log "deleteapp: removed $dir" } else { Log 'deleteapp: nothing installed' }`,
+    ...(distDir ? [
+      `$dist = ${q(distDir)}`,
+      `if (Test-Path $dist) { Get-ChildItem $dist -Filter 'JARVIS-Setup-*.exe*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue; Remove-Item (Join-Path $dist 'win-unpacked') -Recurse -Force -ErrorAction SilentlyContinue; Log "deleteapp: cleared $dist" }`,
+    ] : []),
+    `Log 'deleteapp: done'`,
+  ].join('\n');
+}
+
+/**
  * Start the updater so it outlives JARVIS. A PowerShell started straight from JARVIS dies the
  * moment JARVIS quits (tested on this PC: the installer never ran, so nothing came back). So a
  * short launcher asks Windows, through WMI, to start the updater - a process Windows owns, not

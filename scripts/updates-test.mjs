@@ -10,7 +10,7 @@ import {
   compareVersions, parseVersion, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate,
   latestJarvisRelease, jarvisStatus, downloadInstaller, updaterCommand, launchUpdater, jarvisUpdate,
   NeedsSignIn, saveToken, loadToken, clearToken, resolveToken, gitCredentialToken,
-  writeDelivery, readDelivery, newerDelivery, clearDelivery, deliveryPath,
+  writeDelivery, readDelivery, newerDelivery, clearDelivery, deliveryPath, deleteAppCommand,
 } from '../src/updates.mjs';
 
 let pass = 0;
@@ -392,6 +392,35 @@ const SHA = 'ab'.repeat(32);
   ok(script.includes("$dir = 'C:\\Users\\me\\Programs\\JARVIS\\'"), 'the install folder (with its trailing slash) is named');
   ok(script.includes('Stop-Process -Force') && script.includes('StringComparison]::OrdinalIgnoreCase'), 'anything running from that folder is stopped');
   ok(script.indexOf('Stop-Process') < script.indexOf("-ArgumentList '/S'"), 'the stop happens before the installer runs');
+}
+
+// ------------------------------------------------------------------ /deleteapp
+{
+  const script = deleteAppCommand({ waitPid: 777, installDir: "C:\\it's\\JARVIS", logPath: 'C:\\log.txt' });
+  ok(script.includes('-Id 777'), 'deleteapp waits for this JARVIS process');
+  ok(script.includes("$dir = 'C:\\it''s\\JARVIS'"), 'an apostrophe in the install folder is escaped');
+  ok(script.includes('Uninstall JARVIS.exe') && script.includes("-ArgumentList '/S'"), 'the installed copy is removed through its own silent uninstaller');
+  ok(script.includes('Remove-Item -Recurse -Force $dir'), 'the install folder is removed once the uninstaller is done');
+  ok(!script.includes('$dist'), 'without a distDir, no dist-installer cleanup is in the script');
+  ok(!/relaunchExe|--updated|Start-Process -FilePath \$exe/.test(script), 'unlike an update, nothing is reopened');
+}
+{
+  const script = deleteAppCommand({ waitPid: 1, installDir: 'C:\\JARVIS', distDir: "C:\\dev\\dist-installer", logPath: 'C:\\log.txt' });
+  ok(script.includes("$dist = 'C:\\dev\\dist-installer'"), 'a dev checkout also names its dist-installer folder');
+  ok(script.includes("-Filter 'JARVIS-Setup-*.exe*'") && script.includes("'win-unpacked'"), 'old installer builds and the unpacked folder are cleared');
+  ok(script.indexOf('$dir = ') < script.indexOf('$dist = '), 'the installed copy is removed before old builds are cleared');
+}
+{
+  // How /deleteapp is wired: Telegram only, and it quits JARVIS rather than relaunching it.
+  const read = (f) => fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+  const main = read('main.mjs');
+  const remote = read('remote.mjs');
+  ok(main.includes('deleteApp: async () =>') && main.includes('launchUpdater(deleteAppCommand(') , 'wiring: main gives remote.mjs a deleteApp call built on the same updater launcher');
+  ok(main.includes("if (process.env.JARVIS_CAPTURE) return { ok: false, error: 'A screenshot run never deletes the install."), 'wiring: a screenshot run can never delete the install');
+  ok(/setTimeout\(\(\) => app\.quit\(\), 500\);\s*\n\s*return \{ ok: true \};\s*\n\s*\},/.test(main), 'wiring: JARVIS quits only after the cleanup is confirmed started');
+  ok(remote.includes("if (name === 'deleteapp') { await onDeleteApp(); return; }"), 'wiring: /deleteapp is a recognised Telegram command');
+  ok(remote.includes("if (!o.deleteApp) { await say('/deleteapp is not available in this JARVIS.'); return; }"), 'wiring: an older host without deleteApp gets a plain answer, not a crash');
+  ok(remote.includes('busyNow()') && /onDeleteApp[\s\S]{0,400}I am in the middle of something\. \/stop first, then \/deleteapp\./.test(remote), 'wiring: /deleteapp refuses while JARVIS is busy, like /new and /switch');
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

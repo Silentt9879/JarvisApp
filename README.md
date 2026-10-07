@@ -17,7 +17,23 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.11.0
+## 🆕 What's new in v1.12.0
+
+**Simplified**
+
+- 🧹 **/deleteapp, from your phone.** Send it to your JARVIS bot and it stops JARVIS, removes the installed copy through its own uninstaller, and clears any old installer builds left in `dist-installer` on this dev PC - so a fresh download from GitHub Releases has nothing old in the way. Nothing reopens on its own; that's what the **Update** button is for.
+- 🧽 **`npm run clean`, at the desk.** The same cleanup as a one-off script (`scripts/clean-and-run.ps1`), with an optional `-Run <path>` to launch an installer once everything old is gone.
+
+**Technical**
+
+- `src/updates.mjs`: `deleteAppCommand({ waitPid, installDir, distDir, logPath })` builds the PowerShell - waits for the given pid, stops any stray `JARVIS` processes, runs `Uninstall JARVIS.exe /S`, removes the install folder, and (only when `distDir` is given, i.e. a dev checkout) clears `JARVIS-Setup-*.exe*` and `win-unpacked`. It shares `launchUpdater` (WMI-started, outlives JARVIS) with the update flow, but relaunches nothing.
+- `src/main.mjs`: `remote`'s `deleteApp` builds that script with this process's pid and `APP_ROOT/dist-installer` (unpacked only), refuses during a screenshot run, and quits JARVIS once Windows confirms the cleanup script started.
+- `src/remote.mjs`: `/deleteapp` - refused while JARVIS is busy (like `/new` and `/switch`), confirmed in chat before anything runs, and plain if an older host has no `deleteApp` to call.
+- `scripts/clean-and-run.ps1` (`npm run clean`): the same steps, run by hand - safe to re-run, everything no-ops once there's nothing left to do.
+- `scripts/updates-test.mjs`: 15 new checks (96 in all) on the generated script and the wiring into `main.mjs` and `remote.mjs`.
+
+<details>
+<summary><b>Earlier: v1.11.0</b></summary>
 
 **Simplified**
 
@@ -32,6 +48,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - `src/main.mjs`: `jarvis:analyze` / `jarvis:analyzeCancel`, stopped on quit. `src/devices.mjs`: the exit event of a `flutter run` now carries `failed` (it ended by itself, not by Stop) and `built` (the app had started).
 - New `src/renderer/problems.js` and the `devProblems` section: app chips with an error badge, severity toggles, grouped rows that call `openInCode(file, line)`, and the auto-run on `failed && !built`. `JARVIS_DEMO=problems` draws a made-up result for screenshots.
 - `scripts/analysis-test.mjs`: 37 checks with a stand-in `dart`. It caught one real fault before release (a start that failed at once left the app marked as busy). A real run on the Panel App returned its list and found the conflict in `lib/Views/inprogress_cases.dart`.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.10.0</b></summary>
