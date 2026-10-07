@@ -17,7 +17,24 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.8.0
+## 🆕 What's new in v1.9.0
+
+**Simplified**
+
+- ⬆️ **Updates come to you.** When a new JARVIS is built on this PC, a blue **Update to v…** button appears at the top of the window by itself. Press it, press **Update now**, and JARVIS closes, installs and opens again. No trip to GitHub, no download, no sign-in.
+- 🔔 **You are told when one is ready.** A new build also shows up in the bell, and the button waits for you if JARVIS was closed when it arrived. Nothing installs until you press it.
+
+**Technical**
+
+- `updates.mjs`: a second update source beside the GitHub release. `writeDelivery` leaves `update-ready.json` in the data folder (version, installer path, size, SHA-256, notes) through a temp file and a rename. `readDelivery` accepts only an existing `JARVIS-Setup-<version>.exe` of the stated size with a SHA-256. `jarvisStatus` and `jarvisUpdate` take the newer delivery first and then never call GitHub. `copyInstaller` copies to the temp folder while hashing, and shares `saveChecked` with `downloadInstaller`; the checked copy is what the unchanged updater runs.
+- `main.mjs`: `watchDeliveries` watches the data folder for that one file and sends `updates:ready`; `ipcMain.handle('updates:ready')` answers at start. Only the packaged app deletes a note whose version is running. A screenshot run (`JARVIS_CAPTURE`) can no longer start a JARVIS update.
+- `preload.cjs`: `updateReady`, `onUpdateReady`. `renderer/updates.js` and `index.html`: the `updReadyBtn` pill, a bell notification, and one press through to the existing question, which now says when a running task would be cut off.
+- `scripts/deliver-update.mjs` (`npm run deliver`): writes the note for `dist-installer\JARVIS-Setup-<version>.exe` with this version's README notes, and refuses an installer older than the source.
+- `scripts/updates-test.mjs`: 27 new checks (81 in all). Two capture runs against a throwaway data folder showed the pill appearing while JARVIS ran, and the question after one press. The install itself was not run from a delivery; it is the same updater script as before.
+- A JARVIS older than v1.9.0 does not read the note, so the first move to v1.9.0 is the installer run by hand (or a GitHub release).
+
+<details>
+<summary><b>Earlier: v1.8.0</b></summary>
 
 **Simplified**
 
@@ -30,6 +47,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - `renderer/pages.js`: a `ROSTER` group can hold several icons (space-separated). The new group "Git, tasks & notes" sits before Support crew.
 - The agents themselves are workspace files, not app code: `.claude/agents/github-desktop.md`, `clickup.md` and `notes.md`. ARCHIVIST has no Edit or Write tool and never reaches a remote. TASKMASTER writes to ClickUp only when the user asked. SCRIBE writes `notes.json` only through the workspace tool `.claude/tools/notes.py`, which keeps `NoteStore`'s shape and limits, writes through a temp file and a rename, and refuses to write when the file cannot be parsed.
 - `npm test` passes in full. Capture runs (`JARVIS_CAPTURE`, `JARVIS_VIEW=agents`) confirmed the three cards, the group, the bench and three working desks. `NoteStore` read back a file the tool wrote, and the tool read back one `NoteStore` wrote.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.7.4</b></summary>
@@ -233,6 +252,7 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 | 📝 **Notes** | Write something down, save it, and send it to your Telegram |
 | 📲 **Devices** | Live phone screens with `flutter run` (also in their own window), and web apps with `dotnet watch` |
 | ↩️ **Undo** | Undo every file change made since any message, in one click |
+| ⬆️ **Updates** | One press in the app: from a GitHub release, or straight from a build made on this PC |
 
 ---
 
@@ -282,6 +302,8 @@ npm install        # first time
 npm start          # run from source
 npm test           # tests (no network needed)
 npm run pack       # build -> dist\win-unpacked\JARVIS.exe
+npm run dist       # installer -> dist-installer\JARVIS-Setup-<version>.exe
+npm run deliver    # offer that installer to the JARVIS installed on this PC
 ```
 
 > 💡 From a VS Code terminal, first run `Remove-Item Env:ELECTRON_RUN_AS_NODE`.

@@ -30,7 +30,7 @@ import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
 // The window's modes (no bypassPermissions), shared with the chat's starting mode.
 import { WINDOW_MODES } from './permission-mode.mjs';
 import { createFeatures } from './features.mjs';
-import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis } from './updates.mjs';
+import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis, readDelivery, newerDelivery, clearDelivery, DELIVERY_FILE } from './updates.mjs';
 import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -866,8 +866,9 @@ const GITHUB_TOKEN_FILE = savedTokenPath(userDir);
 const tokenStore = { file: GITHUB_TOKEN_FILE, safe: safeStorage };
 ipcMain.handle('updates:check', async (_e, tool) => {
   if (tool === 'jarvis') {
-    const { token } = await resolveToken(tokenStore);
-    return jarvisStatus(app.getVersion(), { token })
+    // An update delivered on this PC answers by itself: no sign-in is looked up for it.
+    const { token } = newerDelivery(userDir, app.getVersion()) ? { token: null } : await resolveToken(tokenStore);
+    return jarvisStatus(app.getVersion(), { token, userDir })
       .then((s) => { lastUpdateInfo = s; return s; })
       .catch((e) => ({ current: app.getVersion(), available: false, needsSignIn: !!e.needsSignIn, error: e.message }));
   }
@@ -897,9 +898,11 @@ ipcMain.handle('updates:run', async (_e, tool) => {
   if (tool === 'vscode') return vscodeUpdate();
   if (tool === 'claude') return claudeUpdate();
   if (tool !== 'jarvis') return { ok: false, error: 'Unknown tool.' };
-  const progress = (p) => { if (win && !win.isDestroyed()) win.webContents.send('updates:progress', { tool: 'jarvis', ...p }); };
+  // A screenshot run opens and quits by itself; it must never replace the installed JARVIS.
+  if (process.env.JARVIS_CAPTURE) return { ok: false, error: 'A screenshot run never installs an update.' };
+  const progress =(p) => { if (win && !win.isDestroyed()) win.webContents.send('updates:progress', { tool: 'jarvis', ...p }); };
   try {
-    const { token } = await resolveToken(tokenStore);
+    const { token } = newerDelivery(userDir, app.getVersion()) ? { token: null } : await resolveToken(tokenStore);
     const r = await jarvisUpdate({
       currentVersion: app.getVersion(),
       tempDir: app.getPath('temp'),
@@ -907,12 +910,13 @@ ipcMain.handle('updates:run', async (_e, tool) => {
       logPath,
       onProgress: progress,
       token,
+      userDir,
     });
     if (r.ok && !r.upToDate) {
       // The updater waits for this process to exit, then installs and opens JARVIS again.
       // The window shows these notes once JARVIS is back on the new version ("What's new").
       saveConfig({ whatsNewPending: { version: r.version, notes: String(r.notes || '').slice(0, 4000) } });
-      log(`system update to v${r.version} downloaded - JARVIS closes so it can install`);
+      log(`system update to v${r.version} ${r.source === 'local' ? 'copied from this PC' : 'downloaded'} - JARVIS closes so it can install`);
       setTimeout(() => app.quit(), 500);
     }
     return r;
@@ -921,6 +925,36 @@ ipcMain.handle('updates:run', async (_e, tool) => {
     return { ok: false, error: e.message };
   }
 });
+
+// An update built on this PC arrives as a note in the data folder (updates.mjs, "an update
+// delivered on this PC"). Reading one local file reaches no network, so unlike a GitHub check
+// it may happen unasked: the window is told when a newer build lands, and asks at start-up
+// for one that landed while JARVIS was closed. Telling is all - installing takes the button.
+function deliveredUpdate() {
+  const d = newerDelivery(userDir, app.getVersion());
+  return d ? { version: d.version, notes: d.notes.slice(0, 4000) } : null;
+}
+ipcMain.handle('updates:ready', () => deliveredUpdate());
+let deliveryTimer = null;
+function watchDeliveries() {
+  // The version a note was written for is running now: the note has done its job. Only the
+  // installed app tidies up, so a run from source cannot eat the note meant for it.
+  if (app.isPackaged && readDelivery(userDir) && !newerDelivery(userDir, app.getVersion())) clearDelivery(userDir);
+  try {
+    fs.watch(userDir, (_ev, name) => {
+      if (name !== DELIVERY_FILE) return;
+      // The note is written through a rename, which Windows reports more than once.
+      clearTimeout(deliveryTimer);
+      deliveryTimer = setTimeout(() => {
+        const ready = deliveredUpdate();
+        if (ready) log(`update v${ready.version} delivered on this PC`);
+        if (win && !win.isDestroyed()) win.webContents.send('updates:ready', ready);
+      }, 400);
+    });
+  } catch (e) {
+    log('could not watch for delivered updates:', e?.message || e);
+  }
+}
 
 // The caption buttons' colours, matched to the header (--surface and --text-2 in styles.css).
 // 40 px tall: the fullscreen phone's title strip is the same height, so the buttons sit
@@ -2006,6 +2040,7 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
     if (launchHidden) log('started at login, in the tray');
     createWindow();
     createTray();
+    watchDeliveries();
     // Idle until remote control is switched on; then it listens. See remote.mjs.
     remote.start();
     // Routines' timer and the phone web app (if it is switched on). See features.mjs.

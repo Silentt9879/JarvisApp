@@ -10,6 +10,7 @@ import {
   compareVersions, parseVersion, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate,
   latestJarvisRelease, jarvisStatus, downloadInstaller, updaterCommand, launchUpdater, jarvisUpdate,
   NeedsSignIn, saveToken, loadToken, clearToken, resolveToken, gitCredentialToken,
+  writeDelivery, readDelivery, newerDelivery, clearDelivery, deliveryPath,
 } from '../src/updates.mjs';
 
 let pass = 0;
@@ -240,6 +241,100 @@ const SHA = 'ab'.repeat(32);
     spawnImpl: () => { spawned = true; return { unref() {} }; },
   });
   ok(r.ok && r.upToDate && !spawned, 'JARVIS update: already on the newest version does nothing');
+}
+
+// ------------------------------------------------------------------ an update delivered on this PC
+{
+  const userDir = path.join(tmp, 'userdata');
+  const built = path.join(tmp, 'built');
+  fs.mkdirSync(built, { recursive: true });
+  const data = Buffer.from('an installer built on this PC');
+  const exe = path.join(built, 'JARVIS-Setup-1.9.0.exe');
+  fs.writeFileSync(exe, data);
+  const noFetch = async () => { throw new Error('GitHub must not be asked'); };
+  const okSpawn = (seen) => (f, a) => { seen.args = a; const c = new EventEmitter(); setImmediate(() => c.emit('close', 0)); return c; };
+
+  ok(readDelivery(userDir) === null, 'delivery: no note means nothing delivered');
+  const note = await writeDelivery(userDir, { version: 'v1.9.0', installer: exe, notes: ' What is new \n' });
+  const d = readDelivery(userDir);
+  ok(note.sha256 === SHA_OF(data) && d?.version === '1.9.0' && d.installer.path === exe && d.installer.size === data.length && d.notes === 'What is new',
+    'delivery: the note is written and read back with the size and SHA-256 of the installer');
+  ok(!fs.readdirSync(userDir).some((f) => f.endsWith('.tmp')), 'delivery: the note is written through a rename, leaving no temp file');
+
+  const s = await jarvisStatus('1.8.0', { userDir, fetchImpl: noFetch });
+  ok(s.available && s.latest === '1.9.0' && s.source === 'local' && s.notes === 'What is new', 'delivery: a newer build is offered without asking GitHub');
+  const release = { tag_name: 'v1.9.0', body: '', assets: [{ name: 'JARVIS-Setup-1.9.0.exe', url: 'u', size: 1 }] };
+  const same = await jarvisStatus('1.9.0', { userDir, fetchImpl: async () => jsonResponse(200, release), token: 't' });
+  ok(same.available === false && same.source !== 'local', 'delivery: a build that is already running is not offered, and GitHub answers as before');
+  ok(newerDelivery(userDir, '1.9.0') === null && newerDelivery(userDir, '1.8.9')?.version === '1.9.0' && newerDelivery(null, '1.0.0') === null, 'delivery: only a newer build counts');
+
+  const seen = {};
+  const progress = [];
+  const r = await jarvisUpdate({
+    currentVersion: '1.8.0', tempDir: tmp, pid: 7, logPath: path.join(tmp, 'log.txt'), userDir, fetchImpl: noFetch,
+    onProgress: (p) => progress.push(p.received), spawnImpl: okSpawn(seen),
+  });
+  const copied = path.join(tmp, 'JARVIS-Setup-1.9.0.exe');
+  ok(r.ok && r.version === '1.9.0' && r.source === 'local' && r.notes === 'What is new' && seen.args, 'local update: checked and handed to the updater, with no download');
+  ok(fs.existsSync(copied) && fs.readFileSync(copied).equals(data) && progress.at(-1) === data.length, 'local update: a checked copy lands in the temp folder, and progress is reported');
+  const launcher = Buffer.from(seen.args.at(-1), 'base64').toString('utf16le');
+  const inner = Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(launcher)[1], 'base64').toString('utf16le');
+  ok(inner.includes(`'${copied}'`) && !inner.includes(exe), 'local update: the updater runs the checked copy, not the file in the build folder');
+
+  // Same size, different bytes: the note still reads, and the check on the way in catches it.
+  fs.rmSync(copied, { force: true });
+  fs.writeFileSync(exe, Buffer.from('an installer BUILT on this PC'));
+  let msg = '';
+  let ran = false;
+  try {
+    await jarvisUpdate({ currentVersion: '1.8.0', tempDir: tmp, pid: 7, logPath: 'x', userDir, fetchImpl: noFetch, spawnImpl: () => { ran = true; return new EventEmitter(); } });
+  } catch (e) { msg = e.message; }
+  ok(/changed after it was delivered/.test(msg) && !ran && !fs.existsSync(copied), 'local update: an installer changed after delivery is refused, removed and never run');
+
+  fs.writeFileSync(exe, Buffer.from('longer than the note says it is, by some way'));
+  ok(readDelivery(userDir) === null, 'delivery: an installer of a different size reads as nothing delivered');
+  fs.rmSync(exe);
+  ok(readDelivery(userDir) === null, 'delivery: an installer that is gone reads as nothing delivered');
+
+  fs.writeFileSync(exe, data);
+  const write = (j) => fs.writeFileSync(deliveryPath(userDir), typeof j === 'string' ? j : JSON.stringify(j));
+  const good = { version: '1.9.0', installer: exe, size: data.length, sha256: SHA_OF(data) };
+  const other = path.join(built, 'setup.exe');
+  fs.writeFileSync(other, data);
+  write(good);
+  ok(readDelivery(userDir)?.version === '1.9.0', 'delivery: a complete note reads');
+  write({ ...good, sha256: undefined });
+  ok(readDelivery(userDir) === null, 'delivery: a note without a SHA-256 is not trusted');
+  write({ ...good, installer: other });
+  ok(readDelivery(userDir) === null, 'delivery: only an installer under its release name is accepted');
+  write({ ...good, version: '2.0.0' });
+  ok(readDelivery(userDir) === null, 'delivery: the version must be the one in the installer name');
+  write({ ...good, installer: 'JARVIS-Setup-1.9.0.exe' });
+  ok(readDelivery(userDir) === null, 'delivery: a relative path is not accepted');
+  write('{ not json');
+  ok(readDelivery(userDir) === null, 'delivery: a damaged note reads as nothing delivered');
+  let refused = '';
+  try { await writeDelivery(userDir, { version: '1.9.0', installer: other }); } catch (e) { refused = e.message; }
+  ok(/JARVIS-Setup-1\.9\.0\.exe/.test(refused), 'delivery: a file that is not that version of the installer cannot be delivered');
+  write(good);
+  clearDelivery(userDir);
+  ok(!fs.existsSync(deliveryPath(userDir)), 'delivery: the note is removed once its version is running');
+}
+{
+  // How the app is wired, read as text: the offer is shown unasked, the install never is.
+  const read = (f) => fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+  const main = read('main.mjs');
+  const pre = read('preload.cjs');
+  const html = read('renderer/index.html');
+  const ui = read('renderer/updates.js');
+  ok(main.includes("ipcMain.handle('updates:ready'") && main.includes("win.webContents.send('updates:ready'"), 'wiring: main answers "is an update ready" and says when one lands');
+  ok(main.includes('jarvisStatus(app.getVersion(), { token, userDir })') && /onProgress: progress,\s+token,\s+userDir,/.test(main), 'wiring: the check and the update are both given the data folder');
+  ok(main.includes("if (process.env.JARVIS_CAPTURE) return { ok: false, error: 'A screenshot run never installs an update.' }"), 'wiring: a screenshot run cannot install an update');
+  ok(main.includes('app.isPackaged && readDelivery(userDir)'), 'wiring: only the installed app clears a used note, never a run from source');
+  ok(pre.includes("updateReady: () => ipcRenderer.invoke('updates:ready')") && pre.includes('onUpdateReady:'), 'wiring: the bridge passes the question and the event');
+  ok(html.split('id="updReadyBtn"').length === 2 && /id="updReadyBtn"[^>]*\shidden/.test(html), 'wiring: the "Update to" pill is declared once, and hidden until there is something to offer');
+  ok(ui.includes("$('updReadyBtn').onclick = openReady") && ui.split('runJarvis').length === 3 && ui.includes("$('updYesJarvis').onclick = runJarvis"),
+    'wiring: the pill only opens the question; installing starts from "Update now" and nowhere else');
 }
 
 // ------------------------------------------------------------------ sign-in storage

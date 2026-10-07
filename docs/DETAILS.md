@@ -637,6 +637,33 @@ to rename a folder that anything has open (Search or a virus scan), even with no
 from it. Each step retries for 30 s. If copying the new build fails partway, the backup is put
 back. The log is in `swap-update.log`.
 
+**Updating the installed JARVIS from a build on this PC.** The installed app (the NSIS
+installer, in `%LOCALAPPDATA%\Programs\JARVIS`) has two sources for an update: the newest
+GitHub release, and a build handed over on this PC, which needs no release, sign-in or network.
+
+```powershell
+npm test
+npm run dist         # -> dist-installer\JARVIS-Setup-<version>.exe
+npm run deliver      # tells the installed JARVIS it is there
+```
+
+`npm run deliver` (`scripts/deliver-update.mjs`) writes `update-ready.json` into the app's
+data folder: the version, the installer's full path, its size and SHA-256, and this version's
+"What's new" section of the README. It refuses an installer that is older than the source.
+JARVIS watches that one file (`watchDeliveries` in `main.mjs`), so a running app shows
+**Update to v<version>** in its top bar within a second, and a closed one shows it when it
+opens. Pressing it opens Settings > Updates on the question; **Update now** copies the
+installer to the temp folder while checking size and SHA-256 (`copyInstaller`), then hands
+that checked copy to the same updater the GitHub route uses. The note is only offered while
+its version is newer than the running one, and the installed app deletes it once that
+version is running. A note that names a missing file, a file of another size, a file not
+called `JARVIS-Setup-<version>.exe`, or no SHA-256 reads as "nothing delivered".
+
+Deliver last: pressing the button closes JARVIS and every session it runs, including one
+that is still committing or pushing. The version must be higher than the installed one, so
+bump `package.json` before building. A JARVIS older than v1.9.0 does not read the note: run
+the installer by hand once to get there.
+
 ## Develop
 
 ```powershell

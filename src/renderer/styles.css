@@ -334,6 +334,16 @@ body.still .wave span { animation: none !important; }
 .search input { flex: 1 1 0; width: 0; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font-size: 12.5px; }
 .search input::placeholder { color: var(--muted); }
 .search kbd { font: 10px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+/* "Update to v1.9.0": a build delivered on this PC, one press away. Icon only on a narrow window. */
+.upd-ready {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; height: 28px; padding: 0 11px; border-radius: 14px;
+  border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--accent);
+  font: 600 12px var(--font); white-space: nowrap; cursor: pointer;
+}
+.upd-ready .ic { width: 14px; height: 14px; }
+.upd-ready:hover { border-color: var(--accent); }
+.upd-ready:focus-visible { outline: 0; box-shadow: var(--glow); }
+@media (max-width: 1100px) { .upd-ready { padding: 0 7px; } .upd-ready span { display: none; } }
 .top-btn {
   width: 32px; height: 32px; border-radius: var(--r); border: 1px solid transparent; background: none; color: var(--text-2);
   position: relative; display: grid; place-items: center; cursor: pointer;

@@ -22,6 +22,8 @@
   const busy = { jarvis: false, vscode: false, claude: false };
   const last = {}; // tool -> the last check's answer
   let jarvisNotes = '';
+  let ready = null;           // an update delivered on this PC: { version, notes }
+  let askAfterCheck = false;  // the pill was pressed: ask as soon as the check answers
 
   const mb = (bytes) => (bytes / 1048576).toFixed(0);
 
@@ -55,6 +57,7 @@
     if (s.needsSignIn) return { text: s.error, kind: 'warn', go: false, connect: true };
     if (s.error) return { text: s.error, kind: 'warn', go: false };
     if (tool === 'jarvis') {
+      if (s.available && s.source === 'local') return { text: `Version ${s.latest}, built on this PC, is ready to install. You have ${s.current}.`, kind: 'ok', go: true, label: LABEL.jarvis };
       if (s.available) return { text: `Version ${s.latest} is ready to install. You have ${s.current}.`, kind: 'ok', go: true, label: LABEL.jarvis };
       return { text: `You have the newest version (${s.current}).`, kind: '', go: false };
     }
@@ -87,6 +90,11 @@
       note(tool, `Could not check: ${e.message}`, 'warn');
     } finally {
       setBusy(tool, false);
+    }
+    // Opened from the "Update to v…" pill: go straight to the question.
+    if (tool === 'jarvis' && askAfterCheck) {
+      askAfterCheck = false;
+      askJarvis();
     }
   }
 
@@ -175,6 +183,10 @@
     const s = last.jarvis;
     if (!s?.available || busy.jarvis) return;
     $('updNewJarvis').textContent = `v${s.latest}`;
+    const local = s.source === 'local';
+    $('updHowJarvis').textContent = `JARVIS ${local ? 'checks the update built on this PC' : 'downloads the update'}, closes, installs it and opens again by itself, in about a minute. `
+      + `${state.status === 'working' ? 'JARVIS is in the middle of a task, and that task will be cut off. ' : ''}Anything you are typing will be lost. `
+      + 'If you chat with JARVIS on Telegram, it will say hello when it is back.';
     const what = $('updWhatsNewJarvis');
     const clip = jarvisNotes.length > 400 ? `${jarvisNotes.slice(0, 400).trimEnd()}…` : jarvisNotes;
     what.textContent = clip ? `What's new: ${clip}` : '';
@@ -205,7 +217,7 @@
     if (busy.jarvis) return;
     $('updConfirmJarvis').hidden = true;
     setBusy('jarvis', true);
-    note('jarvis', 'Downloading the update…');
+    note('jarvis', last.jarvis?.source === 'local' ? 'Checking the update…' : 'Downloading the update…');
     showJarvisProgress('Starting…', null);
     try {
       const r = await api.updateRun('jarvis');
@@ -227,6 +239,26 @@
     }
   }
 
+  // ------------------------------------------------------------- an update delivered on this PC
+  // A build made on this PC is handed to JARVIS directly (updates.mjs). main says when one
+  // lands, and the window asks once at start. The pill in the top bar is the whole offer:
+  // one press opens Settings on the question, and nothing installs before "Update now".
+
+  function openReady() {
+    askAfterCheck = true;
+    JV.openSettings?.('general', 'updSec');
+  }
+
+  function showReady(r) {
+    const was = ready?.version;
+    ready = r?.version ? r : null;
+    $('updReadyBtn').hidden = !ready;
+    if (!ready) return;
+    $('updReadyText').textContent = `Update to v${ready.version}`;
+    $('updReadyBtn').title = `JARVIS ${ready.version} is ready to install. Press to update.`;
+    if (was !== ready.version) JV.notify(`JARVIS ${ready.version} is ready to install.`, { level: 'ok', desktop: true, key: 'jarvis-update', action: openReady });
+  }
+
   // ------------------------------------------------------------- wiring
 
   function wire() {
@@ -243,8 +275,11 @@
     api.onUpdateProgress?.((p) => {
       if (p.tool !== 'jarvis' || !p.total) return;
       const pct = Math.min(100, Math.round((p.received / p.total) * 100));
-      showJarvisProgress(`Downloading… ${pct}% (${mb(p.received)} of ${mb(p.total)} MB)`, pct);
+      showJarvisProgress(`${last.jarvis?.source === 'local' ? 'Checking' : 'Downloading'}… ${pct}% (${mb(p.received)} of ${mb(p.total)} MB)`, pct);
     });
+    $('updReadyBtn').onclick = openReady;
+    api.onUpdateReady?.(showReady);
+    api.updateReady?.().then(showReady).catch(() => {});
   }
 
   wire();

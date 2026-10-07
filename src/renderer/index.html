@@ -66,6 +66,7 @@
           <kbd>Ctrl K</kbd>
           <div class="search-results pop" id="searchResults" hidden></div>
         </div>
+        <button class="upd-ready" id="updReadyBtn" type="button" hidden title="A JARVIS update is ready to install"><i data-icon="refresh"></i><span id="updReadyText">Update ready</span></button>
         <button class="top-btn" id="bellBtn" title="Notifications"><i data-icon="bell"></i><em class="dot-badge" id="bellBadge" hidden></em></button>
         <button class="top-btn" id="settingsBtn" title="Settings"><i data-icon="settings"></i></button>
         <button class="operator" id="operator" title="Signed-in account">
@@ -658,7 +659,7 @@
           <div class="upd-confirm" id="updConfirmJarvis" hidden>
             <div>
               <b>Update JARVIS to <span id="updNewJarvis"></span>?</b>
-              <small>JARVIS downloads the update, closes, installs it and opens again by itself, in about a minute. Anything you are typing will be lost. If you chat with JARVIS on Telegram, it will say hello when it is back.</small>
+              <small id="updHowJarvis">JARVIS downloads the update, closes, installs it and opens again by itself, in about a minute. Anything you are typing will be lost. If you chat with JARVIS on Telegram, it will say hello when it is back.</small>
               <small class="upd-whatsnew" id="updWhatsNewJarvis"></small>
             </div>
             <button class="btn small" id="updCancelJarvis">Not now</button>

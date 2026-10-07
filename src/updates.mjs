@@ -1,5 +1,7 @@
 // Updates for JARVIS itself and the two tools it works with (VS Code, Claude Code).
 // Nothing here runs on its own: each step starts from a button in Settings > Updates.
+// JARVIS has two sources: a release on GitHub, and an update built on this PC and handed
+// over through a note in the data folder (see "an update delivered on this PC" below).
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -201,6 +203,76 @@ export async function tokenCanSeeJarvis({ fetchImpl = fetch, repo = JARVIS_REPO,
   return res.ok;
 }
 
+// ------------------------------------------------------------------ an update delivered on this PC
+//
+// A build made on this PC does not need GitHub to reach the JARVIS installed beside it.
+// `npm run deliver` leaves a small note in the app's data folder naming the installer, its
+// size and its SHA-256; JARVIS reads that one local file, so it can offer the update without
+// a sign-in, a release or any network. Other PCs still update from the GitHub release.
+
+export const DELIVERY_FILE = 'update-ready.json';
+
+export function deliveryPath(userDir) {
+  return path.join(userDir, DELIVERY_FILE);
+}
+
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    fs.createReadStream(file).on('data', (d) => hash.update(d)).on('error', reject).on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+/** "JARVIS-Setup-1.9.0.exe" for version "1.9.0", and nothing else. */
+const installerFor = (file, version) => INSTALLER.test(path.basename(file)) && path.basename(file).includes(`-${version}.`);
+
+/**
+ * Leave the note for an installer that was just built. Written through a temp file and a
+ * rename, so JARVIS never reads half a note. Returns what was written.
+ */
+export async function writeDelivery(userDir, { version, installer, notes = '' } = {}) {
+  const v = (parseVersion(version) || []).join('.');
+  const file = path.resolve(String(installer || ''));
+  if (!v) throw new Error('The update has no version number.');
+  if (!installerFor(file, v)) throw new Error(`The installer must be named JARVIS-Setup-${v}.exe.`);
+  const size = fs.statSync(file).size;
+  const note = { version: v, installer: file, size, sha256: await sha256File(file), notes: String(notes || '').trim(), deliveredAt: new Date().toISOString() };
+  fs.mkdirSync(userDir, { recursive: true });
+  const tmp = `${deliveryPath(userDir)}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(note, null, 2)}\n`);
+  fs.renameSync(tmp, deliveryPath(userDir));
+  return note;
+}
+
+/**
+ * The update delivered on this PC, or null. Only an installer that is really there, under
+ * its release name, at the size the note states and with a SHA-256 to check it against,
+ * counts - anything else reads as "nothing delivered".
+ */
+export function readDelivery(userDir) {
+  let j;
+  try { j = JSON.parse(fs.readFileSync(deliveryPath(userDir), 'utf8')); } catch { return null; }
+  const version = (parseVersion(j?.version) || []).join('.');
+  const file = typeof j?.installer === 'string' ? j.installer : '';
+  const sha = /^[0-9a-f]{64}$/i.test(j?.sha256 || '') ? j.sha256.toLowerCase() : null;
+  if (!version || !sha || !path.isAbsolute(file) || !installerFor(file, version)) return null;
+  let size;
+  try { size = fs.statSync(file).size; } catch { return null; }
+  if (!size || size !== Number(j.size)) return null;
+  return { version, notes: String(j.notes || '').trim(), installer: { name: path.basename(file), path: file, size, sha256: sha } };
+}
+
+/** The note has done its job once that version is running. */
+export function clearDelivery(userDir) {
+  fs.rmSync(deliveryPath(userDir), { force: true });
+}
+
+/** The delivered update, only when it is newer than the version that is running. */
+export function newerDelivery(userDir, current) {
+  const d = userDir ? readDelivery(userDir) : null;
+  return d && compareVersions(d.version, current) > 0 ? d : null;
+}
+
 // ------------------------------------------------------------------ JARVIS
 
 /**
@@ -234,6 +306,10 @@ export async function latestJarvisRelease({ fetchImpl = fetch, repo = JARVIS_REP
 }
 
 export async function jarvisStatus(current, deps = {}) {
+  // An update delivered on this PC is offered as it is: GitHub is not asked, so there is
+  // nothing to sign in to and nothing to wait for.
+  const local = newerDelivery(deps.userDir, current);
+  if (local) return { current, latest: local.version, available: true, notes: local.notes, source: 'local', error: null };
   const { release } = await latestJarvisRelease(deps);
   if (!release) return { current, latest: null, available: false, notes: '', error: null };
   if (!release.installer) return { current, latest: release.version, available: false, notes: '', error: 'The newest release has no installer yet.' };
@@ -258,10 +334,28 @@ export async function downloadInstaller(installer, dest, { fetchImpl = fetch, on
   });
   if (!res.ok || !res.body) throw new Error(`The download did not start (${res.status}). Try again.`);
   const total = Number(res.headers.get('content-length')) || installer.size || 0;
+  return saveChecked(Readable.fromWeb(res.body), installer, dest, {
+    onProgress, total, mismatch: 'The download was incomplete or changed, so it was thrown away. Press Update again.',
+  });
+}
+
+/**
+ * Copy the installer delivered on this PC to `dest`, checking it against the note's size
+ * and SHA-256 on the way. What runs is the checked copy, so a build that is replaced while
+ * JARVIS installs cannot change what is installed.
+ */
+export async function copyInstaller(installer, dest, { onProgress } = {}) {
+  return saveChecked(fs.createReadStream(installer.path), installer, dest, {
+    onProgress, total: installer.size, mismatch: 'The update on this PC changed after it was delivered, so it was not installed. Deliver it again.',
+  });
+}
+
+/** Write `source` to `dest`, counting and hashing every byte. A file that does not match is deleted, never run. */
+async function saveChecked(source, installer, dest, { onProgress, total, mismatch }) {
   const hash = createHash('sha256');
   let got = 0;
-  const tap = async function* (source) {
-    for await (const chunk of source) {
+  const tap = async function* (chunks) {
+    for await (const chunk of chunks) {
       got += chunk.length;
       hash.update(chunk);
       onProgress?.({ received: got, total });
@@ -269,10 +363,10 @@ export async function downloadInstaller(installer, dest, { fetchImpl = fetch, on
     }
   };
   try {
-    await pipeline(Readable.fromWeb(res.body), tap, fs.createWriteStream(dest));
+    await pipeline(source, tap, fs.createWriteStream(dest));
     const sizeOk = !installer.size || got === installer.size;
     const hashOk = !installer.sha256 || hash.digest('hex') === installer.sha256;
-    if (!sizeOk || !hashOk) throw new Error('The download was incomplete or changed, so it was thrown away. Press Update again.');
+    if (!sizeOk || !hashOk) throw new Error(mismatch);
   } catch (e) {
     fs.rmSync(dest, { force: true });
     throw e;
@@ -353,15 +447,25 @@ export function launchUpdater(script, { spawnImpl = spawn, timeoutMs = 20_000 } 
 }
 
 /**
- * The whole JARVIS update: check, download, verify, then hand over to the updater. The
- * caller quits JARVIS after this returns, so the installer can replace the files.
+ * The whole JARVIS update: check, fetch (a copy from this PC, or a download), verify, then
+ * hand over to the updater. The caller quits JARVIS after this returns, so the installer
+ * can replace the files.
  */
-export async function jarvisUpdate({ currentVersion, tempDir, pid, logPath, onProgress, token = null, fetchImpl, spawnImpl } = {}) {
-  const { release } = await latestJarvisRelease({ fetchImpl, token });
-  if (!release?.installer) return { ok: false, error: 'There is no update to install yet.' };
-  if (compareVersions(release.version, currentVersion) <= 0) return { ok: true, upToDate: true };
-  const dest = path.join(tempDir, release.installer.name);
-  await downloadInstaller(release.installer, dest, { fetchImpl, onProgress, token });
+export async function jarvisUpdate({ currentVersion, tempDir, pid, logPath, onProgress, token = null, fetchImpl, spawnImpl, userDir = null } = {}) {
+  // The update delivered on this PC, when there is one; otherwise the release on GitHub.
+  const local = newerDelivery(userDir, currentVersion);
+  let release = local;
+  let dest;
+  if (local) {
+    dest = path.join(tempDir, local.installer.name);
+    await copyInstaller(local.installer, dest, { onProgress });
+  } else {
+    ({ release } = await latestJarvisRelease({ fetchImpl, token }));
+    if (!release?.installer) return { ok: false, error: 'There is no update to install yet.' };
+    if (compareVersions(release.version, currentVersion) <= 0) return { ok: true, upToDate: true };
+    dest = path.join(tempDir, release.installer.name);
+    await downloadInstaller(release.installer, dest, { fetchImpl, onProgress, token });
+  }
   const started = await launchUpdater(updaterCommand({
     installerPath: dest,
     waitPid: pid,
@@ -369,6 +473,6 @@ export async function jarvisUpdate({ currentVersion, tempDir, pid, logPath, onPr
     logPath,
   }), { spawnImpl });
   // Only a confirmed start lets JARVIS quit; otherwise it stays open and says what happened.
-  if (!started.ok) return { ok: false, error: `The update was downloaded, but it could not be started (${started.error}). JARVIS is still open. Press Update again.` };
-  return { ok: true, version: release.version, notes: release.notes };
+  if (!started.ok) return { ok: false, error: `The update is ready, but it could not be started (${started.error}). JARVIS is still open. Press Update again.` };
+  return { ok: true, version: release.version, notes: release.notes, source: local ? 'local' : 'github' };
 }
