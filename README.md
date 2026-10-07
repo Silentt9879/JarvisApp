@@ -17,7 +17,24 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.10.0
+## 🆕 What's new in v1.11.0
+
+**Simplified**
+
+- 🐞 **See why a run went wrong.** The Devices page has a new **Dart analysis** panel - the same list of errors and warnings your IDE shows, grouped by file. Pick an app, press **Analyse**, and click any problem to open that file at that line in VS Code.
+- ⚡ **It runs by itself when a build fails.** If Run stops before the app ever starts, JARVIS checks that app straight away and tells you how many errors there are.
+- 🔀 **It spots a merge conflict for you.** A file left with git's `<<<<<<<` markers gives a dozen baffling errors; the panel says so in one line and takes you to it.
+- 🧹 **Readable by default.** Errors first, hints hidden until you ask (there are usually hundreds), a filter box, and an **Ask JARVIS to fix** button that puts the errors in the chat box for you to send.
+
+**Technical**
+
+- New `src/analysis.mjs`: `analyzeApp` runs `dart analyze --format=machine` in the app's folder (single flight per app, 5 minute limit, `cancelAnalysis`), `parseMachine` reads the `SEVERITY|TYPE|CODE|file|line|col|len|message` lines with their `\|` escapes from stdout or stderr, and `findConflicts` looks for conflict markers in files that have errors. Reading only: no `dart fix`, no write. At most 3000 problems go to the window; the counts stay complete.
+- `src/main.mjs`: `jarvis:analyze` / `jarvis:analyzeCancel`, stopped on quit. `src/devices.mjs`: the exit event of a `flutter run` now carries `failed` (it ended by itself, not by Stop) and `built` (the app had started).
+- New `src/renderer/problems.js` and the `devProblems` section: app chips with an error badge, severity toggles, grouped rows that call `openInCode(file, line)`, and the auto-run on `failed && !built`. `JARVIS_DEMO=problems` draws a made-up result for screenshots.
+- `scripts/analysis-test.mjs`: 37 checks with a stand-in `dart`. It caught one real fault before release (a start that failed at once left the app marked as busy). A real run on the Panel App returned its list and found the conflict in `lib/Views/inprogress_cases.dart`.
+
+<details>
+<summary><b>Earlier: v1.10.0</b></summary>
 
 **Simplified**
 
@@ -29,6 +46,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - `src/renderer/phone.js`: `serial` is now `let`, read live everywhere rather than fixed from the URL for the window's life. `watchForReplacement()` polls `devices()` only while the screen is down; `adopt(d)` calls the new `phoneWindow(old, 'rebind', new)` IPC, then updates the model, serial, label and title in place and restarts the screen. `offerChoice()` renders one button per candidate when more than one is possible, reusing `setOverlay`'s new multi-action form. The header's new swap icon (`core.js`) opens the same picker on demand.
 - `src/main.mjs`: the `jarvis:phoneWindow` IPC gains a `rebind` action that moves the window's `phoneWindows` map entry to the new serial (refusing a phone that already has its own window), tells the Devices view both cards' new state, and leaves the old slot free. `pw.currentSerial` is now the one source of truth for which phone a window shows - `wireDocking`, the close handler and the window-error logger all read it live, so docking and video keep following the right phone after a switch instead of the serial the window opened with.
 - `scripts/phone-switch-test.mjs`: 18 checks driving the real renderer (auto-adopt, the same phone returning, an ambiguous choice, a phone already popped elsewhere being left alone, the manual switch button) plus source checks on the main-process bookkeeping.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.9.0</b></summary>

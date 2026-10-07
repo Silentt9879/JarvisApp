@@ -266,7 +266,7 @@ export function flutterRun(workspace, serial, appKey, emit) {
       const p = m.params || {};
       switch (m.event) {
         case 'app.start': r.appId = p.appId; state('starting'); return;
-        case 'app.started': state('running'); line('App started.', 'ok'); return;
+        case 'app.started': r.everRan = true; state('running'); line('App started.', 'ok'); return;
         case 'app.log': line(p.log, p.error ? 'error' : 'info'); return;
         case 'app.progress': if (p.message) line(p.message, 'progress'); return;
         case 'daemon.logMessage': line(p.message, p.level === 'error' ? 'error' : 'info'); return;
@@ -299,7 +299,9 @@ export function flutterRun(workspace, serial, appKey, emit) {
     line(`flutter run ended (exit ${code}).`, code ? 'error' : 'info');
     if (r.flush) { clearTimeout(r.flush); r.flush = null; const lines = r.pending.splice(0); if (lines.length) emit({ kind: 'flutter_log', serial, lines }); }
     r.state = 'exited';
-    emit({ kind: 'flutter_state', serial, app: r.app, name: r.name, state: 'exited', since: Date.now(), message: `exit ${code}` });
+    // failed: it ended on its own with an error (not Stop). built: the app had started, so
+    // the failure was not the build - the window analyses the code only for a failed build.
+    emit({ kind: 'flutter_state', serial, app: r.app, name: r.name, state: 'exited', since: Date.now(), message: `exit ${code}`, failed: !!code && !r.stopAsked, built: !!r.everRan });
   });
   return runState(r);
 }
@@ -315,6 +317,7 @@ export function flutterCommandFor(serial, cmd) {
   const r = runs.get(serial);
   if (!r) return { ok: false, error: 'Nothing is running on this phone.' };
   if (cmd === 'stop') {
+    r.stopAsked = true;
     if (r.appId) send(r, 'app.stop', { appId: r.appId });
     // A build in progress ignores app.stop; if the process is still here after a moment, end it.
     setTimeout(() => { if (runs.get(r.serial) === r) killTree(r.proc); }, r.appId ? 6000 : 0);

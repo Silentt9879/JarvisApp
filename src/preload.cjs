@@ -107,6 +107,9 @@ contextBridge.exposeInMainWorld('jarvis', {
   // Phones: list, live screens (H.264 packets on their own channel), input, flutter run.
   devices: () => ipcRenderer.invoke('jarvis:devices'),
   flutterApps: () => ipcRenderer.invoke('jarvis:flutterApps'),
+  // Dart analysis of one app: the problems list on the Devices page. Reading only.
+  analyze: (app) => ipcRenderer.invoke('jarvis:analyze', app),
+  analyzeCancel: (app) => ipcRenderer.invoke('jarvis:analyzeCancel', app),
   mirror: (serial, on) => ipcRenderer.invoke('jarvis:mirror', serial, !!on),
   resetVideo: (serial) => ipcRenderer.invoke('jarvis:resetVideo', serial),
   deviceInput: (serial, ev) => ipcRenderer.send('jarvis:deviceInput', serial, ev),

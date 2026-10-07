@@ -600,6 +600,24 @@
             <div class="web-grid" id="webGrid"></div>
           </section>
           </div>
+
+          <!-- Dart analysis: why a run failed, as the IDE's own Dart Analysis tab shows it. -->
+          <section class="dev-section problems" id="devProblems">
+            <h3><i data-icon="bug"></i> Dart analysis
+              <span class="pb-summary" id="pbSummary" hidden></span>
+              <span class="h-note" id="pbNote">Why a run went wrong, file by file. Click a problem to open it at that line in VS Code.</span>
+            </h3>
+            <div class="pb-bar">
+              <div class="pb-apps" id="pbApps" role="tablist" aria-label="App to analyse"></div>
+              <span class="pb-gap"></span>
+              <div class="pb-filters" id="pbFilters" aria-label="Which problems to show"></div>
+              <input class="field slim pb-search" id="pbSearch" placeholder="Filter by file or message…" autocomplete="off" spellcheck="false" />
+              <button class="btn small" id="pbFix" type="button" title="Put these problems into the chat, ready to send" hidden><i data-icon="chat"></i> Ask JARVIS to fix</button>
+              <button class="btn btn-primary small" id="pbRun" type="button"><i data-icon="refresh"></i> <span>Analyse</span></button>
+            </div>
+            <div class="pb-banners" id="pbBanners"></div>
+            <div class="pb-list" id="pbList"></div>
+          </section>
         </div>
       </section>
     </main>
@@ -952,6 +970,7 @@
 <script src="github.js"></script>
 <script src="crew-model.js"></script>
 <script src="crew.js"></script>
+<script src="problems.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

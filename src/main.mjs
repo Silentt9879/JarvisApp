@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { JarvisSession, listRecent, loadHistory, findSessions, removeSession, renameStoredSession, isSessionId, IMAGE_TYPES, MAX_IMAGE_BYTES } from './session.mjs';
 import { systemStats, gitStatus, knowledgeStatus, openIssues, handoffFocus, listDocs, readDoc, searchDocs, docRoots, savedEffort } from './workspace.mjs';
 import { FLUTTER_APPS, isSerial, listDevices, startMirror, stopMirror, resetVideo, sendInput, flutterRun, flutterCommandFor, flutterLog, shutdownDevices } from './devices.mjs';
+import { analyzeApp, cancelAnalysis, shutdownAnalysis } from './analysis.mjs';
 import { listWebApps, webRun, webStop, webStopAll, webLog, shutdownWebApps } from './webapps.mjs';
 import { inSnapZone, dockWidth, dockLayout, followLayout, afterPhoneResize, stillDocked } from './dock.mjs';
 import { readDraft, readClickUp, syncClickUp } from './tasks.mjs';
@@ -1013,6 +1014,7 @@ async function shutdownChildren() {
   try { await features.stop(); } catch { /* shutting down */ }
   try { session?.close(); } catch { /* shutting down */ }
   try { shutdownWebApps(); } catch { /* shutting down */ }
+  try { shutdownAnalysis(); } catch { /* shutting down */ }
   await Promise.race([shutdownDevices().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
 }
 ipcMain.handle('jarvis:claudeVersion', () => (fs.existsSync(claudeExe()) ? claudeVersion() : null));
@@ -1432,6 +1434,14 @@ ipcMain.handle('jarvis:devices', async () => {
     return { ok: true, list: list.map((d) => ({ ...d, popped: phoneWindows.has(d.serial) })) };
   } catch (e) { log('listDevices failed', e?.message || e); return { ok: false, error: String(e?.message || e), list: [] }; }
 });
+// Dart analysis (analysis.mjs): what is wrong with an app, for the Devices view. Reading only.
+ipcMain.handle('jarvis:analyze', async (_e, appKey) => {
+  if (typeof appKey !== 'string' || !FLUTTER_APPS[appKey]) return { ok: false, error: 'Unknown app.' };
+  const r = await analyzeApp(loadConfig().cwd, appKey, { log });
+  if (r.ok) log('dart analyze', appKey, `${r.counts.error} errors, ${r.counts.warning} warnings, ${r.counts.hint} hints`, `${r.ms} ms`);
+  return r;
+});
+ipcMain.handle('jarvis:analyzeCancel', (_e, appKey) => (typeof appKey === 'string' ? cancelAnalysis(appKey) : false));
 ipcMain.handle('jarvis:flutterApps', () => {
   const { cwd } = loadConfig();
   return Object.entries(FLUTTER_APPS).map(([key, a]) => ({ key, name: a.name, dir: a.dir, found: fs.existsSync(path.join(cwd, a.dir, 'pubspec.yaml')) }));
