@@ -1,0 +1,806 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS style explorer</title>
+<!--
+  A tool for choosing how JARVIS should look before any of the app is restyled.
+  One file, nothing loaded from anywhere: open it in a browser on the PC that runs JARVIS,
+  because every typeface offered here is one already installed on Windows - what you see
+  is what the app can show without bundling a font.
+
+  Left: the controls. Right: a mock of the JARVIS window, drawn from the settings.
+  Bottom right: a note in plain words, to copy and send to JARVIS.
+  The address bar keeps the settings (after the #), so a link reopens the same look.
+-->
+<style>
+/* ================================================================ the explorer itself */
+:root { color-scheme: dark; --c-bg: #0b0c0e; --c-panel: #121316; --c-raise: #1a1c20; --c-line: #2a2d33; --c-text: #e9eaec; --c-dim: #a3a8b0; --c-key: #9cc2ff; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: grid; grid-template-columns: 348px minmax(0, 1fr); background: var(--c-bg); color: var(--c-text); font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--c-key); outline-offset: 2px; }
+
+.controls { height: 100vh; overflow-y: auto; padding: 20px 18px 28px; background: var(--c-panel); border-right: 1px solid var(--c-line); scrollbar-color: #3a3d44 transparent; }
+.controls h1 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+.controls > p { margin: 0 0 18px; color: var(--c-dim); }
+.controls section { padding: 14px 0 4px; border-top: 1px solid var(--c-line); }
+.controls h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
+.ctl { margin-bottom: 14px; }
+.ctl-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 5px; color: var(--c-dim); }
+.ctl-top output { font: 12px "Cascadia Code", Consolas, monospace; color: var(--c-text); }
+.hint { margin: 5px 0 0; font-size: 12px; color: var(--c-dim); }
+.hint.bad { color: #ff9d8f; } .hint.good { color: #86d39a; }
+input[type=range] { width: 100%; margin: 0; accent-color: var(--c-key); }
+input.hue { -webkit-appearance: none; appearance: none; height: 10px; border-radius: 5px; background: linear-gradient(90deg, #ff5d5d, #ffb13d, #e8e04a, #5fd36a, #3fd0c8, #4b94f0, #8f7bf2, #e06ad6, #ff5d5d); }
+input.hue::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #111; }
+select { width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--c-line); background: var(--c-raise); }
+.seg { display: flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--c-raise); border: 1px solid var(--c-line); }
+.seg button { flex: 1; padding: 5px 6px; border: 0; border-radius: 6px; background: none; color: var(--c-dim); cursor: pointer; white-space: nowrap; }
+.seg button:hover { color: var(--c-text); }
+.seg button.on { background: #2f333b; color: var(--c-text); font-weight: 600; }
+.link { padding: 0; border: 0; background: none; color: var(--c-key); cursor: pointer; font-size: 12px; }
+.link:hover { text-decoration: underline; }
+.link:disabled { color: var(--c-dim); cursor: default; text-decoration: none; }
+
+.dirs { display: grid; gap: 8px; }
+.dir { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 4px 12px; align-items: center; width: 100%; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--c-line); background: var(--c-raise); text-align: left; cursor: pointer; }
+.dir:hover { border-color: #4a4e57; }
+.dir.on { border-color: var(--c-key); box-shadow: 0 0 0 1px var(--c-key); }
+.dir b { font-size: 13.5px; font-weight: 600; }
+.dir small { grid-column: 2; color: var(--c-dim); font-size: 12px; line-height: 1.35; }
+.sw { grid-row: 1 / 3; width: 44px; height: 44px; border-radius: 8px; overflow: hidden; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; border: 1px solid rgba(255, 255, 255, .14); }
+
+.stage { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100vh; min-width: 0; }
+.stage-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 18px; border-bottom: 1px solid var(--c-line); }
+.stage-top .seg { flex: 0 0 auto; }
+.stage-top .seg button { padding: 5px 14px; }
+.stage-top label { color: var(--c-dim); }
+.stage-top .what { margin-left: auto; color: var(--c-dim); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-top .what b { color: var(--c-text); font-weight: 600; }
+.stage-view { position: relative; min-height: 0; overflow: hidden; display: grid; place-items: center; background: #17181b; transition: background .25s; }
+.stage-view[data-mode="light"] { background: #c5c7cb; }
+.win-fit { width: calc(1280px * var(--s, 1)); height: calc(800px * var(--s, 1)); }
+.stage-note { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; align-items: start; padding: 12px 18px 14px; border-top: 1px solid var(--c-line); background: var(--c-panel); }
+.stage-note h2 { grid-column: 1 / -1; margin: 0; font-size: 13px; font-weight: 600; }
+.stage-note pre { margin: 0; max-height: 108px; overflow-y: auto; white-space: pre-wrap; font: inherit; color: var(--c-dim); }
+.stage-note pre code { font: 12px "Cascadia Code", Consolas, monospace; color: #7f8590; }
+.copy { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--c-key); background: var(--c-key); color: #06122b; font-weight: 600; cursor: pointer; }
+.copy.done { background: #86d39a; border-color: #86d39a; }
+.reset { width: 100%; margin-top: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--c-line); background: var(--c-raise); cursor: pointer; }
+.reset:hover { border-color: #4a4e57; }
+@media (max-width: 900px) { body { grid-template-columns: 1fr; overflow: auto; } .controls { height: auto; border-right: 0; } .stage { height: auto; grid-template-rows: auto 70vh auto; } }
+
+/* page switches inside the mock: only the page area moves, never the explorer around it */
+::view-transition-old(root) { display: none; }
+::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-group(jv-page) { animation-duration: var(--vt-dur, 200ms); }
+::view-transition-old(jv-page), ::view-transition-new(jv-page) { animation-duration: var(--vt-dur, 200ms); animation-timing-function: cubic-bezier(.2, .7, .2, 1); }
+html[data-motion="slide"]::view-transition-old(jv-page) { animation-name: jv-out; }
+html[data-motion="slide"]::view-transition-new(jv-page) { animation-name: jv-in; }
+@keyframes jv-out { to { opacity: 0; transform: translateX(-30px); } }
+@keyframes jv-in { from { opacity: 0; transform: translateX(30px); } }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
+
+/* ================================================================ the JARVIS mock
+   Everything below reads its look from custom properties set on .win by the script.
+   The window is always 1280 x 800 and is scaled to fit, so sizes here are real app sizes. */
+.win {
+  --u: 8px; --bw: 1px; --r: 8px; --fs: 13px; --fs-min: 11px;
+  --fs-s: max(var(--fs-min), calc(var(--fs) - 1px));
+  --fs-xs: max(var(--fs-min), calc(var(--fs) - 2.5px));
+  --fs-l: calc(var(--fs) + 1px);
+  --fs-h: calc(var(--fs) + 8px);
+  --r-s: calc(var(--r) * .6);
+  --hair: max(1px, var(--bw));
+  --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 50%, transparent);
+  position: relative; width: 1280px; height: 800px; display: grid; grid-template-columns: var(--sbw, 216px) minmax(0, 1fr);
+  overflow: hidden; border-radius: 10px; transform: scale(var(--s, 1)); transform-origin: 0 0;
+  background: var(--bg); color: var(--text); font-family: var(--font); font-size: var(--fs); line-height: 1.45; font-variant-numeric: lining-nums;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 16%, transparent), 0 26px 70px rgba(0, 0, 0, .42);
+}
+.win * { box-sizing: border-box; }
+.win button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-align: inherit; }
+.win svg { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.win b { font-weight: 600; }
+.win small { font-size: var(--fs-xs); color: var(--muted); }
+.win .mono { font-family: var(--mono); font-size: .92em; }
+.win .grow { flex: 1; }
+.win .panel { position: relative; background: var(--surface); border: var(--bw) solid var(--line); border-radius: var(--r); padding: calc(var(--u) * 1.5); }
+.win .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: calc(var(--u) * .7) calc(var(--u) * 1.5); border-radius: var(--r-s); border: var(--hair) solid var(--line); background: var(--surface2); font-size: var(--fs-s); font-weight: 600; white-space: nowrap; }
+.win .btn svg { width: 14px; height: 14px; }
+.win .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.win .btn.danger { background: color-mix(in srgb, var(--err) 14%, transparent); border-color: color-mix(in srgb, var(--err) 50%, transparent); color: var(--err); }
+.win .btn.block { width: 100%; }
+.win .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; border: var(--hair) solid var(--line); font-size: var(--fs-xs); font-weight: 600; color: var(--text2); white-space: nowrap; }
+.win .dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
+.win .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.win .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 13%, transparent); }
+.win .pill.bad { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); background: color-mix(in srgb, var(--err) 13%, transparent); }
+.win .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: var(--r-s); background: var(--surface2); border: var(--hair) solid var(--line); font-size: var(--fs-xs); color: var(--text2); white-space: nowrap; }
+.win .chip.live { color: var(--ok); }
+.win .banner { display: flex; align-items: center; gap: 10px; padding: calc(var(--u) * .9) calc(var(--u) * 1.25); border-radius: var(--r-s); font-size: var(--fs-s); border: var(--hair) solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.win .banner > svg, .win .banner b { color: var(--warn); }
+.win .banner .btn { margin-left: auto; }
+
+/* sidebar */
+.win .sb { display: flex; flex-direction: column; gap: var(--u); min-width: 0; padding: calc(var(--u) * 1.75) calc(var(--u) * 1.25); background: var(--surface); border-right: var(--hair) solid var(--line); }
+.win .sb-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px calc(var(--u) * 1.25); font-family: var(--font-d); font-weight: var(--wd); font-size: calc(var(--fs) + 4px); white-space: nowrap; }
+.win .mark { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; border-radius: var(--r-s); background: var(--accent); color: var(--accent-ink); font: 700 14px/1 var(--font); }
+.win .sb-nav { position: relative; display: flex; flex-direction: column; gap: 2px; }
+.win .nav-i { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; padding: calc(var(--u) * .85) 10px; border-radius: var(--r-s); color: var(--text2); font-size: var(--fs-l); white-space: nowrap; }
+.win .nav-i.go:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.win .nav-i:not(.go) { cursor: default; }
+.win .nav-i.on { background: var(--accent-soft); color: var(--text); }
+.win .nav-i.on svg { color: var(--accent-text); }
+.win .badge { margin-left: auto; min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--surface2); font-size: var(--fs-xs); text-align: center; color: var(--text2); }
+.win .sb-status { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: calc(var(--u) * 1.25); border-radius: var(--r); border: var(--bw) solid var(--line); background: var(--bg); }
+.win .sb-status b { display: block; font-size: var(--fs-s); }
+.win .ring { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: var(--ok); }
+.win[data-nav="narrow"] { --sbw: 62px; }
+.win[data-nav="narrow"] .nav-i span, .win[data-nav="narrow"] .badge, .win[data-nav="narrow"] .sb-brand b, .win[data-nav="narrow"] .sb-status div { display: none; }
+.win[data-nav="narrow"] .nav-i, .win[data-nav="narrow"] .sb-status, .win[data-nav="narrow"] .sb-brand { justify-content: center; padding-left: 0; padding-right: 0; }
+
+/* top bar, status bar */
+.win .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.win .top { flex: 0 0 54px; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: var(--hair) solid var(--line); }
+.win .clock { text-align: center; line-height: 1.15; }
+.win .clock small { display: block; }
+.win .clock b { font-family: var(--font-d); font-weight: var(--wd); font-size: calc(var(--fs) + 9px); color: var(--accent-text); }
+.win .search { display: flex; align-items: center; gap: 8px; width: 250px; padding: 6px 10px; border-radius: var(--r-s); border: var(--hair) solid var(--line); background: var(--surface); color: var(--muted); font-size: var(--fs-s); }
+.win .search kbd { margin-left: auto; font-family: var(--mono); font-size: var(--fs-xs); padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); }
+.win .ib { position: relative; display: grid; place-items: center; width: 30px; height: 30px; color: var(--text2); }
+.win .nb { position: absolute; top: 1px; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 999px; background: var(--err); color: #fff; font: 700 9px/14px var(--font); font-style: normal; text-align: center; }
+.win .acct { display: flex; align-items: center; gap: 9px; text-align: right; line-height: 1.2; }
+.win .acct b { display: block; font-size: var(--fs-s); }
+.win .ava { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; border: var(--hair) solid var(--line); color: var(--text2); }
+.win .bot { flex: 0 0 32px; display: flex; align-items: center; gap: 20px; padding: 0 18px; border-top: var(--hair) solid var(--line); font-size: var(--fs-xs); color: var(--muted); }
+.win .bot b { color: var(--text2); }
+.win .bot .okt { color: var(--ok); }
+.win .brief { display: inline-flex; align-items: center; gap: 6px; color: var(--text2); }
+
+/* the page area */
+.win .page { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: calc(var(--u) * 2); padding: calc(var(--u) * 2.5) calc(var(--u) * 3); view-transition-name: jv-page; }
+.win .pg-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.win .h1 { margin: 0; font-family: var(--font-d); font-weight: var(--wd); font-size: var(--fs-h); line-height: 1.15; }
+.win .sub { margin: 0; color: var(--text2); font-size: var(--fs-s); }
+
+/* chat */
+.win .chat { flex: 1; min-height: 0; display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: calc(var(--u) * 2); }
+.win .sess { display: flex; flex-direction: column; gap: 4px; }
+.win .sess-h { margin: var(--u) 4px 2px; font-size: var(--fs-xs); color: var(--muted); }
+.win .sess-i { padding: calc(var(--u) * .8) 10px; border-radius: var(--r-s); }
+.win .sess-i b { display: block; font-size: var(--fs-s); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text2); }
+.win .sess-i.on { background: var(--accent-soft); }
+.win .sess-i.on b { color: var(--text); font-weight: 600; }
+.win .talk { display: flex; flex-direction: column; min-height: 0; gap: calc(var(--u) * 1.5); }
+.win .msgs { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: calc(var(--u) * 1.5); width: 100%; max-width: 760px; margin: 0 auto; }
+.win .msg { font-size: var(--fs-l); line-height: 1.55; }
+.win .msg p { margin: 0 0 .6em; }
+.win .msg p:last-child { margin: 0; }
+.win .msg.me { align-self: flex-end; max-width: 78%; padding: calc(var(--u) * 1.1) calc(var(--u) * 1.6); border-radius: var(--r); background: var(--surface2); border: var(--bw) solid var(--line); }
+.win .who { display: block; margin-bottom: 4px; font-family: var(--font-d); font-weight: var(--wd); font-size: var(--fs-s); color: var(--accent-text); }
+.win .tool { display: flex; align-items: center; gap: 9px; font-size: var(--fs-s); color: var(--text2); }
+.win .tool svg { color: var(--muted); }
+.win .tool small { margin-left: auto; }
+.win .ask { display: flex; align-items: center; gap: 14px; border-color: var(--accent-line); }
+.win .ask b { display: block; }
+.win .ask small { display: block; margin-top: 2px; color: var(--text2); font-size: var(--fs-s); }
+.win .ask-acts { margin-left: auto; display: flex; gap: 8px; }
+.win .composer { width: 100%; max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: calc(var(--u) * 1.25); }
+.win .ph { color: var(--muted); font-size: var(--fs-l); }
+.win .comp-row { display: flex; align-items: center; gap: 8px; }
+.win .send { margin-left: auto; width: 32px; height: 32px; padding: 0; border-radius: 50%; }
+
+/* devices */
+.win .dev { flex: 1; min-height: 0; display: grid; grid-template-columns: 292px minmax(0, 1fr); gap: calc(var(--u) * 2); align-items: start; }
+.win .phone { display: flex; flex-direction: column; gap: calc(var(--u) * 1.25); }
+.win .phone-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.win .phone-head b { display: block; }
+.win .plate { display: inline-block; margin-top: 3px; font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+.win .screen { width: 168px; height: 296px; margin: 0 auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; border-radius: 18px; border: 2px solid var(--line); background: var(--bg); }
+.win .scr-top { font-size: 11px; font-weight: 700; }
+.win .scr-card { height: 74px; border-radius: 10px; background: linear-gradient(140deg, var(--accent), color-mix(in srgb, var(--accent) 40%, var(--bg))); }
+.win .scr-row { height: 10px; border-radius: 5px; background: var(--surface2); }
+.win .scr-row.short { width: 60%; }
+.win .scr-btn { margin-top: auto; padding: 7px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 10.5px; font-weight: 700; text-align: center; }
+.win .keys { display: flex; justify-content: center; gap: 20px; color: var(--text2); }
+.win .run { display: flex; gap: 8px; }
+.win .fieldbox { flex: 1; padding: calc(var(--u) * .7) 10px; border-radius: var(--r-s); border: var(--hair) solid var(--line); background: var(--bg); font-size: var(--fs-s); }
+.win .dev-r { display: flex; flex-direction: column; gap: calc(var(--u) * 2); min-width: 0; }
+.win .webs { display: grid; grid-template-columns: 1fr 1fr; gap: calc(var(--u) * 2); }
+.win .web { display: flex; flex-direction: column; gap: var(--u); }
+.win .web-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.win .web-a { display: flex; gap: 8px; }
+.win .ana { display: flex; flex-direction: column; gap: calc(var(--u) * 1.25); }
+.win .ana-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.win .rows { border: var(--hair) solid var(--line); border-radius: var(--r-s); overflow: hidden; }
+.win .file-row { display: flex; align-items: baseline; gap: 8px; padding: calc(var(--u) * .7) 12px; background: var(--surface2); font-size: var(--fs-s); }
+.win .file-row small { font-family: var(--mono); }
+.win .count { margin-left: auto; padding: 0 7px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 700; }
+.win .count.bad { color: var(--err); background: color-mix(in srgb, var(--err) 15%, transparent); }
+.win .count.wn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.win .row { display: flex; align-items: center; gap: 10px; padding: calc(var(--u) * .65) 12px calc(var(--u) * .65) 26px; border-top: var(--hair) solid var(--line); font-size: var(--fs-s); color: var(--text2); }
+.win .row.err svg { color: var(--err); }
+.win .row.err span { color: var(--text); }
+.win .row.wn svg { color: var(--warn); }
+.win .row small { margin-left: auto; }
+
+/* agents */
+.win .floor { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: calc(var(--u) * 2); }
+.win .agent { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; }
+.win .face { grid-row: 1 / 3; width: 46px; height: 46px; display: grid; place-items: center; border-radius: var(--r); background: var(--surface2); border: var(--hair) solid var(--line); font-family: var(--font-d); font-weight: var(--wd); font-size: calc(var(--fs) + 6px); color: var(--text2); }
+.win .agent.working .face { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-text); }
+.win .agent-name { justify-self: start; font-size: var(--fs-l); }
+.win .agent small { grid-column: 2; }
+.win .agent-time { grid-row: 1; grid-column: 3; font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+.win .say { grid-column: 1 / -1; margin-top: calc(var(--u) * .75); padding: calc(var(--u) * .8) 10px; border-radius: var(--r-s); background: var(--bg); border: var(--hair) solid var(--line); font-size: var(--fs-s); color: var(--muted); }
+.win .agent.working .say { color: var(--text); }
+.win .bench { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- Arc
+   The film's JARVIS with restraint: lines, not boxes; light in one place only. */
+.win[data-dir="arc"] .panel { background: color-mix(in srgb, var(--surface) 55%, transparent); }
+.win[data-dir="arc"] .panel::before, .win[data-dir="arc"] .panel::after { content: ""; position: absolute; width: 10px; height: 10px; border: 1px solid var(--accent); pointer-events: none; }
+.win[data-dir="arc"] .panel::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+.win[data-dir="arc"] .panel::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+.win[data-dir="arc"] .sb { background: transparent; }
+.win[data-dir="arc"] .nav-i.on { background: linear-gradient(90deg, var(--accent-soft), transparent); }
+.win[data-dir="arc"] .nav-i.on::before { content: ""; position: absolute; left: 0; top: 18%; bottom: 18%; width: 2px; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+.win[data-dir="arc"] .ring { width: 26px; height: 26px; background: conic-gradient(var(--accent) 0 62%, transparent 62% 70%, var(--accent-line) 70% 92%, transparent 92%); -webkit-mask: radial-gradient(circle, transparent 8px, #000 9px); mask: radial-gradient(circle, transparent 8px, #000 9px); filter: drop-shadow(0 0 5px var(--accent)); }
+.win[data-dir="arc"] .mark { background: none; border: 1px solid var(--accent); border-radius: 50%; color: var(--accent-text); }
+.win[data-dir="arc"] .clock b { letter-spacing: .02em; }
+.win[data-dir="arc"] .face { border-radius: 50%; }
+
+/* ---------------------------------------------------------------- Dispatch
+   A roadside control room: signs, plates and lane markings. */
+.win[data-dir="dispatch"] .nav-i.on { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.win[data-dir="dispatch"] .nav-i.on svg { color: inherit; }
+.win[data-dir="dispatch"] .nav-i.on .badge { background: var(--accent-ink); color: var(--accent); }
+.win[data-dir="dispatch"] .top { border-bottom: 2px dashed color-mix(in srgb, var(--text) 36%, transparent); }
+.win[data-dir="dispatch"] .h1, .win[data-dir="dispatch"] .sb-brand, .win[data-dir="dispatch"] .clock b { font-stretch: 82%; }
+.win[data-dir="dispatch"] .plate { margin-top: 5px; padding: 1px 8px; border-radius: 4px; background: #f4f2ec; color: #17181a; border: 2px solid #17181a; box-shadow: 0 0 0 1px #f4f2ec; font-family: var(--font-d); font-weight: 700; font-stretch: 80%; font-size: var(--fs-s); letter-spacing: .08em; }
+.win[data-dir="dispatch"] .banner { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--warn) 17%, transparent) 0 10px, color-mix(in srgb, var(--warn) 5%, transparent) 10px 20px); }
+.win[data-dir="dispatch"] .mark { border-radius: 4px; box-shadow: inset 0 0 0 2px var(--accent-ink); }
+.win[data-dir="dispatch"] .face { border-width: 2px; }
+.win[data-dir="dispatch"] .ring { width: 12px; height: 12px; border-radius: 2px; }
+
+/* ---------------------------------------------------------------- Bell board
+   The butler's pantry: baize, brass, a serif, and bells that ring. */
+.win[data-dir="bell"] .panel { box-shadow: inset 0 0 0 3px var(--surface), inset 0 0 0 4px color-mix(in srgb, var(--accent) 38%, transparent); }
+.win[data-dir="bell"] .nav-i.on { background: none; }
+.win[data-dir="bell"] .nav-i.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 2px; height: 1px; background: var(--accent); }
+.win[data-dir="bell"] .mark { background: none; border: 1px solid var(--accent); border-radius: 50%; color: var(--accent-text); font-family: var(--font-d); }
+.win[data-dir="bell"] .sb-brand b { letter-spacing: .14em; }
+.win[data-dir="bell"] .face { border-radius: 50%; border: 2px solid var(--accent); background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--accent) 55%, var(--surface)), var(--surface2) 72%); color: var(--text); }
+.win[data-dir="bell"] .agent.working .face { box-shadow: 0 0 0 3px var(--surface), 0 0 0 4px var(--accent), 0 0 0 8px var(--surface), 0 0 0 9px color-mix(in srgb, var(--accent) 45%, transparent); }
+.win[data-dir="bell"] .agent { gap: 2px 18px; }
+.win[data-dir="bell"] .agent-name { padding: 0 8px; border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); border-radius: 2px; font-family: var(--font-d); font-variant-caps: small-caps; letter-spacing: .06em; }
+.win[data-dir="bell"] .ring { background: var(--accent); }
+.win[data-dir="bell"] .who { font-variant-caps: small-caps; letter-spacing: .08em; font-size: var(--fs); }
+
+/* ---------------------------------------------------------------- Line map
+   A transit diagram: the sidebar is a route, each page a station with its own colour. */
+.win[data-dir="line"][data-nav="wide"] .sb-nav { padding-left: 26px; }
+.win[data-dir="line"][data-nav="wide"] .sb-nav::before { content: ""; position: absolute; left: 11px; top: 12px; bottom: 12px; width: 4px; border-radius: 2px; background: var(--accent); }
+.win[data-dir="line"][data-nav="wide"] .nav-i svg { display: none; }
+.win[data-dir="line"][data-nav="wide"] .nav-i::before { content: ""; position: absolute; left: -20px; top: 50%; width: 10px; height: 10px; margin-top: -5px; border-radius: 50%; background: var(--surface); border: 3px solid var(--text); }
+.win[data-dir="line"][data-nav="wide"] .nav-i.on::before { left: -23px; width: 16px; height: 16px; margin-top: -8px; border: 4px solid var(--pc); }
+.win[data-dir="line"] .nav-i.on { background: none; font-weight: 700; }
+.win[data-dir="line"] .nav-i.on svg { color: var(--pc); }
+.win[data-dir="line"] .h1 { display: flex; align-items: center; gap: 12px; }
+.win[data-dir="line"] .h1::before { content: ""; width: 34px; height: 8px; border-radius: 4px; background: var(--pc); }
+.win[data-dir="line"] .mark { background: var(--surface); border: 5px solid var(--accent); border-radius: 50%; color: transparent; }
+.win[data-dir="line"] .face { border-radius: 50%; border: 4px solid var(--line); background: var(--surface); }
+.win[data-dir="line"] .agent.working .face { border-color: var(--pc); background: var(--surface); color: var(--text); }
+.win[data-dir="line"] .who { color: var(--pc); }
+.win[data-dir="line"] .sess-i.on { background: none; box-shadow: inset 4px 0 0 var(--pc); }
+</style>
+</head>
+<body>
+
+<aside class="controls" aria-label="Controls">
+  <h1>JARVIS style explorer</h1>
+  <p>Pick a direction, adjust it until it feels right, then copy the note under the preview and send it to JARVIS.</p>
+
+  <section>
+    <h2>Direction</h2>
+    <div class="dirs" id="dirs"></div>
+  </section>
+
+  <section>
+    <h2>Colour</h2>
+    <div class="ctl">
+      <div class="ctl-top"><label for="hue">Accent colour</label><output id="hueOut"></output></div>
+      <input class="hue" type="range" id="hue" min="0" max="359" step="1">
+      <p class="hint"><button class="link" id="hueOwn" type="button">Use the direction's own colour</button></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Type</h2>
+    <div class="ctl">
+      <div class="ctl-top"><label for="font">Typeface</label></div>
+      <select id="font"></select>
+      <p class="hint">All of these are already on Windows, so the app needs nothing extra to use them.</p>
+    </div>
+    <div class="ctl">
+      <div class="ctl-top"><label for="fs">Body text</label><output id="fsOut"></output></div>
+      <input type="range" id="fs" data-key="fs" min="11" max="16" step="0.5">
+    </div>
+    <div class="ctl">
+      <div class="ctl-top"><label for="fsMin">Smallest text allowed</label><output id="fsMinOut"></output></div>
+      <input type="range" id="fsMin" data-key="fsMin" min="9" max="13" step="0.5">
+    </div>
+    <div class="ctl">
+      <div class="ctl-top"><label for="contrast">Faint text</label><output id="contrastOut"></output></div>
+      <input type="range" id="contrast" data-key="contrast" min="3" max="9" step="0.1">
+      <p class="hint" id="contrastHint"></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Shape and space</h2>
+    <div class="ctl">
+      <div class="ctl-top"><label for="radius">Corners</label><output id="radiusOut"></output></div>
+      <input type="range" id="radius" data-key="radius" min="0" max="18" step="1">
+    </div>
+    <div class="ctl">
+      <div class="ctl-top"><span>Spacing</span></div>
+      <div class="seg" data-key="density"><button type="button" data-v="compact">Compact</button><button type="button" data-v="regular">Regular</button><button type="button" data-v="roomy">Roomy</button></div>
+    </div>
+    <div class="ctl">
+      <div class="ctl-top"><span>Panel edges</span></div>
+      <div class="seg" data-key="edges"><button type="button" data-v="soft">None</button><button type="button" data-v="line">Fine line</button><button type="button" data-v="bold">Bold line</button></div>
+    </div>
+    <div class="ctl">
+      <div class="ctl-top"><span>Sidebar</span></div>
+      <div class="seg" data-key="nav"><button type="button" data-v="wide">With names</button><button type="button" data-v="narrow">Icons only</button></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Movement between pages</h2>
+    <div class="ctl">
+      <div class="seg" data-key="motion"><button type="button" data-v="none">Instant</button><button type="button" data-v="fade">Fade</button><button type="button" data-v="slide">Slide</button></div>
+      <p class="hint">Switch between Chat, Devices and Agents above the preview to see it.</p>
+    </div>
+    <div class="ctl">
+      <div class="ctl-top"><label for="speed">Speed</label><output id="speedOut"></output></div>
+      <input type="range" id="speed" data-key="speed" min="100" max="450" step="10">
+    </div>
+  </section>
+
+  <button class="reset" id="reset" type="button">Put this direction back as designed</button>
+</aside>
+
+<main class="stage">
+  <div class="stage-top">
+    <label>Page</label>
+    <div class="seg" data-key="page"><button type="button" data-v="chat">Chat</button><button type="button" data-v="devices">Devices</button><button type="button" data-v="agents">Agents</button></div>
+    <label>Theme</label>
+    <div class="seg" data-key="mode"><button type="button" data-v="dark">Dark</button><button type="button" data-v="light">Light</button></div>
+    <div class="what" id="what"></div>
+  </div>
+
+  <div class="stage-view" id="view">
+    <div class="win-fit" id="fit">
+      <div class="win" id="win">
+        <aside class="sb">
+          <div class="sb-brand"><span class="mark">J</span><b>JARVIS</b></div>
+          <nav class="sb-nav" id="nav"></nav>
+          <div class="sb-status"><span class="ring"></span><div><b>Standing by</b><small>Click to talk to JARVIS</small></div></div>
+        </aside>
+        <div class="col">
+          <header class="top" id="top"></header>
+          <div class="page" id="page"></div>
+          <footer class="bot" id="bot"></footer>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage-note">
+    <h2>Send this to JARVIS</h2>
+    <pre id="note"></pre>
+    <button class="copy" id="copy" type="button">Copy</button>
+  </div>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const win = $('win');
+
+  // ------------------------------------------------------------------ icons (drawn, not loaded)
+  const ICONS = {
+    chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+    grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2"/>',
+    branch: '<circle cx="6" cy="5.5" r="2.3"/><circle cx="6" cy="18.5" r="2.3"/><circle cx="18" cy="8" r="2.3"/><path d="M6 8v8M18 10.3c0 4.2-6.5 3-12 5.7"/>',
+    phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
+    agents: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4M9 4h6"/><circle cx="9" cy="14" r="1.3"/><circle cx="15" cy="14" r="1.3"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+    code: '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/>',
+    search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+    bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
+    user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+    play: '<path d="M7 5l12 7-12 7z"/>',
+    back: '<path d="M14 6l-6 6 6 6"/>',
+    home: '<circle cx="12" cy="12" r="6"/>',
+    square: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+    alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
+    bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>',
+    bug: '<rect x="8" y="8" width="8" height="11" rx="4"/><path d="M9 6l1.5 2M15 6l-1.5 2M4 12h4M16 12h4M5 18l3-1.5M19 18l-3-1.5"/>',
+    send: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+  };
+  const ic = (n) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+
+  // ------------------------------------------------------------------ typefaces already on Windows
+  const MONO = '"Cascadia Code", "Cascadia Mono", Consolas, monospace';
+  const FONTS = {
+    segoe: { name: 'Segoe UI Variable', label: "Segoe UI Variable (today's)", css: '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif' },
+    bahn: { name: 'Bahnschrift', label: 'Bahnschrift (road-sign lettering)', css: 'Bahnschrift, "Segoe UI", sans-serif' },
+    corbel: { name: 'Corbel', label: 'Corbel (rounded, humanist)', css: 'Corbel, Candara, "Segoe UI", sans-serif' },
+    candara: { name: 'Candara', label: 'Candara (flared, humanist)', css: 'Candara, Corbel, "Segoe UI", sans-serif' },
+    sitka: { name: 'Sitka', label: 'Sitka (serif, made for screens)', css: '"Sitka Text", Sitka, Georgia, Cambria, serif' },
+    georgia: { name: 'Georgia', label: 'Georgia (serif)', css: 'Georgia, Cambria, serif' },
+    cascadia: { name: 'Cascadia Code', label: 'Cascadia Code (typewriter)', css: MONO },
+  };
+
+  // ------------------------------------------------------------------ the directions
+  // Each has a dark and a light palette, a display face, and the settings it was designed with.
+  const DIRS = {
+    today: {
+      name: 'Today', blurb: 'JARVIS as it looks now. Here to compare against.', says: 'its current look', home: 'dark',
+      dark: { bg: '#0d0e10', surface: '#15171a', surface2: '#1c1f23', line: '#272b30', text: '#e6e8ea', text2: '#a4abb3', accent: '#4b94f0', ink: '#ffffff', ok: '#48b25f', warn: '#cf9236', err: '#e5544b' },
+      light: { bg: '#f7f8f9', surface: '#ffffff', surface2: '#f2f4f6', line: '#e2e5e9', text: '#1a1d21', text2: '#555d66', accent: '#1266d4', ink: '#ffffff', ok: '#1d7f3a', warn: '#8a6100', err: '#c62f26' },
+      fontD: null, wd: 600,
+      set: { font: 'segoe', fs: 12.5, fsMin: 10, contrast: 4.1, radius: 8, density: 'regular', edges: 'line', nav: 'wide', motion: 'none', speed: 200 },
+    },
+    arc: {
+      name: 'Arc', blurb: "The film's JARVIS, done with restraint: ink-navy glass, one cyan light, thin strokes.", home: 'dark',
+      says: 'deep ink-navy surfaces, one arc-cyan light for whatever is active, thin strokes with corner ticks in place of filled boxes, light-weight display type, and glow on the status ring only',
+      dark: { bg: '#050b14', surface: '#0a1422', surface2: '#101e31', line: '#1e3a5c', text: '#dcebfa', text2: '#9db6d1', accent: '#3fd0ff', ink: '#03121c', ok: '#4ade9a', warn: '#f5b84a', err: '#ff7a7a' },
+      light: { bg: '#edf2f7', surface: '#fafcfe', surface2: '#e2eaf3', line: '#bfd0e1', text: '#0b1b2b', text2: '#40566d', accent: '#0a7fb5', ink: '#ffffff', ok: '#0e7a4c', warn: '#8a5a00', err: '#c0322b' },
+      fontD: '"Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif', wd: 300,
+      set: { font: 'segoe', fs: 13, fsMin: 11.5, contrast: 5.5, radius: 2, density: 'regular', edges: 'line', nav: 'wide', motion: 'fade', speed: 220 },
+    },
+    dispatch: {
+      name: 'Dispatch', blurb: 'A roadside control room: asphalt greys, signal amber, road-sign lettering.', home: 'dark',
+      says: 'asphalt-grey surfaces, signal amber for actions and the current page, Bahnschrift (road-sign lettering) throughout with narrower headings, bold outlines, device names on number plates, and hazard stripes on warnings',
+      dark: { bg: '#1c1d1f', surface: '#26272a', surface2: '#303236', line: '#4a4c52', text: '#f4f2ec', text2: '#c4c2ba', accent: '#ffc21a', ink: '#1a1300', ok: '#58c777', warn: '#ff8a4c', err: '#ff5a52' },
+      light: { bg: '#e9e8e3', surface: '#ffffff', surface2: '#f2f1ec', line: '#9c9a92', text: '#17181a', text2: '#4a4b4f', accent: '#f5b800', ink: '#17181a', ok: '#1e7a3c', warn: '#b3470b', err: '#c22b23' },
+      fontD: 'Bahnschrift, "Segoe UI", sans-serif', wd: 700,
+      set: { font: 'bahn', fs: 14, fsMin: 12, contrast: 6, radius: 10, density: 'compact', edges: 'bold', nav: 'wide', motion: 'slide', speed: 160 },
+    },
+    bell: {
+      name: 'Bell board', blurb: "The butler's pantry: baize green, brass and a serif. Agents ring in on a bell board.", home: 'dark',
+      says: 'baize-green surfaces with brass as the accent, Sitka serif throughout, a fine brass inner rule on panels, and agents shown as a bell board (round bells with engraved name plates that ring while they work)',
+      dark: { bg: '#0e221b', surface: '#143027', surface2: '#1a3b30', line: '#2e5647', text: '#f1ead6', text2: '#c9c2a9', accent: '#d4af5a', ink: '#1c1503', ok: '#9be2b0', warn: '#f29a4b', err: '#f2786b' },
+      light: { bg: '#edf1ec', surface: '#fbfcfa', surface2: '#e2e9e3', line: '#b7c6bb', text: '#10231b', text2: '#40564b', accent: '#8c6b1f', ink: '#ffffff', ok: '#1e7a46', warn: '#a85a12', err: '#b3362b' },
+      fontD: '"Sitka Heading", "Sitka Display", Sitka, Georgia, serif', wd: 600,
+      set: { font: 'sitka', fs: 14, fsMin: 12, contrast: 5.5, radius: 3, density: 'roomy', edges: 'line', nav: 'wide', motion: 'fade', speed: 280 },
+    },
+    line: {
+      name: 'Line map', blurb: 'A transit diagram on paper: the sidebar is a route, each page a station with its own colour.', home: 'light',
+      says: 'paper-white surfaces, the sidebar drawn as a route line with a station for each page, each page carrying its own line colour on its heading, Corbel type, and generous spacing',
+      light: { bg: '#f3f4f1', surface: '#ffffff', surface2: '#ebede8', line: '#d3d6ce', text: '#141a22', text2: '#4b5563', accent: '#0b3fa8', ink: '#ffffff', ok: '#1b7f3b', warn: '#9a5b00', err: '#c62828' },
+      dark: { bg: '#10141a', surface: '#171c24', surface2: '#1f2630', line: '#303a48', text: '#eef1f5', text2: '#b3bcc8', accent: '#7aa7ff', ink: '#06122b', ok: '#5ccb7a', warn: '#f0a93b', err: '#ff6b61' },
+      fontD: 'Corbel, Candara, "Segoe UI", sans-serif', wd: 700,
+      set: { font: 'corbel', fs: 14.5, fsMin: 12.5, contrast: 5.5, radius: 6, density: 'roomy', edges: 'line', nav: 'wide', motion: 'slide', speed: 200 },
+    },
+  };
+  // The sidebar. `go` pages can be opened in the mock; the line colours are used by Line map.
+  const NAV = [
+    { k: 'chat', label: 'Chat', icon: 'chat', go: true, line: ['#d7263d', '#ff7a88'] },
+    { k: 'overview', label: 'Overview', icon: 'grid', line: ['#b87f00', '#f2b93b'] },
+    { k: 'source', label: 'GitHub Desktop', icon: 'branch', badge: '4', line: ['#2e7d32', '#66c36a'] },
+    { k: 'devices', label: 'Devices', icon: 'phone', badge: '1', go: true, line: ['#0b3fa8', '#7aa7ff'] },
+    { k: 'agents', label: 'Agents', icon: 'agents', badge: '2', go: true, line: ['#7b3fb0', '#b48bea'] },
+    { k: 'notes', label: 'Notes', icon: 'edit', badge: '3', line: ['#c2620a', '#f09a4b'] },
+    { k: 'files', label: 'Files', icon: 'code', line: ['#5b6470', '#9aa4b2'] },
+  ];
+  const DENSITY = { compact: 6, regular: 8, roomy: 10 };
+  const EDGES = { soft: 0, line: 1, bold: 2 };
+
+  const state = Object.assign({ dir: 'arc', mode: 'dark', page: 'chat', hue: null }, DIRS.arc.set);
+
+  // ------------------------------------------------------------------ colour arithmetic
+  const rgb = (hex) => { const h = hex.replace('#', ''); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)); };
+  const hex = (c) => '#' + c.map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0')).join('');
+  const lin = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  const unlin = (v) => 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
+  const lum = (h) => { const [r, g, b] = rgb(h).map(lin); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const contrast = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  const mix = (a, b, t) => { const A = rgb(a), B = rgb(b); return hex(A.map((v, i) => v + (B[i] - v) * t)); };
+  /** OKLCH keeps a colour's apparent lightness when only its hue is turned. */
+  function toLch(h) {
+    const [R, G, B] = rgb(h).map(lin);
+    const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
+    const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
+    const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+    const L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+    const a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+    const b = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+    return [L, Math.hypot(a, b), (Math.atan2(b, a) * 180 / Math.PI + 360) % 360];
+  }
+  function fromLch(L, C, H) {
+    let c = C;
+    for (let i = 0; i < 30; i += 1) {
+      const a = c * Math.cos(H * Math.PI / 180), b = c * Math.sin(H * Math.PI / 180);
+      const l = Math.pow(L + 0.3963377774 * a + 0.2158037573 * b, 3);
+      const m = Math.pow(L - 0.1055613458 * a - 0.0638541728 * b, 3);
+      const s = Math.pow(L - 0.0894841775 * a - 1.2914855480 * b, 3);
+      const out = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s];
+      if (out.every((v) => v >= -0.001 && v <= 1.001) || i === 29) return hex(out.map((v) => unlin(Math.min(1, Math.max(0, v)))));
+      c *= 0.92; // outside what a screen can show: ease the colour off until it fits
+    }
+    return '#888888';
+  }
+  /** The faint-text colour that gives exactly this contrast on a panel. */
+  function faint(surface, text, target) {
+    const top = contrast(text, surface);
+    const want = Math.min(target, top);
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 22; i += 1) { const t = (lo + hi) / 2; if (contrast(mix(surface, text, t), surface) < want) lo = t; else hi = t; }
+    return mix(surface, text, hi);
+  }
+  /** The accent, nudged lighter or darker until it can be read as text on a panel. */
+  function readable(accent, surface) {
+    let [L, C, H] = toLch(accent);
+    const step = lum(surface) < 0.5 ? 0.02 : -0.02;
+    let out = accent;
+    for (let i = 0; i < 40 && contrast(out, surface) < 4.5; i += 1) { L = Math.min(1, Math.max(0, L + step)); out = fromLch(L, C, H); }
+    return out;
+  }
+  const hueWord = (h) => ['red', 'orange', 'amber', 'yellow', 'lime', 'green', 'teal', 'cyan', 'blue', 'indigo', 'violet', 'magenta', 'pink'][Math.min(12, Math.floor(((h + 14) % 360) / 27.7))];
+
+  function tokens() {
+    const d = DIRS[state.dir];
+    const p = d[state.mode];
+    let accent = p.accent, ink = p.ink;
+    if (state.hue !== null) {
+      const [L, C] = toLch(p.accent);
+      accent = fromLch(L, Math.max(C, 0.09), state.hue);
+      ink = contrast('#ffffff', accent) >= contrast('#0c0e12', accent) ? '#ffffff' : '#0c0e12';
+    }
+    const muted = faint(p.surface, p.text, state.contrast);
+    const fontBody = FONTS[state.font].css;
+    const own = state.font === d.set.font;
+    return {
+      p, accent, ink, muted, accentText: readable(accent, p.surface), ratio: contrast(muted, p.surface), top: contrast(p.text, p.surface),
+      font: fontBody, fontD: own && d.fontD ? d.fontD : fontBody, wd: d.wd,
+    };
+  }
+
+  // ------------------------------------------------------------------ the mock's contents
+  const PAGES = {
+    chat: () => `
+      <div class="chat">
+        <div class="sess panel">
+          <button class="btn primary block">${ic('plus')}New session</button>
+          <div class="sess-h">Recent</div>
+          <div class="sess-i on"><b>Driver App build</b><small>just now</small></div>
+          <div class="sess-i"><b>Panel App merge conflict</b><small>20 minutes ago</small></div>
+          <div class="sess-i"><b>Suspended accounts, phase A</b><small>2 hours ago</small></div>
+          <div class="sess-i"><b>ClickUp tasks for the sprint</b><small>6 hours ago</small></div>
+          <div class="sess-i"><b>Insurance quote review</b><small>Yesterday</small></div>
+        </div>
+        <div class="talk">
+          <div class="msgs">
+            <div class="msg me">Run the Driver App on the Redmi and tell me why the build failed.</div>
+            <div class="tool">${ic('bolt')}<span>Ran <span class="mono">flutter run -d JRV1326</span></span><small>build failed after 38 seconds</small></div>
+            <div class="tool">${ic('bug')}<span>Analysed the Driver App</span><small>18 errors</small></div>
+            <div class="msg jv"><b class="who">JARVIS</b>
+              <p>The build failed, sir, because git left an unresolved merge conflict in <span class="mono">inprogress_cases.dart</span> at line 3487. All eighteen errors come from it.</p>
+              <p>Shall I keep the upstream side and remove the markers?</p></div>
+            <div class="ask panel"><div><b>Edit lib/Views/inprogress_cases.dart</b><small>JARVIS wants to remove 846 lines and keep the upstream version.</small></div>
+              <div class="ask-acts"><button class="btn">Deny</button><button class="btn">Allow once</button><button class="btn primary">Always allow</button></div></div>
+          </div>
+          <div class="composer panel"><div class="ph">Message JARVIS…</div>
+            <div class="comp-row"><span class="chip">Opus 5.5</span><span class="chip">Auto mode</span><span class="chip live"><i class="dot"></i>2 agents working</span><button class="btn primary send" aria-label="Send">${ic('send')}</button></div></div>
+        </div>
+      </div>`,
+    devices: () => `
+      <div class="pg-head"><h2 class="h1">Devices</h2><p class="sub">Your phones and the workspace's web projects, in one place.</p></div>
+      <div class="dev">
+        <div class="phone panel">
+          <div class="phone-head"><div><b>Redmi Note 13</b><span class="plate">JRV 1326</span></div><span class="pill ok"><i class="dot"></i>Live</span></div>
+          <div class="screen"><div class="scr-top">Bantu Rescue Driver</div><div class="scr-card"></div><div class="scr-row"></div><div class="scr-row"></div><div class="scr-row short"></div><div class="scr-btn">Go online</div></div>
+          <div class="keys">${ic('back')}${ic('home')}${ic('square')}</div>
+          <div class="run"><span class="fieldbox">Driver App</span><button class="btn danger">Stop</button></div>
+          <span class="pill ok"><i class="dot"></i>Driver App is running</span>
+        </div>
+        <div class="dev-r">
+          <div class="webs">
+            <div class="web panel"><div class="web-h"><b>Admin Web</b><span class="pill ok"><i class="dot"></i>Running</span></div><small class="mono">localhost:5065</small>
+              <div class="banner">${ic('alert')}<span>Uses production data</span></div>
+              <div class="web-a"><button class="btn">Open</button><button class="btn">Log</button><button class="btn danger">Stop</button></div></div>
+            <div class="web panel"><div class="web-h"><b>Insurance API</b><span class="pill"><i class="dot"></i>Stopped</span></div><small class="mono">localhost:5209</small>
+              <div class="banner">${ic('alert')}<span>Live database, sends real reminders</span></div>
+              <div class="web-a"><button class="btn primary">${ic('play')}Run</button><button class="btn">Open</button><button class="btn">Log</button></div></div>
+          </div>
+          <div class="ana panel">
+            <div class="ana-h"><b>Dart analysis</b><span class="pill bad">18 errors, 88 warnings</span><span class="sub">Panel App, checked 2 minutes ago</span></div>
+            <div class="banner">${ic('branch')}<span><b>Unresolved merge conflict</b> in inprogress_cases.dart, line 3487.</span><button class="btn">Open at line 3487</button></div>
+            <div class="rows">
+              <div class="file-row"><b>inprogress_cases.dart</b><small>lib/Views</small><span class="count bad">18</span></div>
+              <div class="row err">${ic('alert')}<span>Expected an identifier.</span><small class="mono">:3487</small></div>
+              <div class="row err">${ic('alert')}<span>The name 'Updated' isn't a type, so it can't be used as a type argument.</span><small class="mono">:3487</small></div>
+              <div class="row err">${ic('alert')}<span>The '===' operator is not supported.</span><small class="mono">:3489</small></div>
+              <div class="file-row"><b>user_model.dart</b><small>lib/Models</small><span class="count wn">2</span></div>
+              <div class="row wn">${ic('alert')}<span>The left operand can't be null, so the right operand is never executed.</span><small class="mono">:77</small></div>
+            </div>
+          </div>
+        </div>
+      </div>`,
+    agents: () => {
+      const A = [['Kevin', 'Customer App', 'Reading HttpService.dart', '01:12'], ['Otto', 'Driver App', 'Running flutter build', '03:40'], ['Josh', 'Git and GitHub Desktop', 'Summarising the diff', '00:22'],
+        ['Bob', 'Admin Web', 'Resting on the bench', ''], ['Tony', 'ClickUp', 'Resting on the bench', ''], ['Eric', 'Notes', 'Resting on the bench', '']];
+      return `
+      <div class="pg-head"><h2 class="h1">Agents</h2><p class="sub">The specialists JARVIS sends out, and what each is doing right now.</p></div>
+      <div class="floor">${A.map(([n, role, say, t]) => `
+        <div class="agent panel${t ? ' working' : ''}"><div class="face">${n[0]}</div><b class="agent-name">${n}</b><small>${role}</small>${t ? `<span class="agent-time">${t}</span>` : ''}<div class="say">${say}</div></div>`).join('')}
+      </div>
+      <div class="bench panel"><b>Also on call</b><span class="chip">Friday</span><span class="chip">Roadrunner</span><span class="chip">Commander</span><span class="chip">Edith</span><span class="chip">Sentry</span><span class="chip">Underwriter</span><span class="chip">Gatekeeper</span><span class="sub">Ten more specialists, called in when a task needs them.</span></div>`;
+    },
+  };
+
+  function renderShell() {
+    $('top').innerHTML = `<span class="pill warn"><i class="dot"></i>Needs attention</span><span class="grow"></span>
+      <div class="clock"><small>Wednesday 7 October</small><b>4:14 pm</b></div><span class="grow"></span>
+      <div class="search">${ic('search')}<span>Search everything…</span><kbd>Ctrl K</kbd></div>
+      <span class="ib">${ic('bell')}<i class="nb">1</i></span><span class="ib">${ic('gear')}</span>
+      <div class="acct"><div><b>Operator</b><small>Claude Max</small></div><span class="ava">${ic('user')}</span></div>`;
+    $('bot').innerHTML = `<span>Network <b class="okt">Online</b></span><span>Session <b>12 minutes</b></span><span>Context <b>14%</b></span><span class="grow"></span><span class="brief">${ic('grid')}Executive briefing</span>`;
+  }
+  function renderNav() {
+    $('nav').innerHTML = NAV.map((n) => `<button type="button" class="nav-i${n.go ? ' go' : ''}${n.k === state.page ? ' on' : ''}" ${n.go ? `data-page="${n.k}"` : 'tabindex="-1"'}>${ic(n.icon)}<span>${n.label}</span>${n.badge ? `<em class="badge">${n.badge}</em>` : ''}</button>`).join('');
+  }
+  function renderPage() { $('page').innerHTML = PAGES[state.page](); renderNav(); }
+
+  // ------------------------------------------------------------------ drawing the settings
+  function apply() {
+    const t = tokens();
+    const set = (k, v) => win.style.setProperty(k, v);
+    const p = t.p;
+    for (const k of ['bg', 'surface', 'surface2', 'line', 'text', 'text2', 'ok', 'warn', 'err']) set(`--${k}`, p[k]);
+    set('--accent', t.accent); set('--accent-ink', t.ink); set('--accent-text', t.accentText); set('--muted', t.muted);
+    set('--font', t.font); set('--font-d', t.fontD); set('--wd', String(t.wd)); set('--mono', MONO);
+    set('--fs', `${state.fs}px`); set('--fs-min', `${state.fsMin}px`);
+    set('--r', `${state.radius}px`); set('--u', `${DENSITY[state.density]}px`); set('--bw', `${EDGES[state.edges]}px`);
+    const here = NAV.find((n) => n.k === state.page);
+    set('--pc', state.dir === 'line' && state.hue === null ? here.line[state.mode === 'dark' ? 1 : 0] : t.accentText);
+    win.dataset.dir = state.dir; win.dataset.mode = state.mode; win.dataset.nav = state.nav;
+    $('view').dataset.mode = state.mode;
+    return t;
+  }
+
+  function sync(t) {
+    const d = DIRS[state.dir];
+    for (const b of document.querySelectorAll('.dir')) b.classList.toggle('on', b.dataset.dir === state.dir);
+    for (const seg of document.querySelectorAll('.seg')) for (const b of seg.children) { const on = b.dataset.v === String(state[seg.dataset.key]); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+    for (const r of document.querySelectorAll('input[data-key]')) r.value = state[r.dataset.key];
+    $('font').value = state.font;
+    $('hue').value = state.hue === null ? Math.round(toLch(d[state.mode].accent)[2]) : state.hue;
+    $('hueOut').textContent = state.hue === null ? `${t.accent}, the direction's own` : `${t.accent}, ${hueWord(state.hue)}`;
+    $('hueOwn').disabled = state.hue === null;
+    $('fsOut').textContent = `${state.fs}px`;
+    $('fsMinOut').textContent = `${state.fsMin}px`;
+    $('radiusOut').textContent = state.radius === 0 ? 'square' : `${state.radius}px`;
+    $('speedOut').textContent = `${state.speed} ms`;
+    $('speed').disabled = state.motion === 'none';
+    $('contrastOut').textContent = `${t.ratio.toFixed(1)} : 1`;
+    const hint = $('contrastHint');
+    const ok = t.ratio >= 4.5;
+    hint.className = `hint ${ok ? 'good' : 'bad'}`;
+    hint.textContent = ok ? 'Readable: it meets the accepted minimum of 4.5 to 1.' : 'Hard to read: below the accepted minimum of 4.5 to 1.';
+    $('what').innerHTML = `<b>${d.name}</b>, ${state.mode} theme. ${d.blurb}`;
+    $('note').innerHTML = note(t);
+    try { history.replaceState(null, '', '#' + encode()); } catch { /* a file:// page may refuse; the look is unaffected */ }
+  }
+
+  // ------------------------------------------------------------------ the note for JARVIS
+  function note(t) {
+    const d = DIRS[state.dir], def = d.set, ch = [];
+    if (state.hue !== null) ch.push(`turn the accent colour to ${hueWord(state.hue)} (${t.accent} in the ${state.mode} theme)`);
+    if (state.font !== def.font) ch.push(`set the typeface to ${FONTS[state.font].name}`);
+    if (state.fs !== def.fs) ch.push(`use ${state.fs}px for body text`);
+    if (state.fsMin !== def.fsMin) ch.push(`let no text go below ${state.fsMin}px`);
+    if (state.contrast !== def.contrast) ch.push(`give faint text a contrast of ${t.ratio.toFixed(1)} to 1 against panels`);
+    if (state.radius !== def.radius) ch.push(state.radius === 0 ? 'make corners square' : `round corners to ${state.radius}px`);
+    if (state.density !== def.density) ch.push(`use ${state.density} spacing`);
+    if (state.edges !== def.edges) ch.push({ soft: 'drop the lines around panels', line: 'put a fine line around panels', bold: 'put a bold line around panels' }[state.edges]);
+    if (state.nav !== def.nav) ch.push(state.nav === 'narrow' ? 'start with the sidebar showing icons only' : 'start with the sidebar showing names');
+    if (state.motion !== def.motion || (state.motion !== 'none' && state.speed !== def.speed)) ch.push(state.motion === 'none' ? 'switch pages instantly, with no animation' : `${state.motion} between pages over ${state.speed} ms`);
+    const list = ch.length > 1 ? `${ch.slice(0, -1).join('; ')}; and ${ch.at(-1)}` : ch[0];
+    let text;
+    if (state.dir === 'today') text = ch.length ? `Keep JARVIS's current look, with these changes: ${list}.` : 'Keep JARVIS as it looks today. I have not asked for any change.';
+    else text = `Restyle the whole JARVIS app in the "${d.name}" direction from the style explorer: ${d.says}. Apply it to the dark and light themes, on every page.${ch.length ? ` My changes to it: ${list}.` : ' Use it as designed.'}`;
+    return `${text}\n\n<code>Explorer settings: ${encode()}</code>`;
+  }
+
+  // ------------------------------------------------------------------ the address keeps the settings
+  const KEYS = ['dir', 'mode', 'page', 'hue', 'font', 'fs', 'fsMin', 'contrast', 'radius', 'density', 'edges', 'nav', 'motion', 'speed'];
+  const encode = () => KEYS.map((k) => `${k}=${state[k] === null ? 'own' : state[k]}`).join('&');
+  function decode(str) {
+    const q = new URLSearchParams(str.replace(/^#/, ''));
+    if (DIRS[q.get('dir')]) { state.dir = q.get('dir'); Object.assign(state, DIRS[state.dir].set); state.mode = DIRS[state.dir].home; }
+    const pick = (k, ok) => { if (q.has(k) && ok(q.get(k))) state[k] = q.get(k); };
+    const num = (k, lo, hi) => { const v = Number(q.get(k)); if (q.has(k) && Number.isFinite(v) && v >= lo && v <= hi) state[k] = v; };
+    pick('mode', (v) => v === 'dark' || v === 'light'); pick('page', (v) => !!PAGES[v]); pick('font', (v) => !!FONTS[v]);
+    pick('density', (v) => v in DENSITY); pick('edges', (v) => v in EDGES); pick('nav', (v) => v === 'wide' || v === 'narrow'); pick('motion', (v) => ['none', 'fade', 'slide'].includes(v));
+    num('fs', 11, 16); num('fsMin', 9, 13); num('contrast', 3, 9); num('radius', 0, 18); num('speed', 100, 450);
+    if (q.has('hue')) { const h = Number(q.get('hue')); state.hue = q.get('hue') !== 'own' && Number.isFinite(h) ? ((Math.round(h) % 360) + 360) % 360 : null; }
+  }
+
+  function update() { sync(apply()); }
+
+  /** Change page - animated when asked for, the browser can do it, and Windows has not asked for less motion. */
+  function go(p) {
+    if (!PAGES[p] || p === state.page) return;
+    const run = () => { state.page = p; renderPage(); update(); };
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (state.motion === 'none' || still || !document.startViewTransition) { run(); return; }
+    document.documentElement.dataset.motion = state.motion;
+    document.documentElement.style.setProperty('--vt-dur', `${state.speed}ms`);
+    document.startViewTransition(run);
+  }
+
+  // ------------------------------------------------------------------ the controls
+  $('dirs').innerHTML = Object.entries(DIRS).map(([k, d]) => {
+    const p = d[d.home];
+    return `<button type="button" class="dir" data-dir="${k}"><span class="sw"><i style="background:${p.bg}"></i><i style="background:${p.surface2}"></i><i style="background:${p.accent}"></i><i style="background:${p.text}"></i></span><b>${d.name}</b><small>${d.blurb}</small></button>`;
+  }).join('');
+  $('font').innerHTML = Object.entries(FONTS).map(([k, f]) => `<option value="${k}">${f.label}</option>`).join('');
+
+  $('dirs').addEventListener('click', (e) => {
+    const b = e.target.closest('.dir');
+    if (!b) return;
+    state.dir = b.dataset.dir;
+    Object.assign(state, DIRS[state.dir].set, { hue: null, mode: DIRS[state.dir].home });
+    update();
+  });
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.seg button');
+    if (b) { const key = b.parentElement.dataset.key; if (key === 'page') go(b.dataset.v); else { state[key] = b.dataset.v; update(); } return; }
+    const n = e.target.closest('.nav-i.go');
+    if (n) go(n.dataset.page);
+  });
+  document.addEventListener('input', (e) => {
+    const r = e.target;
+    if (r.matches('input[data-key]')) { state[r.dataset.key] = Number(r.value); update(); }
+    else if (r.id === 'hue') { state.hue = Number(r.value); update(); }
+    else if (r.id === 'font') { state.font = r.value; update(); }
+  });
+  $('hueOwn').onclick = () => { state.hue = null; update(); };
+  $('reset').onclick = () => { Object.assign(state, DIRS[state.dir].set, { hue: null }); update(); };
+  $('copy').onclick = async () => {
+    const text = $('note').textContent;
+    try { await navigator.clipboard.writeText(text); }
+    catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    const b = $('copy'); b.textContent = 'Copied'; b.classList.add('done');
+    setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1400);
+  };
+
+  // The mock is a real 1280 x 800 window, scaled to whatever room there is.
+  const fit = () => { const v = $('view'); $('fit').style.setProperty('--s', String(Math.max(0.3, Math.min((v.clientWidth - 44) / 1280, (v.clientHeight - 44) / 800, 1.3)))); };
+  new ResizeObserver(fit).observe($('view'));
+
+  decode(location.hash);
+  renderShell();
+  renderPage();
+  fit();
+  update();
+})();
+</script>
+</body>
+</html>
