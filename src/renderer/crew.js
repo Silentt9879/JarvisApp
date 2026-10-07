@@ -60,6 +60,7 @@
     commander: 'Kevin', scout: 'Stuart', friday: 'Bob', diagnostic: 'Dave', verifier: 'Jerry',
     gatekeeper: 'Carl', control: 'Phil', underwriter: 'Tim', roadrunner: 'Mark', edith: 'Jorge',
     'codebase-learner': 'Tom', auditor: 'Mel', sentry: 'Otto',
+    archivist: 'Josh', taskmaster: 'Tony', scribe: 'Eric',
     'general-purpose': 'Norbert', Explore: 'Lance', Plan: 'Ken', claude: 'Mike',
     'statusline-setup': 'Paul', 'claude-code-guide': 'Donnie',
   };

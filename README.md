@@ -17,7 +17,22 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.7.4
+## 🆕 What's new in v1.8.0
+
+**Simplified**
+
+- 🧑‍🏭 **Three new specialists.** Josh (ARCHIVIST) looks after git and GitHub Desktop, Tony (TASKMASTER) looks after ClickUp, and Eric (SCRIBE) looks after your Notes. They sit on the Agent floor like the others, each wearing the icon of the page it works on, in a new "Git, tasks & notes" group.
+- 📝 **JARVIS can use your notes.** Ask in chat to "note this down" or "what did I note about the wheel?" and SCRIBE reads or writes the same notes the Notes page shows.
+
+**Technical**
+
+- `renderer/crew.js`: `MINION_NAMES` gains `archivist: 'Josh'`, `taskmaster: 'Tony'` and `scribe: 'Eric'`. `renderer/dashboard.js`: `AGENT_ICON` maps them to `github`, `clickup` and `edit`, the icons of the GitHub Desktop, Clickup and Notes pages.
+- `renderer/pages.js`: a `ROSTER` group can hold several icons (space-separated). The new group "Git, tasks & notes" sits before Support crew.
+- The agents themselves are workspace files, not app code: `.claude/agents/github-desktop.md`, `clickup.md` and `notes.md`. ARCHIVIST has no Edit or Write tool and never reaches a remote. TASKMASTER writes to ClickUp only when the user asked. SCRIBE writes `notes.json` only through the workspace tool `.claude/tools/notes.py`, which keeps `NoteStore`'s shape and limits, writes through a temp file and a rename, and refuses to write when the file cannot be parsed.
+- `npm test` passes in full. Capture runs (`JARVIS_CAPTURE`, `JARVIS_VIEW=agents`) confirmed the three cards, the group, the bench and three working desks. `NoteStore` read back a file the tool wrote, and the tool read back one `NoteStore` wrote.
+
+<details>
+<summary><b>Earlier: v1.7.4</b></summary>
 
 **Simplified**
 
@@ -26,6 +41,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 **Technical**
 
 - `renderer/index.html`: the `navTasks` button is labelled "Clickup" with icon key `clickup`. `renderer/core.js`: new `ICONS.clickup` (the simple-icons ClickUp mark, CC0), drawn solid in `currentColor` like the GitHub mark.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.7.3</b></summary>
@@ -211,7 +228,7 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 | 📱 **Telegram remote** | Send messages, photos, files and voice notes from your phone, and approve actions with one tap |
 | 🧑‍🏭 **Agents** | Watch the specialists work as minions on the Agent floor, or from the "N agents" pill in the chat box |
 | 🐙 **GitHub Desktop** | Changes, commits, Undo, stashes, branches, push and pull, plus pull requests and checks from GitHub |
-| ✅ **Tasks** | Your ClickUp board, synced and grouped by sprint |
+| ✅ **Clickup** | Your ClickUp board, synced and grouped by sprint |
 | 📂 **Files** | Read any workspace file, and double-click to open it in VS Code |
 | 📝 **Notes** | Write something down, save it, and send it to your Telegram |
 | 📲 **Devices** | Live phone screens with `flutter run` (also in their own window), and web apps with `dotnet watch` |

@@ -10,6 +10,8 @@
     friday: 'phone', roadrunner: 'phone', commander: 'phone', edith: 'phone', sentry: 'globe', control: 'globe',
     gatekeeper: 'server', underwriter: 'server', diagnostic: 'bug', auditor: 'eye', scout: 'compass',
     'codebase-learner': 'book', verifier: 'verify', 'general-purpose': 'core', claude: 'core', Explore: 'search',
+    // The three that work a page of this app wear that page's own icon.
+    archivist: 'github', taskmaster: 'clickup', scribe: 'edit',
     Plan: 'tasks', 'claude-code-guide': 'info', 'statusline-setup': 'settings',
   };
   const AGENT_HUE = ['#39c6ff', '#7c8cff', '#b77dff', '#ffb347', '#3ddc97', '#ff7aa8', '#5eead4', '#f5d76e'];

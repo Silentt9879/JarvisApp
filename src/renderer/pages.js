@@ -161,7 +161,8 @@
   }
   // The roster: compact cards (name, one-line role, status) grouped by what each specialist
   // covers. The full brief is a hover (tooltip) or a click (the drawer) away, not on every card.
-  const ROSTER = [['phone', 'Mobile apps'], ['globe', 'Web apps'], ['server', 'APIs']];
+  // A group is one icon, or several: git, ClickUp and notes each keep their page's icon.
+  const ROSTER = [['phone', 'Mobile apps'], ['globe', 'Web apps'], ['server', 'APIs'], ['github clickup edit', 'Git, tasks & notes']];
   let builtinOpen = false; // the roster redraws while agents work; a fold you opened stays open
   function renderAgents() {
     const box = $('agentAll');
@@ -171,7 +172,7 @@
     if (!custom.length) box.appendChild(el('div', 'muted empty', JV.noSpecialistsText()));
     const groups = new Map([...ROSTER.map(([, label]) => [label, []]), ['Support crew', []]]);
     for (const a of custom) {
-      const g = ROSTER.find(([icon]) => icon === JV.agentInfo(a).icon);
+      const g = ROSTER.find(([icons]) => icons.split(' ').includes(JV.agentInfo(a).icon));
       groups.get(g ? g[1] : 'Support crew').push(a);
     }
     for (const [label, list] of groups) {
