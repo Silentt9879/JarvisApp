@@ -14,17 +14,32 @@ const SYNC_MODEL = 'claude-haiku-4-5-20251001';
 /** Only these may be called during a sync: reading ClickUp, nothing that writes. */
 const READ_ONLY = /^mcp__clickup__clickup_(get|search|filter|find|resolve|list)/;
 
-const PROMPT = `Fetch every ClickUp task assigned to the member "Jayvian". JARVIS reads the tasks
+/**
+ * Whose tasks: the ClickUp member name a person set in Settings (ClickUp). JARVIS never
+ * guesses one, and never falls back to somebody else - without a name, there is no sync.
+ * Letters, digits, spaces and . _ ' - only, so the name reaches the prompt as plain text.
+ */
+export const MEMBER_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,59}$/u;
+export const cleanMember = (s) => {
+  const v = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return MEMBER_NAME.test(v) ? v : null;
+};
+
+export function syncPrompt(member) {
+  const who = JSON.stringify(member);
+  return `Fetch every ClickUp task assigned to the member ${who}. JARVIS reads the tasks
 straight from the tool results, so do not write any task out yourself.
 
 1. clickup_get_workspace_hierarchy.
-2. clickup_find_member_by_name for "Jayvian", to get the member id.
+2. clickup_find_member_by_name for ${who}, to get the member id. If no member matches that
+   name exactly, stop and reply: ERROR: no ClickUp member is called ${who}.
 3. clickup_filter_tasks with assignees: [that id], include_closed: true and page: 0, across
    every space (no space_ids, or every space id from step 1). Call it again with the next
    page until has_more is false.
 
 Then reply with exactly: DONE
 If a step fails, reply with one line: ERROR: <the reason>`;
+}
 /** A healthy sync takes about half a minute. This only bounds a remote that never answers. */
 const SYNC_LIMIT_MS = 5 * 60 * 1000;
 
@@ -83,10 +98,9 @@ function clean(list) {
     if (!t || typeof t !== 'object') continue;
     let title = str(t.title) || str(t.name);
     if (!title) continue;
-    // The house convention puts the code in the name ("BE331 - Fix ..."), so split it out
-    // for its own chip and leave the title readable.
+    // A ticket code at the start of the name ("AB123 - Fix ...", or a "QA-AB123 - ..."
+    // variant) is split out for its own chip, leaving the title readable.
     let code = str(t.code, 30);
-    // BE331, AWAC135, and the QA- variants the QA sprint uses.
     const inName = /^((?:QA-)?[A-Z]{2,6}\d{1,4})\s*[-–:]\s*(.+)$/.exec(title);
     if (inName) { code = code || inName[1]; title = inName[2]; }
     out.push({
@@ -118,7 +132,7 @@ function clean(list) {
  *
  * `complete()` is the guard against a silently shorter board: it is true only once a paging
  * run has gone from page 0 to `has_more: false` without a gap, with closed tasks included,
- * for Jayvian, across every space in the workspace.
+ * for the configured member, across every space in the workspace.
  */
 export function createCollector() {
   const calls = new Map();   // tool_use id -> { name, input }
@@ -230,7 +244,9 @@ const textOf = (content) => (Array.isArray(content)
  * Resolves to { ok, tasks, fetchedAt } or { ok: false, error }. The cache is only replaced
  * by a list proven complete; anything less leaves the board as it was.
  */
-export async function syncClickUp({ cwd, exe, userDir, log }) {
+export async function syncClickUp({ cwd, exe, userDir, log, member, queryFn = query }) {
+  const who = cleanMember(member);
+  if (!who) return { ok: false, needsMember: true, error: 'Tell JARVIS whose tasks to show first: your name as it appears in ClickUp (Settings > ClickUp).' };
   const started = Date.now();
   const col = createCollector();
   let reply = '';
@@ -238,8 +254,8 @@ export async function syncClickUp({ cwd, exe, userDir, log }) {
   let timedOut = false;
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
-  const q = query({
-    prompt: PROMPT,
+  const q = queryFn({
+    prompt: syncPrompt(who),
     options: {
       cwd,
       pathToClaudeCodeExecutable: exe,
@@ -297,8 +313,8 @@ export async function syncClickUp({ cwd, exe, userDir, log }) {
   }
   const tasks = clean(col.tasks());
   if (!tasks.length) log?.(`[clickup sync] complete but no tasks kept: ${col.summary()}`);
-  if (!tasks.length) return { ok: false, error: 'No tasks came back for Jayvian. Check that ClickUp is connected in Tools & Skills.' };
-  const out = { tasks, member: 'Jayvian', fetchedAt: new Date().toISOString(), tookMs: Date.now() - started };
+  if (!tasks.length) return { ok: false, error: `No tasks came back for ${who}. Check the name matches your ClickUp profile, and that ClickUp is connected in Tools & Skills.` };
+  const out = { tasks, member: who, fetchedAt: new Date().toISOString(), tookMs: Date.now() - started };
   writeClickUp(userDir, out);
   log?.(`clickup sync: ${tasks.length} tasks in ${Math.round(out.tookMs / 1000)}s (${col.summary()}${early ? ', stopped once complete' : ''})`);
   return { ok: true, ...out };

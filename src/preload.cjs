@@ -10,6 +10,32 @@ contextBridge.exposeInMainWorld('jarvis', {
   // and JARVIS restarts into it).
   pickWorkspace: () => ipcRenderer.invoke('jarvis:pickWorkspace'),
   setWorkspace: (dir) => ipcRenderer.invoke('jarvis:setWorkspace', dir),
+  // Workspaces: the list, and each change by id. Selecting or removing the active one
+  // restarts JARVIS - nothing is switched in place. Removing never touches the folder.
+  workspaces: () => ipcRenderer.invoke('workspaces:list'),
+  workspaceAdd: (dir, name) => ipcRenderer.invoke('workspaces:add', dir, name),
+  workspaceRename: (id, name) => ipcRenderer.invoke('workspaces:rename', id, name),
+  workspaceSelect: (id, opts) => ipcRenderer.invoke('workspaces:select', id, opts && typeof opts.trust === 'boolean' ? { trust: opts.trust } : {}),
+  // Trust: a trusted folder's .claude hooks, MCP servers and settings load; a restricted one's do not.
+  workspaceTrust: (id, trusted) => ipcRenderer.invoke('workspaces:trust', id, trusted === true),
+  workspaceRemove: (id) => ipcRenderer.invoke('workspaces:remove', id),
+  workspaceBusy: () => ipcRenderer.invoke('workspaces:busy'),
+  // The active workspace's projects, found by looking only (refresh: look again), and the
+  // person's own name or Run warning for one of them.
+  projects: (refresh) => ipcRenderer.invoke('workspaces:projects', !!refresh),
+  projectSettings: (relPath, patch) => ipcRenderer.invoke('workspaces:projectSettings', relPath, patch),
+  // What can be done with a project. The window names a project and an action by id; the
+  // command itself is worked out in the main process from the project's own files.
+  projectActions: (key) => ipcRenderer.invoke('projects:actions', key),
+  projectDetail: (key) => ipcRenderer.invoke('projects:detail', key),
+  // The PC's developer tools: names and versions only. refresh: ask the tools afresh.
+  capabilities: (refresh) => ipcRenderer.invoke('capabilities:list', refresh === true),
+  // Set-up: what is in a workspace just added (by id), looked at before switching to it.
+  workspacePreview: (id) => ipcRenderer.invoke('workspaces:preview', id),
+  projectRun: (key, actionId) => ipcRenderer.invoke('projects:run', key, actionId),
+  projectStop: (taskId) => ipcRenderer.invoke('projects:stop', taskId),
+  projectTasks: () => ipcRenderer.invoke('projects:tasks'),
+  projectTaskLog: (taskId) => ipcRenderer.invoke('projects:taskLog', taskId),
   // Start with Windows (to the tray). Packaged JARVIS.exe only.
   startup: () => ipcRenderer.invoke('jarvis:startup'),
   setStartup: (on) => ipcRenderer.invoke('jarvis:setStartup', !!on),
@@ -33,7 +59,8 @@ contextBridge.exposeInMainWorld('jarvis', {
   welcome: () => ipcRenderer.invoke('app:welcome'),
   welcomeDone: (what) => ipcRenderer.invoke('app:welcomeDone', what),
   zoom: (factor) => ipcRenderer.invoke('ui:zoom', factor),
-  health: () => ipcRenderer.invoke('health:get'),
+  // refresh: ask the developer tools afresh instead of using the last few minutes' answer.
+  health: (refresh) => ipcRenderer.invoke('health:get', !!refresh),
   healthFix: (action) => ipcRenderer.invoke('health:fix', action),
   activity: (opts) => ipcRenderer.invoke('activity:list', opts || {}),
   activityExport: () => ipcRenderer.invoke('activity:export'),
@@ -106,7 +133,9 @@ contextBridge.exposeInMainWorld('jarvis', {
   },
   // Phones: list, live screens (H.264 packets on their own channel), input, flutter run.
   devices: () => ipcRenderer.invoke('jarvis:devices'),
+  // The workspace's Flutter apps (Run) and Dart/Flutter projects (analysis) - both discovered.
   flutterApps: () => ipcRenderer.invoke('jarvis:flutterApps'),
+  dartProjects: () => ipcRenderer.invoke('jarvis:dartProjects'),
   // Dart analysis of one app: the problems list on the Devices page. Reading only.
   analyze: (app) => ipcRenderer.invoke('jarvis:analyze', app),
   analyzeCancel: (app) => ipcRenderer.invoke('jarvis:analyzeCancel', app),
@@ -203,6 +232,8 @@ contextBridge.exposeInMainWorld('jarvis', {
   // Tasks: the ClickUp board (cached) and the workspace's own draft list.
   clickup: () => ipcRenderer.invoke('jarvis:clickup'),
   clickupSync: () => ipcRenderer.invoke('jarvis:clickupSync'),
+  // Whose tasks: the person's own name as ClickUp knows it ('' clears it). Never guessed.
+  clickupMember: (name) => ipcRenderer.invoke('jarvis:clickupMember', name),
   draftTasks: () => ipcRenderer.invoke('jarvis:draftTasks'),
   onVideo: (cb) => {
     const handler = (_e, p) => cb(p);

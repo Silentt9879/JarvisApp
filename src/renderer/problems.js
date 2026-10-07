@@ -208,6 +208,7 @@
     busy.delete(key);
     results.set(key, r);
     render();
+    JV.emit('analysis_done', { key, result: r });
     if (!quiet && r?.ok) {
       const name = r.name || key;
       if (r.counts.error) JV.notify(`${name} did not build: ${plural(r.counts.error, 'error')}${r.conflicts?.length ? ' - an unresolved merge conflict is behind them' : ''}. They are listed on the Devices page.`, { level: 'err', action: 'devices', desktop: true, key: `pb-${key}` });
@@ -216,6 +217,9 @@
     return r;
   }
   JV.analyseApp = analyse;
+  // The Projects view shows the last analysis of a project, and whether one is running.
+  JV.analysisFor = (key) => ({ result: results.get(key) || null, busy: busy.has(key) });
+  JV.showAnalysis = (key) => { if (key) { app = key; try { localStorage.setItem(PICK, key); } catch { /* storage off */ } } render(); };
 
   /** The problems, as a message for the chat - put in the box, not sent. */
   function askToFix() {
@@ -251,23 +255,32 @@
       if (state.view === 'devices') $('devProblems').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   });
-  JV.on('view', (v) => { if (v === 'devices') render(); });
-
-  window.jarvis.flutterApps().then((a) => { apps = a || []; render(); }).catch(() => {});
+  // The workspace's Dart and Flutter projects, discovered - apps and packages alike. Looked
+  // up again whenever the Devices page opens or the workspace is scanned again.
+  async function loadApps() {
+    try { apps = (await window.jarvis.dartProjects()) || []; } catch { apps = []; }
+    $('devProblems').hidden = !apps.length;
+    render();
+  }
+  JV.on('view', (v) => { if (v === 'devices') loadApps(); });
+  JV.on('projects_changed', () => loadApps());
+  loadApps();
 
   // ------------------------------------------------------------- capture demo (JARVIS_DEMO=problems)
   // A made-up result, for a screenshot without waiting on a real analysis.
   const earlier = window.__jarvisDemo;
   window.__jarvisDemo = (what) => {
     if (what !== 'problems') { earlier?.(what); return; }
-    const key = (apps.find((a) => a.key === 'panel') || apps[0] || { key: 'panel' }).key;
-    const f = 'lib/Views/inprogress_cases.dart';
-    const errs = [[3487, 'Expected an identifier.'], [3487, "Expected to find ','."], [3487, "The name 'Updated' isn't a type, so it can't be used as a type argument."], [3487, "The name 'upstream' isn't a type, so it can't be used as a type argument."], [3489, "The '===' operator is not supported."], [3490, "Undefined name 'onTap'."]]
+    const demo = apps[0] || { key: 'shop_app', name: 'Shop App', dir: 'shop_app', found: true };
+    if (!apps.length) { apps = [demo]; $('devProblems').hidden = false; }
+    const key = demo.key;
+    const f = 'lib/screens/orders_screen.dart';
+    const errs = [[212, 'Expected an identifier.'], [212, "Expected to find ','."], [212, "The name 'Updated' isn't a type, so it can't be used as a type argument."], [212, "The name 'upstream' isn't a type, so it can't be used as a type argument."], [214, "The '===' operator is not supported."], [215, "Undefined name 'onTap'."]]
       .map(([line, message]) => ({ severity: 'error', code: 'syntax', file: f, line, col: 1, message }));
-    const warns = [['lib/Models/AppVersion.dart', 1, "Unused import: 'dart:io'."], ['lib/Models/user_model.dart', 77, "The left operand can't be null, so the right operand is never executed."], ['lib/Models/user_model.dart', 82, "The left operand can't be null, so the right operand is never executed."]]
+    const warns = [['lib/models/app_version.dart', 1, "Unused import: 'dart:io'."], ['lib/models/user.dart', 77, "The left operand can't be null, so the right operand is never executed."], ['lib/models/user.dart', 82, "The left operand can't be null, so the right operand is never executed."]]
       .map(([file, line, message]) => ({ severity: 'warning', code: 'lint', file, line, col: 1, message }));
     app = key;
-    results.set(key, { ok: true, app: key, name: 'Panel App', dir: 'BantuAutoPanel_v2', at: Date.now() - 40000, ms: 38000, counts: { error: 18, warning: 88, hint: 487 }, conflicts: [{ file: f, line: 3487, lines: [3487, 3489, 3491] }], total: 593, truncated: false, problems: [...errs, ...warns] });
+    results.set(key, { ok: true, app: key, name: demo.name, dir: demo.dir, at: Date.now() - 40000, ms: 38000, counts: { error: 18, warning: 88, hint: 487 }, conflicts: [{ file: f, line: 212, lines: [212, 214, 216] }], total: 593, truncated: false, problems: [...errs, ...warns] });
     render();
     $('devProblems').scrollIntoView({ block: 'start' });
   };

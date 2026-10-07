@@ -5,7 +5,10 @@
   const { $, node } = JV;
   const api = window.jarvis;
 
-  const LABEL = { ok: 'In order', warn: 'To set up', bad: 'Needs fixing' };
+  // "off" is optional and unused: not installed or not set up, and nothing here needs it.
+  const LABEL = { ok: 'In order', warn: 'To look at', bad: 'Needs fixing', off: 'Optional' };
+  const MARK = { ok: 'check', warn: 'alert', bad: 'alert', off: 'info' };
+  const GROUP = { core: 'JARVIS', integrations: 'Integrations', tools: 'Developer tools on this PC' };
 
   function row(check, onFix) {
     const chip = node('span', { class: `hc-chip ${check.state}` }, LABEL[check.state] || '');
@@ -13,7 +16,7 @@
       ? node('button', { class: check.state === 'bad' ? 'btn btn-primary small' : 'btn small', onclick: () => onFix(check) }, check.fix.label)
       : null;
     return node('li', { class: `hc-row ${check.state}`, 'data-check': check.id },
-      node('span', { class: 'hc-mark', 'aria-hidden': 'true' }, JV.icon(check.state === 'ok' ? 'check' : 'alert')),
+      node('span', { class: 'hc-mark', 'aria-hidden': 'true' }, JV.icon(MARK[check.state] || 'info')),
       node('div', { class: 'hc-main' },
         node('b', null, check.title),
         node('small', null, check.detail)),
@@ -32,38 +35,46 @@
     }
     if (action === 'workspace') {
       dlg.close();
-      JV.openSettings?.('general');
-      $('wsChange')?.click();
+      JV.addWorkspace?.();
       return;
     }
-    if (action === 'policyFolder') {
-      const r = await api.healthFix('policyFolder').catch(() => null);
+    if (action === 'policyFolder' || action === 'configFile') {
+      const r = await api.healthFix(action).catch(() => null);
       if (!r?.ok) JV.notify(r?.error || 'Could not open the folder.', { level: 'err' });
       return;
     }
     if (action === 'telegram') { dlg.close(); JV.openSettings?.('phone'); return; }
     if (action === 'github') { dlg.close(); JV.openSettings?.('general', 'updSec'); return; }
     if (action === 'updates') { dlg.close(); JV.openSettings?.('general', 'updSec'); setTimeout(() => $('updCheckAll')?.click(), 300); return; }
+    if (action === 'clickup') { dlg.close(); JV.show('tasks'); return; }
+    if (action === 'trust') { dlg.close(); JV.trustActiveWorkspace?.(); }
   }
 
   async function open() {
     const list = node('ul', { class: 'hc-list' });
     const summary = node('p', { class: 'dlg-text hc-summary' }, 'Checking…');
     let dlg = null;
-    const refresh = async () => {
+    // "Check again" asks the tools afresh (an installed SDK shows up); opening uses what is known.
+    const refresh = async (again = false) => {
       list.replaceChildren(node('li', { class: 'hc-row' }, node('small', null, 'Checking…')));
-      const h = await api.health().catch(() => null);
+      const h = await api.health(again).catch(() => null);
       if (!h) { summary.textContent = 'Could not check just now. Try again in a moment.'; list.replaceChildren(); return; }
       summary.textContent = h.summary;
       summary.dataset.level = h.level;
-      list.replaceChildren(...h.checks.map((c) => row(c, (check) => fix(check, dlg, refresh))));
+      const rows = [];
+      let group = null;
+      for (const c of h.checks) {
+        if (c.group && c.group !== group) { group = c.group; rows.push(node('li', { class: 'hc-group', role: 'presentation' }, GROUP[group] || group)); }
+        rows.push(row(c, (check) => fix(check, dlg, () => refresh(true))));
+      }
+      list.replaceChildren(...rows);
     };
     const dialog = JV.dialog({
       title: 'Health',
       wide: true,
       body: [summary, list],
       buttons: [
-        { label: 'Check again', role: 'again', onClick: () => { refresh(); return false; } },
+        { label: 'Check again', role: 'again', onClick: () => { refresh(true); return false; } },
         { label: 'Close', value: true, primary: true },
       ],
       onOpen: (d) => { dlg = d; refresh(); },

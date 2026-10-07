@@ -2,8 +2,9 @@
 // Claude Agent SDK. It turns SDK messages into small UI events (emit) and turns
 // permission requests into prompts the window answers (respond).
 //
-// The SDK runs Claude Code itself, in the BantuApps folder, with the same
-// CLAUDE.md, agents, skills, hooks and MCP servers as the terminal and VS Code.
+// The SDK runs Claude Code itself, in the active workspace folder. A workspace the person
+// trusts gets the same CLAUDE.md, agents, skills, hooks and MCP servers as the terminal and
+// VS Code; one they have not trusted gets their own user settings only (`trusted` below).
 import { query, listSessions, getSessionMessages, deleteSession, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -121,8 +122,11 @@ export class JarvisSession {
   /**
    * @param {{cwd:string, exe:string, emit:(e:object)=>void, log:(...a:any[])=>void}} deps
    */
-  constructor({ cwd, exe, emit, log }) {
+  constructor({ cwd, exe, emit, log, trusted = false }) {
     this.cwd = cwd;
+    // A workspace the person has not trusted runs with their own user settings only: its
+    // .claude hooks, MCP servers, agents and permission rules are not loaded (workspaces.mjs).
+    this.trusted = trusted === true;
     this.exe = exe;
     this.emit = emit;
     this.log = log;
@@ -154,7 +158,7 @@ export class JarvisSession {
 
     // Start where the user's own Claude Code settings say (permissions.defaultMode), as the
     // terminal does - it used to be hard-coded to ask mode. Never bypassPermissions.
-    const start = startingMode(this.cwd);
+    const start = startingMode(this.trusted ? this.cwd : null);
     if (start.asked && start.asked !== start.mode) {
       this.log('[permission]', `settings ask for "${start.asked}", which the window does not allow - starting in "${start.mode}"`);
     }
@@ -162,9 +166,11 @@ export class JarvisSession {
     const options = {
       cwd: this.cwd,
       pathToClaudeCodeExecutable: this.exe,
-      // Same configuration as the terminal: user + project + local settings,
-      // which also brings in CLAUDE.md, .claude/agents, skills, hooks and MCP.
-      settingSources: ['user', 'project', 'local'],
+      // Same configuration as the terminal: user + project + local settings, which also
+      // brings in CLAUDE.md, .claude/agents, skills, hooks and MCP - for a TRUSTED workspace.
+      // A restricted one gets the person's own user settings only, as Claude Code itself
+      // does for a folder whose trust was not accepted.
+      settingSources: this.trusted ? ['user', 'project', 'local'] : ['user'],
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       includePartialMessages: true,
       permissionMode: start.mode,

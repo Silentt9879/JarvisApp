@@ -11,6 +11,8 @@ import { buildHealth } from './health.mjs';
 import { CompanionServer, newAccessCode, lanAddresses } from './companion.mjs';
 import { TEMPLATES, createProject } from './projects.mjs';
 import { runCommand, saveToken, loadToken } from './updates.mjs';
+import { getCapabilities } from './capabilities.mjs';
+import { policySource } from './git-policy.mjs';
 import { LimitsStore, windowsFromEvent, overageFromEvent, refreshUsage } from './limits.mjs';
 
 const TRANSCRIPT_KEEP = 40;
@@ -27,7 +29,8 @@ const clip = (s, n) => {
  * @param d  injected pieces: app, ipcMain, shell, dialog, Notification, safeStorage, userDir, srcDir,
  *           configPath, firstRun, log, loadConfig, saveConfig, query, claudeExe, remote, voice,
  *           getWin, isCapture, showWindow, showView, respondAny, interruptAll, submitMessage,
- *           startSignIn, authState, githubOn, telegramOn, updateInfo
+ *           startSignIn, authState, githubOn, telegramOn, updateInfo,
+ *           and, optional: telegramWanted, clickupState, projects ({ refresh }) => discovery
  */
 export function createFeatures(d) {
   const { app, ipcMain, shell, dialog, Notification, safeStorage, userDir, srcDir, log, loadConfig, saveConfig } = d;
@@ -149,10 +152,12 @@ export function createFeatures(d) {
 
   async function runRoutineNow(r) {
     if (busyRoutine) return { ok: false, error: 'Another routine is running. Wait for it to finish, then try again.' };
+    // A routine runs IN a folder: its own, or the active workspace. Never a guessed one.
+    if (!r.cwd && !loadConfig().cwd) return { ok: false, error: 'Choose a workspace first - a routine without its own folder runs in the active workspace.' };
     busyRoutine = r.id;
     activity.add('routine', `Started "${r.name}"`);
     try {
-      const out = await runRoutine(r, { query: d.query, exe: d.claudeExe(), defaultCwd: loadConfig().cwd });
+      const out = await runRoutine(r, { query: d.query, exe: d.claudeExe(), defaultCwd: loadConfig().cwd, trusted: !!d.folderTrusted?.(r.cwd || loadConfig().cwd) });
       const summary = out.ok ? (out.text || 'Finished.') : `Did not finish: ${out.error || 'unknown reason'}`;
       routines.markRun(r.id, { ok: out.ok, summary });
       usage.recordRun(out.costUsd);
@@ -241,22 +246,42 @@ export function createFeatures(d) {
 
   // -------------------------------------------------------------- health
 
-  async function healthFacts() {
+  /**
+   * What Health judges from. `refresh` asks the developer tools afresh (a just-installed SDK
+   * shows up) and scans the workspace again; otherwise the last few minutes' answers are used.
+   */
+  async function healthFacts({ refresh = false } = {}) {
     const cfg = loadConfig();
     const cwd = cfg.cwd || '';
-    const auth = await Promise.resolve(d.authState()).catch(() => ({ ok: false }));
+    const [auth, capabilities, scanned, githubOn] = await Promise.all([
+      Promise.resolve(d.authState()).catch(() => ({ ok: false })),
+      getCapabilities({ force: !!refresh }).catch(() => []),
+      // The workspace's projects decide which tools matter (project-providers.mjs).
+      cwd && d.projects ? Promise.resolve(d.projects({ refresh })).catch(() => null) : null,
+      Promise.resolve(d.githubOn()).catch(() => false),
+    ]);
+    const trusted = d.workspaceTrusted ? !!d.workspaceTrusted() : null;
     return {
+      configProblem: d.configProblem?.() || null,
       claudeFound: fs.existsSync(d.claudeExe()),
       signedIn: auth.ok ? !!auth.loggedIn : null,
       account: auth.email || null,
+      workspaceConfigured: !!cwd,
       workspace: cwd,
       workspaceFound: !!cwd && fs.existsSync(cwd),
+      workspaceTrusted: trusted,
       policyFound: !!cwd && fs.existsSync(path.join(cwd, '.claude', 'jarvis', 'git-risk-policy.json')),
+      // A restricted workspace runs no Git, so its own rules are not in use either.
+      policySource: !cwd ? null : trusted === false ? 'restricted' : policySource(cwd),
       telegramOn: !!d.telegramOn(),
-      githubOn: await Promise.resolve(d.githubOn()).catch(() => false),
+      telegramWanted: !!d.telegramWanted?.(),
+      githubOn,
+      clickup: d.clickupState?.() || null,
       updateAvailable: d.updateInfo()?.available || null,
       version: app.getVersion(),
       voiceReady: !!d.voice?.ready,
+      capabilities,
+      projects: scanned?.projects || [],
     };
   }
 
@@ -280,6 +305,8 @@ export function createFeatures(d) {
     return {
       version,
       setupNeeded: !cfg.setupDone && !!d.firstRun,
+      // No folder to work in: the window asks for one, set-up done or not.
+      workspaceNeeded: !cfg.cwd,
       whatsNew: pending ? { version, notes: String(pending.notes || '') } : changed ? { version, notes: '' } : null,
     };
   }
@@ -300,7 +327,7 @@ export function createFeatures(d) {
       return { ok: true, factor: f };
     });
 
-    ipcMain.handle('health:get', async () => buildHealth(await healthFacts()));
+    ipcMain.handle('health:get', async (_e, refresh) => buildHealth(await healthFacts({ refresh: refresh === true })));
     ipcMain.handle('health:fix', async (_e, action) => {
       if (action === 'signin') return { ok: true, started: await Promise.resolve(d.startSignIn()) };
       if (action === 'policyFolder') {
@@ -309,6 +336,12 @@ export function createFeatures(d) {
         const target = fs.existsSync(dir) ? dir : cwd;
         if (!target || !fs.existsSync(target)) return { ok: false, error: 'The workspace folder is not there.' };
         await shell.openPath(target);
+        return { ok: true };
+      }
+      // A settings file that cannot be read: Explorer, with config.json selected.
+      if (action === 'configFile') {
+        if (!d.configPath || !fs.existsSync(d.configPath)) return { ok: false, error: 'The settings file is not there.' };
+        shell.showItemInFolder(d.configPath);
         return { ok: true };
       }
       return { ok: true, handled: 'window' };
@@ -393,8 +426,12 @@ export function createFeatures(d) {
       run: runCommand,
       hasTool: async (t) => (await runCommand(process.platform === 'win32' ? 'where' : 'which', [t], { timeoutMs: 15000 })).ok,
     }));
+    // A FOLDER, in Explorer. Never a file: opening a path "with its default app" would run a
+    // program, and the path comes from the window.
     ipcMain.handle('project:open', async (_e, p) => {
-      if (!p || !fs.existsSync(p)) return { ok: false, error: 'That folder is not there.' };
+      let st = null;
+      try { st = typeof p === 'string' && path.isAbsolute(p) ? fs.statSync(p) : null; } catch { /* reported below */ }
+      if (!st || !st.isDirectory()) return { ok: false, error: 'That folder is not there.' };
       await shell.openPath(p);
       return { ok: true };
     });

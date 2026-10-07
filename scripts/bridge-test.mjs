@@ -1,7 +1,7 @@
 // End-to-end test of JarvisSession without the window: one message that needs a
 // harmless shell command; every permission request is answered "allow once".
 import { JarvisSession } from '../src/session.mjs';
-import { requireWorkspace } from './workspace.mjs';
+import { requireWorkspace, workspaceTrusted } from './workspace.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,7 +21,8 @@ const emit = (e) => {
   if (e.kind === 'permission') setTimeout(() => s.respond(e.id, { type: 'allow' }), 50);
   if (e.kind === 'result') { done = true; setTimeout(() => { s.close(); process.exit(0); }, 300); }
 };
-s = new JarvisSession({ cwd: requireWorkspace(), exe, emit, log: (...a) => console.log(ts(), 'LOG', ...a.map(String).map((x) => x.slice(0, 200))) });
+// The workspace's own settings only when JARVIS trusts it, as in the app.
+s = new JarvisSession({ cwd: requireWorkspace(), trusted: workspaceTrusted(), exe, emit, log: (...a) => console.log(ts(), 'LOG', ...a.map(String).map((x) => x.slice(0, 200))) });
 s.start({});
 setTimeout(() => s.send('Bridge test from the JARVIS desktop app: run the shell command `echo jarvis-bridge-ok` and reply in one short sentence with its output.'), 500);
 setTimeout(() => { if (!done) { console.log(ts(), 'TIMEOUT'); s.close(); process.exit(1); } }, 150000);

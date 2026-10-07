@@ -1198,7 +1198,8 @@
     act.appendChild(mk('Mark resolved (use the working copy)', 'resolved', 'btn-primary'));
     const open = el('button', 'btn small btn-ghost');
     open.type = 'button'; open.textContent = 'Edit in VS Code';
-    open.onclick = () => window.jarvis.openInCode(`${repos.find((r) => r.key === active)?.name || ''}/${d.path}`);
+    // The repository's key is its path in the workspace ("." for the workspace itself).
+    open.onclick = () => window.jarvis.openInCode(active === '.' ? d.path : `${active}/${d.path}`);
     act.appendChild(open);
     box.appendChild(act);
 
@@ -1688,7 +1689,8 @@
   async function refresh() {
     let r;
     try { r = await window.jarvis.gitRepos(); } catch { r = { ok: false, error: 'Git could not be reached.', list: [] }; }
-    $('scNote').textContent = r.ok ? '' : `git is not reachable: ${r.error}`;
+    // Restricted: the reason as it is, with the way out - not "git is not reachable".
+    $('scNote').textContent = r.ok ? '' : r.restricted ? r.error : `git is not reachable: ${r.error}`;
     repos = r.list || [];
 
     if (active && !repos.some((x) => x.key === active)) active = null;
@@ -1717,6 +1719,8 @@
     key: () => active,
     tab: () => tab,
     setTab: (which) => setTab(which),
+    // The Projects view's "Source Control" button: this repository, when the page next loads.
+    open: (key) => { active = key; try { localStorage.setItem(SELECTED, key); } catch { /* storage off */ } },
     renderDiffInto: (box, d, filePath, ctx) => renderDiffInto(box, d, filePath, ctx),
     decorateDiffHead: null,
     decorateCommit: null,

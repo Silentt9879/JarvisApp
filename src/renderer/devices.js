@@ -6,8 +6,37 @@
   const { $, el, state } = JV;
 
   const cards = new Map(); // serial -> card
+  // The workspace's Flutter apps, discovered (never a fixed list): looked up again each time
+  // the page opens or the workspace is scanned, so a new project shows up without a restart.
   let apps = [];
-  const appsReady = window.jarvis.flutterApps().then((a) => { apps = a; }).catch(() => {});
+  async function loadApps() {
+    try { apps = (await window.jarvis.flutterApps()) || []; } catch { apps = []; }
+    for (const c of cards.values()) fillAppSelect(c.app, c.run && c.run.state !== 'exited' ? c.run.app : null);
+    fillAppSelect($('devAllApp'));
+    $('devRunAll').disabled = !apps.length;
+  }
+  /** One <select> of apps; the one running stays selected even if it is no longer listed. */
+  function fillAppSelect(sel, keep = null) {
+    if (!sel) return;
+    const was = keep || sel.value;
+    sel.replaceChildren();
+    if (!apps.length) {
+      const o = el('option', null, 'No Flutter app in this workspace');
+      o.value = '';
+      o.disabled = true;
+      sel.appendChild(o);
+      sel.title = 'A Flutter app here is a folder with a pubspec.yaml that depends on Flutter, and a lib/main.dart.';
+      return;
+    }
+    for (const a of apps) {
+      const o = el('option', null, a.name === a.dir ? a.name : `${a.name}  ·  ${a.dir}`);
+      o.value = a.key;
+      sel.appendChild(o);
+    }
+    sel.title = '';
+    if (was && apps.some((a) => a.key === was)) sel.value = was;
+  }
+  const appsReady = loadApps();
   let pollTimer = null;
   const LABELS = 'jarvis.deviceLabels';
   const LAYOUT = 'jarvis.deviceLayout';
@@ -126,12 +155,8 @@
 
     const run = el('div', 'dev-run');
     c.app = el('select', 'field dev-app');
-    for (const a of apps) {
-      const o = el('option', null, a.found ? a.name : `${a.name} (not found)`);
-      o.value = a.key;
-      o.disabled = !a.found;
-      c.app.appendChild(o);
-    }
+    c.app.setAttribute('aria-label', 'App to run on this phone');
+    fillAppSelect(c.app);
     c.runBtn = el('button', 'btn btn-primary', 'Run');
     c.runBtn.onclick = () => (c.run && c.run.state !== 'exited' ? flutterCmd(c, 'stop') : flutterRun(c));
     const cmds = el('div', 'icon-row');
@@ -368,7 +393,7 @@
     const active = r && r.state !== 'exited';
     c.runBtn.textContent = active ? 'Stop' : 'Run';
     c.runBtn.className = `btn ${active ? 'btn-danger' : 'btn-primary'}`;
-    c.runBtn.disabled = c.state !== 'device';
+    c.runBtn.disabled = c.state !== 'device' || (!active && !c.app.value);
     c.app.disabled = !!active;
     const ready = active && r.state === 'running';
     c.reloadBtn.disabled = !ready;
@@ -379,7 +404,13 @@
     c.runState.className = `dev-run-state pill ${tone}`;
     if (r && active) c.app.value = r.app;
   }
-  async function flutterRun(c) {
+  /** The person's own warning for an app (Projects > the project > Settings), asked before it runs. */
+  async function okToRun(key) {
+    const a = apps.find((x) => x.key === key);
+    return !a?.warn || JV.confirm(`${a.warn}\n\nRun ${a.name} anyway?`, { title: 'Before it runs', yes: `Run ${a.name}` });
+  }
+  async function flutterRun(c, { asked = false } = {}) {
+    if (!asked && !(await okToRun(c.app.value))) return;
     c.log.replaceChildren();
     c.logCount = 0;
     const r = await window.jarvis.flutterRun(c.serial, c.app.value);
@@ -624,10 +655,11 @@
 
   async function runOnAll() {
     const app = $('devAllApp').value;
+    if (!app || !(await okToRun(app))) return;
     for (const c of cards.values()) {
       if (c.state !== 'device' || (c.run && c.run.state !== 'exited')) continue;
       c.app.value = app;
-      await flutterRun(c);
+      await flutterRun(c, { asked: true });
     }
   }
 
@@ -637,7 +669,7 @@
     if (v === 'devices') {
       for (const c of cards.values()) { c.retried = false; c.failedAt = 0; }
       applyLayout();
-      refresh();
+      loadApps().then(refresh);
       pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 3000);
     } else {
       // Screens only stream while they are on screen; flutter runs carry on. A phone in its
@@ -650,10 +682,10 @@
     }
   });
 
+  JV.on('projects_changed', () => loadApps());
+
   (async () => {
     await appsReady;
-    const sel = $('devAllApp');
-    for (const a of apps.filter((x) => x.found)) { const o = el('option', null, a.name); o.value = a.key; sel.appendChild(o); }
     $('devRunAll').onclick = runOnAll;
     $('devRefresh').onclick = (e) => JV.spinWhile(e.currentTarget, () => refresh());
 

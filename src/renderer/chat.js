@@ -459,7 +459,8 @@
     w.appendChild(el('p', null, 'Standing by.'));
     transcript.appendChild(w);
     JV.emit('session_reset', { resumed: false });
-    await window.jarvis.start({});
+    const r = await window.jarvis.start({});
+    if (r?.needsWorkspace) JV.showNoWorkspace?.();
     loadSessions();
     input.focus();
   }

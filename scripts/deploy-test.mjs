@@ -10,7 +10,7 @@ const ok = (cond, name) => { if (cond) pass++; else { fail++; console.log(`FAIL 
 // ------------------------------------------------------------------ what counts as a deploy
 for (const c of [
   'firebase deploy --only hosting', 'npm run deploy', 'dotnet publish -c Release -o out', 'flutter build appbundle --release',
-  'flutter build apk', 'eas submit -p android', 'vercel --prod', 'az webapp deploy --src-path app.zip', 'docker push bantu/api:1.4',
+  'flutter build apk', 'eas submit -p android', 'vercel --prod', 'az webapp deploy --src-path app.zip', 'docker push acme/api:1.4',
   'git push heroku main', 'gcloud run deploy api --source .',
 ]) ok(DEPLOY.test(c), `a deploy: ${c}`);
 for (const c of ['dotnet build', 'flutter run', 'git push origin main', 'npm test', 'flutter build --help-not-a-target', 'vercel dev']) {

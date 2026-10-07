@@ -4,37 +4,36 @@
 // the site itself shown in a <webview> beside the phones. The URL is read from the app's
 // own "Now listening on:" line, never assumed.
 //
-// These run against the real back end: the Admin Web on localhost talks to PRODUCTION.
-// Nothing starts on its own - every run is a click.
+// A project may run against real data - a production database, live push notifications.
+// JARVIS cannot know that, so it never guesses: a person can give any project a warning in
+// its settings, and the card shows it before anything is started. Nothing starts on its
+// own - every run is a click.
+//
+// The projects themselves are DISCOVERED (project-providers.mjs, webAppsFrom): each arrives
+// here as a descriptor { key, name, kind, dir, absDir, project, warn }. Nothing in this file
+// knows a project by name.
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 
-/**
- * key -> project. `warn` is shown on the card before anything is started: what running it
- * on this machine actually touches.
- */
-export const WEB_APPS = {
-  adminweb: { name: 'Admin Web', dir: 'Bantu2U_Center-Module', project: 'Call Center Module.csproj', kind: 'web', warn: 'Production data' },
-  panelweb: { name: 'Panel Web', dir: 'BantuAutoPanelWeb_v2', project: 'FYPWorkshop.csproj', kind: 'web', warn: 'Production data' },
-  gateway: { name: 'API Gateway', dir: path.join('Bantu2u_APIGateway', 'APIGateway'), project: 'APIGateway.csproj', kind: 'api' },
-  // Its reminder services (vehicle expiry, maintenance, Bantu Kaki) start with it and read
-  // the shared database, so a local copy sends real pushes alongside the deployed one.
-  insurapi: { name: 'Insurance API', dir: path.join('myInsurAPI', 'myInsurAPI'), project: 'myInsurAPI.csproj', kind: 'api', warn: 'Live database · sends real reminder pushes' },
-};
-
 const MAX_LOG = 1500;
 const runs = new Map(); // key -> run
-const isKey = (k) => Object.prototype.hasOwnProperty.call(WEB_APPS, k);
+
+/** A descriptor this file will act on: an absolute folder and a .csproj inside it. */
+function checked(a) {
+  if (!a || typeof a.key !== 'string' || !a.key || typeof a.absDir !== 'string' || !path.isAbsolute(a.absDir)) return null;
+  if (typeof a.project !== 'string' || !/\.csproj$/i.test(a.project) || path.dirname(path.resolve(a.project)).toLowerCase() !== path.resolve(a.absDir).toLowerCase()) return null;
+  return a;
+}
 
 /**
  * The address the `http` launch profile will listen on, read from the project's own
  * launchSettings.json - so the card can show it, and check the port, before anything starts.
  */
-export function plannedUrl(workspace, a) {
+export function plannedUrl(absDir) {
   try {
-    const file = path.join(workspace, a.dir, 'Properties', 'launchSettings.json');
+    const file = path.join(absDir, 'Properties', 'launchSettings.json');
     const json = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
     const urls = String(json?.profiles?.http?.applicationUrl || '').split(';').map((u) => u.trim());
     const url = urls.find((u) => u.startsWith('http://')) || urls[0];
@@ -75,22 +74,22 @@ function portOwner(port) {
 }
 
 /** Every project, with its address and whether something outside JARVIS is serving it. */
-export async function listWebApps(workspace) {
-  return Promise.all(Object.entries(WEB_APPS).map(async ([key, a]) => {
-    const r = runs.get(key);
-    const planned = plannedUrl(workspace, a);
+export async function listWebApps(apps = []) {
+  return Promise.all(apps.map(checked).filter(Boolean).map(async (a) => {
+    const r = runs.get(a.key);
+    const planned = plannedUrl(a.absDir);
     // Only asked when JARVIS is not running it itself: then a listener on the port means
     // it was started somewhere else - a terminal, Visual Studio - and Run would collide.
     const external = !r && planned?.port && await portBusy(planned.port)
       ? { url: planned.url, port: planned.port, owner: await portOwner(planned.port) }
       : null;
     return {
-      key,
+      key: a.key,
       name: a.name,
-      kind: a.kind,
+      kind: a.kind === 'web' ? 'web' : 'api',
       warn: a.warn || null,
       dir: a.dir,
-      found: fs.existsSync(path.join(workspace, a.dir, a.project)),
+      found: fs.existsSync(a.project),
       planned,
       external,
       run: r ? state(r) : null,
@@ -113,24 +112,28 @@ const PROBLEMS = [
   [/Unhandled exception\.?\s*(.*)/i, (m) => `It crashed while starting${m[1] ? `: ${m[1].trim().slice(0, 180)}` : '.'} See the log.`],
 ];
 
-/** The .NET CLI. On Windows `dotnet` is an exe, so no shell is needed. */
-const DOTNET = process.platform === 'win32' ? 'dotnet.exe' : 'dotnet';
-
 /**
- * Start one project. `watch` true = `dotnet watch` (hot reload), false = plain `dotnet run`.
- * `emit(e)` gets web_state and web_log events.
+ * Start one project (a descriptor from webAppsFrom). `watch` true = `dotnet watch` (hot
+ * reload), false = plain `dotnet run`. The project file goes to dotnet as one argument of an
+ * argument list - no shell ever sees it. `emit(e)` gets web_state and web_log events.
+ *
+ * `dotnet` is the CLI's full path, as the Capability Registry found it for JARVIS. It is
+ * never looked up by name with the project as the working directory: Windows checks the
+ * working directory before PATH, so a repository's own dotnet.exe would be run instead.
  */
-export async function webRun(workspace, key, { watch = true } = {}, emit) {
-  if (!isKey(key)) throw new Error('Unknown project.');
-  const a = WEB_APPS[key];
+export async function webRun(app, { watch = true, dotnet = null } = {}, emit) {
+  const a = checked(app);
+  if (!a) throw new Error('Unknown project.');
+  if (typeof dotnet !== 'string' || !path.isAbsolute(dotnet)) throw new Error('dotnet was not found. Install the .NET SDK, then press Check again in Health.');
+  const key = a.key;
   if (runs.has(key)) throw new Error(`${a.name} is already running - stop it first.`);
-  const cwd = path.join(workspace, a.dir);
-  const proj = path.join(cwd, a.project);
-  if (!fs.existsSync(proj)) throw new Error(`${a.name} (${a.project}) was not found in the workspace.`);
+  const cwd = a.absDir;
+  const proj = path.resolve(a.project);
+  if (!fs.existsSync(proj)) throw new Error(`${a.name} (${path.basename(proj)}) was not found in the workspace.`);
 
   // Before anything is built: a second copy on the same port cannot start, and its build
   // would fight the running one over the same files. Say so, with who holds the port.
-  const planned = plannedUrl(workspace, a);
+  const planned = plannedUrl(cwd);
   if (planned?.port && await portBusy(planned.port)) {
     const owner = await portOwner(planned.port);
     const who = owner ? `${owner.name} (PID ${owner.pid})` : 'another program';
@@ -149,8 +152,9 @@ export async function webRun(workspace, key, { watch = true } = {}, emit) {
     DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER: '1', // JARVIS opens the page itself, once
     DOTNET_WATCH_SUPPRESS_EMOJIS: '1',
     DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+    NoDefaultCurrentDirectoryInExePath: '1',
   };
-  const proc = spawn(DOTNET, args, { cwd, windowsHide: true, env });
+  const proc = spawn(dotnet, args, { cwd, windowsHide: true, env });
   const r = { key, name: a.name, proc, state: 'building', url: null, since: Date.now(), started: Date.now(), watch, problem: null, errors: 0, lines: [], pending: [], flush: null, emit };
   runs.set(key, r);
 
@@ -255,6 +259,11 @@ export function webStopAll() {
 
 export function webLog(key) {
   return runs.get(key)?.lines.slice(-600) || [];
+}
+
+/** How many sites and APIs JARVIS has running - so a restart can say what it would stop. */
+export function runningWebApps() {
+  return runs.size;
 }
 
 function killTree(proc) {

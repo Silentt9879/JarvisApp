@@ -1,7 +1,8 @@
-/* JARVIS window - the Tasks page: the ClickUp board for Jayvian (every sprint, every
-   status), and the workspace's own draft of work not logged yet. The board is read from a
-   cache so the page opens at once; Sync fetches a fresh copy through the ClickUp
-   connection Claude Code already has. */
+/* JARVIS window - the Tasks page: a ClickUp board (every sprint, every status) for the member
+   the person named - their own name as ClickUp knows it, never guessed - and the workspace's
+   own draft of work not logged yet. The board is read from a cache so the page opens at
+   once; Sync fetches a fresh copy through the ClickUp connection Claude Code already has.
+   ClickUp is optional: without it this page just says how to set it up. */
 (() => {
   'use strict';
   const { $, el, state } = JV;
@@ -9,6 +10,8 @@
   let tasks = [];
   let fetchedAt = null;
   let syncing = false;
+  let member = null;      // whose board: the setting, or null
+  let cachedFor = null;   // a board fetched for a different name, not shown
   const open = new Set(); // which sprints are expanded
 
   const sprintNo = (name) => { const m = /(\d+)\s*$/.exec(name || ''); return m ? Number(m[1]) : -1; };
@@ -69,10 +72,11 @@
     box.replaceChildren();
     const list = visible();
     $('cuShowing').textContent = tasks.length ? `${list.length} shown of ${tasks.length}` : '';
+    if (!member) { box.appendChild(memberBox()); return; }
     if (!tasks.length) {
       box.appendChild(emptyBox(
         'Nothing here yet',
-        'Press Sync to read your ClickUp board. It takes about half a minute and nothing is written back - JARVIS only reads.',
+        `Press Sync to read ${member}'s ClickUp board. It takes about half a minute and nothing is written back - JARVIS only reads.${cachedFor ? ` (The last board fetched was for ${cachedFor}, so it is not shown.)` : ''}`,
       ));
       return;
     }
@@ -136,6 +140,31 @@
     return b;
   }
 
+  /** Whose tasks: asked once, kept in Settings. JARVIS never picks a person by itself. */
+  function memberBox() {
+    const b = emptyBox('Whose tasks should JARVIS show?', 'Type your name exactly as it appears in your ClickUp profile. ClickUp must also be connected to Claude Code (Tools & Skills shows it). JARVIS only reads - nothing is written back.');
+    const row = el('div', 'wiz-actions');
+    const box = el('input', 'field');
+    box.placeholder = 'Your name in ClickUp';
+    box.maxLength = 60;
+    box.setAttribute('aria-label', 'Your name in ClickUp');
+    const save = el('button', 'btn btn-primary small', 'Save');
+    save.type = 'button';
+    save.onclick = () => setMember(box.value);
+    box.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); save.click(); } };
+    row.appendChild(box);
+    row.appendChild(save);
+    b.appendChild(row);
+    return b;
+  }
+
+  async function setMember(name) {
+    const r = await window.jarvis.clickupMember(name).catch((e) => ({ ok: false, error: e.message }));
+    if (!r?.ok) { JV.notify(r?.error || 'That name could not be saved.', { level: 'err', action: 'tasks' }); return; }
+    await load();
+    if (r.member) JV.notify(`ClickUp: showing tasks for ${r.member}. Press Sync to read them.`, { level: 'ok', action: 'tasks' });
+  }
+
   function renderSprints() {
     const sel = $('cuSprint');
     const chosen = filters.sprint;
@@ -156,13 +185,27 @@
 
   function renderHeader() {
     $('cuCount').textContent = String(tasks.length);
-    $('cuWho').textContent = tasks.length ? 'assigned to Jayvian' : '';
+    const who = $('cuWho');
+    who.replaceChildren();
+    if (member) {
+      who.appendChild(document.createTextNode(`assigned to ${member} `));
+      const change = el('button', 'link-btn', 'change');
+      change.type = 'button';
+      change.title = 'Show a different ClickUp member\'s tasks';
+      change.onclick = async () => {
+        const box = JV.node('input', { class: 'field', value: member, maxlength: '60', 'aria-label': 'Your name in ClickUp' });
+        const go = await JV.dialog({ title: 'Whose ClickUp tasks?', body: [JV.field('Name in ClickUp', box, 'Exactly as it appears in the ClickUp profile. Leave it empty to stop syncing.')], buttons: [{ label: 'Cancel', value: null }, { label: 'Save', primary: true, value: 'go' }], onOpen: () => box.select() });
+        if (go === 'go') setMember(box.value);
+      };
+      who.appendChild(change);
+    }
     const s = $('cuSynced');
     if (syncing) s.textContent = 'Syncing… this takes about half a minute';
     else s.textContent = fetchedAt ? `synced ${JV.ago(new Date(fetchedAt).getTime())}` : 'not synced yet';
     s.className = `h-note${syncing ? ' busy' : ''}`;
     const b = $('cuSync');
-    b.disabled = syncing;
+    b.disabled = syncing || !member;
+    b.title = member ? '' : 'Say whose tasks to show first';
     b.replaceChildren(JV.icon('refresh'), el('span', null, syncing ? 'Syncing…' : 'Sync'));
     b.classList.toggle('spinning', syncing);
   }
@@ -212,6 +255,8 @@
     const c = await window.jarvis.clickup();
     tasks = c.tasks || [];
     fetchedAt = c.fetchedAt || null;
+    member = c.member || null;
+    cachedFor = c.cachedFor || null;
     renderSprints();
     apply();
   }
@@ -228,6 +273,9 @@
       open.clear();
       renderSprints();
       JV.notify(`ClickUp: ${tasks.length} tasks for ${r.member}.`, { level: 'ok', action: 'tasks' });
+      apply();
+    } else if (r?.needsMember) {
+      member = null;
       apply();
     } else {
       JV.notify(r?.error || 'The ClickUp sync did not finish.', { level: 'err', action: 'tasks' });

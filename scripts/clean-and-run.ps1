@@ -1,7 +1,7 @@
 # Removes every installed/leftover copy of JARVIS on this PC, then (optionally) launches one exe.
 #
 #   npm run clean           just clean - kill running copies, uninstall, clear old installers
-#   npm run clean -- -Run "C:\Users\User\Downloads\JARVIS-Setup-1.12.0.exe"
+#   npm run clean -- -Run "$env:USERPROFILE\Downloads\JARVIS-Setup-<version>.exe"
 #                            clean, then launch the installer/exe you just downloaded
 #
 # Safe to re-run: every step no-ops if there's nothing left to do.

@@ -588,21 +588,21 @@ html[data-motion="slide"]::view-transition-new(jv-page) { animation-name: jv-in;
         <div class="sess panel">
           <button class="btn primary block">${ic('plus')}New session</button>
           <div class="sess-h">Recent</div>
-          <div class="sess-i on"><b>Driver App build</b><small>just now</small></div>
-          <div class="sess-i"><b>Panel App merge conflict</b><small>20 minutes ago</small></div>
+          <div class="sess-i on"><b>Courier App build</b><small>just now</small></div>
+          <div class="sess-i"><b>Dashboard App merge conflict</b><small>20 minutes ago</small></div>
           <div class="sess-i"><b>Suspended accounts, phase A</b><small>2 hours ago</small></div>
           <div class="sess-i"><b>ClickUp tasks for the sprint</b><small>6 hours ago</small></div>
-          <div class="sess-i"><b>Insurance quote review</b><small>Yesterday</small></div>
+          <div class="sess-i"><b>Quote review</b><small>Yesterday</small></div>
         </div>
         <div class="talk">
           <div class="msgs">
-            <div class="msg me">Run the Driver App on the Redmi and tell me why the build failed.</div>
+            <div class="msg me">Run the Courier App on the Redmi and tell me why the build failed.</div>
             <div class="tool">${ic('bolt')}<span>Ran <span class="mono">flutter run -d JRV1326</span></span><small>build failed after 38 seconds</small></div>
-            <div class="tool">${ic('bug')}<span>Analysed the Driver App</span><small>18 errors</small></div>
+            <div class="tool">${ic('bug')}<span>Analysed the Courier App</span><small>18 errors</small></div>
             <div class="msg jv"><b class="who">JARVIS</b>
-              <p>The build failed, sir, because git left an unresolved merge conflict in <span class="mono">inprogress_cases.dart</span> at line 3487. All eighteen errors come from it.</p>
+              <p>The build failed, sir, because git left an unresolved merge conflict in <span class="mono">orders_view.dart</span> at line 3487. All eighteen errors come from it.</p>
               <p>Shall I keep the upstream side and remove the markers?</p></div>
-            <div class="ask panel"><div><b>Edit lib/Views/inprogress_cases.dart</b><small>JARVIS wants to remove 846 lines and keep the upstream version.</small></div>
+            <div class="ask panel"><div><b>Edit lib/Views/orders_view.dart</b><small>JARVIS wants to remove 846 lines and keep the upstream version.</small></div>
               <div class="ask-acts"><button class="btn">Deny</button><button class="btn">Allow once</button><button class="btn primary">Always allow</button></div></div>
           </div>
           <div class="composer panel"><div class="ph">Message JARVIS…</div>
@@ -614,25 +614,25 @@ html[data-motion="slide"]::view-transition-new(jv-page) { animation-name: jv-in;
       <div class="dev">
         <div class="phone panel">
           <div class="phone-head"><div><b>Redmi Note 13</b><span class="plate">JRV 1326</span></div><span class="pill ok"><i class="dot"></i>Live</span></div>
-          <div class="screen"><div class="scr-top">Bantu Rescue Driver</div><div class="scr-card"></div><div class="scr-row"></div><div class="scr-row"></div><div class="scr-row short"></div><div class="scr-btn">Go online</div></div>
+          <div class="screen"><div class="scr-top">Courier</div><div class="scr-card"></div><div class="scr-row"></div><div class="scr-row"></div><div class="scr-row short"></div><div class="scr-btn">Go online</div></div>
           <div class="keys">${ic('back')}${ic('home')}${ic('square')}</div>
-          <div class="run"><span class="fieldbox">Driver App</span><button class="btn danger">Stop</button></div>
-          <span class="pill ok"><i class="dot"></i>Driver App is running</span>
+          <div class="run"><span class="fieldbox">Courier App</span><button class="btn danger">Stop</button></div>
+          <span class="pill ok"><i class="dot"></i>Courier App is running</span>
         </div>
         <div class="dev-r">
           <div class="webs">
-            <div class="web panel"><div class="web-h"><b>Admin Web</b><span class="pill ok"><i class="dot"></i>Running</span></div><small class="mono">localhost:5065</small>
+            <div class="web panel"><div class="web-h"><b>Admin Portal</b><span class="pill ok"><i class="dot"></i>Running</span></div><small class="mono">localhost:5065</small>
               <div class="banner">${ic('alert')}<span>Uses production data</span></div>
               <div class="web-a"><button class="btn">Open</button><button class="btn">Log</button><button class="btn danger">Stop</button></div></div>
-            <div class="web panel"><div class="web-h"><b>Insurance API</b><span class="pill"><i class="dot"></i>Stopped</span></div><small class="mono">localhost:5209</small>
+            <div class="web panel"><div class="web-h"><b>Orders API</b><span class="pill"><i class="dot"></i>Stopped</span></div><small class="mono">localhost:5209</small>
               <div class="banner">${ic('alert')}<span>Live database, sends real reminders</span></div>
               <div class="web-a"><button class="btn primary">${ic('play')}Run</button><button class="btn">Open</button><button class="btn">Log</button></div></div>
           </div>
           <div class="ana panel">
-            <div class="ana-h"><b>Dart analysis</b><span class="pill bad">18 errors, 88 warnings</span><span class="sub">Panel App, checked 2 minutes ago</span></div>
-            <div class="banner">${ic('branch')}<span><b>Unresolved merge conflict</b> in inprogress_cases.dart, line 3487.</span><button class="btn">Open at line 3487</button></div>
+            <div class="ana-h"><b>Dart analysis</b><span class="pill bad">18 errors, 88 warnings</span><span class="sub">Dashboard App, checked 2 minutes ago</span></div>
+            <div class="banner">${ic('branch')}<span><b>Unresolved merge conflict</b> in orders_view.dart, line 3487.</span><button class="btn">Open at line 3487</button></div>
             <div class="rows">
-              <div class="file-row"><b>inprogress_cases.dart</b><small>lib/Views</small><span class="count bad">18</span></div>
+              <div class="file-row"><b>orders_view.dart</b><small>lib/Views</small><span class="count bad">18</span></div>
               <div class="row err">${ic('alert')}<span>Expected an identifier.</span><small class="mono">:3487</small></div>
               <div class="row err">${ic('alert')}<span>The name 'Updated' isn't a type, so it can't be used as a type argument.</span><small class="mono">:3487</small></div>
               <div class="row err">${ic('alert')}<span>The '===' operator is not supported.</span><small class="mono">:3489</small></div>
@@ -643,8 +643,8 @@ html[data-motion="slide"]::view-transition-new(jv-page) { animation-name: jv-in;
         </div>
       </div>`,
     agents: () => {
-      const A = [['Kevin', 'Customer App', 'Reading HttpService.dart', '01:12'], ['Otto', 'Driver App', 'Running flutter build', '03:40'], ['Josh', 'Git and GitHub Desktop', 'Summarising the diff', '00:22'],
-        ['Bob', 'Admin Web', 'Resting on the bench', ''], ['Tony', 'ClickUp', 'Resting on the bench', ''], ['Eric', 'Notes', 'Resting on the bench', '']];
+      const A = [['Kevin', 'Shop App', 'Reading HttpService.dart', '01:12'], ['Otto', 'Courier App', 'Running flutter build', '03:40'], ['Josh', 'Git and GitHub Desktop', 'Summarising the diff', '00:22'],
+        ['Bob', 'Admin Portal', 'Resting on the bench', ''], ['Tony', 'ClickUp', 'Resting on the bench', ''], ['Eric', 'Notes', 'Resting on the bench', '']];
       return `
       <div class="pg-head"><h2 class="h1">Agents</h2><p class="sub">The specialists JARVIS sends out, and what each is doing right now.</p></div>
       <div class="floor">${A.map(([n, role, say, t]) => `

@@ -56,8 +56,8 @@ function fakeTelegram() {
 
 const SESSIONS = [
   { id: '11111111-1111-4111-8111-111111111111', title: 'Fix the panel login', lastModified: Date.now() - 5 * 60000 },
-  { id: '22222222-2222-4222-8222-222222222222', title: 'Driver app release notes', lastModified: Date.now() - 3 * 3600000 },
-  { id: '33333333-3333-4333-8333-333333333333', title: 'Panel web invoices', lastModified: Date.now() - 2 * 86400000 },
+  { id: '22222222-2222-4222-8222-222222222222', title: 'Mobile app release notes', lastModified: Date.now() - 3 * 3600000 },
+  { id: '33333333-3333-4333-8333-333333333333', title: 'Admin panel invoices', lastModified: Date.now() - 2 * 86400000 },
 ];
 
 function rig({ on = true, atDesk = false, remindMs, groupId = null, pcName = null } = {}) {
@@ -80,7 +80,7 @@ function rig({ on = true, atDesk = false, remindMs, groupId = null, pcName = nul
     newSession: () => { seen.fresh++; },
     interrupt: () => { seen.interrupts++; },
     respond: (id, decision, verdict) => seen.responded.push({ id, decision, verdict }),
-    workspace: () => 'C:\\Users\\User\\Downloads\\Bantu Apps',
+    workspace: () => 'C:\\Users\\dev\\Projects\\Acme Apps',
     api: tg.api,
     upload: tg.upload,
     screens: async () => Array.from({ length: desk.screens }, (_, i) => ({ name: `Screen ${i + 1}`, data: Buffer.from(`jpeg ${i}`) })),
@@ -90,7 +90,7 @@ function rig({ on = true, atDesk = false, remindMs, groupId = null, pcName = nul
     sessions: async () => SESSIONS,
     currentSession: () => desk.current,
     switchSession: async (id, title) => { seen.switched.push({ id, title }); desk.current = id; return { ok: true, last: 'Last thing I said.' }; },
-    saveIncoming: async (name, data) => { seen.saved.push({ name, data: data.toString() }); return `C:\\Users\\User\\Downloads\\JARVIS from phone\\${name}`; },
+    saveIncoming: async (name, data) => { seen.saved.push({ name, data: data.toString() }); return `C:\\Users\\dev\\Downloads\\JARVIS from phone\\${name}`; },
     readAttachment: async (p) => (/huge/.test(p) ? null : Buffer.from(`contents of ${p}`)),
     transcribe: async () => { seen.transcribed++; return { ok: true, text: desk.transcript }; },
     voiceReady: () => desk.voiceReady,
@@ -163,7 +163,7 @@ const settle = () => sleep(120); // let the poll loop take what is queued
   await settle();
   const texts = tg.sent().map((m) => m.text);
   ok(texts.some((t) => t.includes('/stop - stop the current turn')), '/help lists the commands');
-  ok(texts.some((t) => t.startsWith('Standing by') && t.includes('Bantu Apps')), '/status says the state and the workspace');
+  ok(texts.some((t) => t.startsWith('Standing by') && t.includes('Acme Apps')), '/status says the state and the workspace');
   ok(texts.includes('Nothing is running.') && seen.interrupts === 0, '/stop while idle does nothing');
   ok(seen.fresh === 1, '/new while idle starts a new session');
   ok(texts.some((t) => t.includes('only works at the desk')) && !seen.submitted.length, '/delete is refused, never passed through');
@@ -631,7 +631,7 @@ const settle = () => sleep(120); // let the poll loop take what is queued
   await settle();
   const list = tg.sent().at(-1);
   const listMsg = 100 + tg.sent().length - 1;
-  ok(/1\. ▶ Fix the panel login/.test(list.text) && /3\. Panel web invoices/.test(list.text), '/sessions lists them newest first, the current one marked');
+  ok(/1\. ▶ Fix the panel login/.test(list.text) && /3\. Admin panel invoices/.test(list.text), '/sessions lists them newest first, the current one marked');
   ok(list.reply_markup.inline_keyboard.length === 3 && list.reply_markup.inline_keyboard[1][0].callback_data === 'w:1', 'with a button for each');
 
   tg.tap('w:1', listMsg + 40);                // forged: right data, wrong message
@@ -640,7 +640,7 @@ const settle = () => sleep(120); // let the poll loop take what is queued
   ok(!seen.switched.length, 'a forged or stranger’s session button switches nothing');
   tg.tap('w:1', listMsg);
   await settle();
-  ok(seen.switched[0]?.id === SESSIONS[1].id && /Switched to "Driver app release notes"/.test(tg.sent().at(-1).text) && /Last thing I said/.test(tg.sent().at(-1).text),
+  ok(seen.switched[0]?.id === SESSIONS[1].id && /Switched to "Mobile app release notes"/.test(tg.sent().at(-1).text) && /Last thing I said/.test(tg.sent().at(-1).text),
     'my tap switches, and says where the session left off');
 
   tg.message('/switch 3');

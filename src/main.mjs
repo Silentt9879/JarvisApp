@@ -9,14 +9,14 @@ import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { JarvisSession, listRecent, loadHistory, findSessions, removeSession, renameStoredSession, isSessionId, IMAGE_TYPES, MAX_IMAGE_BYTES } from './session.mjs';
-import { systemStats, gitStatus, knowledgeStatus, openIssues, handoffFocus, listDocs, readDoc, searchDocs, docRoots, savedEffort } from './workspace.mjs';
-import { FLUTTER_APPS, isSerial, listDevices, startMirror, stopMirror, resetVideo, sendInput, flutterRun, flutterCommandFor, flutterLog, shutdownDevices } from './devices.mjs';
+import { systemStats, gitStatus, knowledgeStatus, openIssues, handoffFocus, listDocs, readDoc, searchDocs, docRoots, savedEffort, setRepoNames, setGitTrust, GIT_RESTRICTED } from './workspace.mjs';
+import { isSerial, listDevices, startMirror, stopMirror, resetVideo, sendInput, flutterRun, flutterCommandFor, flutterLog, shutdownDevices, runningFlutter } from './devices.mjs';
 import { analyzeApp, cancelAnalysis, shutdownAnalysis } from './analysis.mjs';
-import { listWebApps, webRun, webStop, webStopAll, webLog, shutdownWebApps } from './webapps.mjs';
+import { listWebApps, webRun, webStop, webStopAll, webLog, shutdownWebApps, runningWebApps } from './webapps.mjs';
 import { inSnapZone, dockWidth, dockLayout, followLayout, afterPhoneResize, stillDocked } from './dock.mjs';
-import { readDraft, readClickUp, syncClickUp } from './tasks.mjs';
+import { readDraft, readClickUp, syncClickUp, cleanMember } from './tasks.mjs';
 import { createGitHub } from './github.mjs';
-import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode } from './files.mjs';
+import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode, inside as insideDir, OPENABLE, reallyInside } from './files.mjs';
 import { NoteStore, sendNote, telegramReady } from './notes.mjs';
 import { authStatus, authLogout, startLogin } from './auth.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
@@ -32,10 +32,23 @@ import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
 import { WINDOW_MODES } from './permission-mode.mjs';
 import { createFeatures } from './features.mjs';
 import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis, readDelivery, newerDelivery, clearDelivery, DELIVERY_FILE, deleteAppCommand, launchUpdater, JARVIS_INSTALL_EXE } from './updates.mjs';
-import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext } from './git.mjs';
+import { normalizeWorkspaces, addWorkspace, renameWorkspace, selectWorkspace, removeWorkspace, setWorkspaceTrust, setProjectSettings, projectSettings, workspacesForWindow, NO_WORKSPACE } from './workspaces.mjs';
+import { readConfigFile, mergeConfigFile } from './config-file.mjs';
+import { createProjectIndex } from './project-index.mjs';
+import { projectDir, flutterApps, dartProjects, webAppsFrom, projectActions, actionForWindow, TYPE_LABEL, requirementsFor, capabilityRelevance, INSTALL_HINT } from './project-providers.mjs';
+import { discoverProjects } from './project-discovery.mjs';
+import { startTask, stopTask, taskLog, runningTasks, shutdownTasks } from './task-runner.mjs';
+import { getCapabilities } from './capabilities.mjs';
+import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext, cancelAllRemotes } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.dirname(SRC);
+// Before anything starts a process: Windows looks for a program in the working folder BEFORE
+// PATH, and Node's own lookup decides that from THIS process's environment, not the child's.
+// With JARVIS starting tools inside project folders, a repository holding its own cmd.exe,
+// git.exe or python.exe must never be run in place of the real one - so that lookup is off
+// for every process JARVIS starts, and for everything those processes start in turn.
+process.env.NoDefaultCurrentDirectoryInExePath = '1';
 // Before anything creates a window: this is the name Windows shows for the app.
 app.setName('JARVIS');
 
@@ -59,8 +72,6 @@ const IDENTITY = app.isPackaged
 if (process.platform === 'win32' && typeof app.setToastActivatorCLSID === 'function') {
   try { app.setToastActivatorCLSID(IDENTITY.toastActivator); } catch { /* an older Electron: random, as before */ }
 }
-const DEFAULT_CWD = 'C:\\Users\\bantu\\Downloads\\BantuApps';
-
 // ---------------------------------------------------------------- config + log
 // A test run can use a throwaway data folder (JARVIS_USERDATA), so it never touches the real settings.
 if (process.env.JARVIS_USERDATA) app.setPath('userData', process.env.JARVIS_USERDATA);
@@ -68,30 +79,94 @@ const userDir = app.getPath('userData');
 const configPath = path.join(userDir, 'config.json');
 const logPath = path.join(userDir, 'jarvis.log');
 
+// Why config.json cannot be used right now, or null - Health shows it. While it is set,
+// JARVIS runs on its defaults and never writes the file (config-file.mjs): a hand edit gone
+// wrong is the person's to fix, or move aside, not JARVIS's to replace.
+let configProblem = null;
+
+function rawConfig() {
+  const r = readConfigFile(configPath);
+  configProblem = r.problem ? `config.json ${r.problem}` : null;
+  return r.value || {};
+}
+
+/**
+ * The whole config, so every setting is visible (budget, phone web app, update notes, ...),
+ * with `cwd` resolved from the active workspace (workspaces.mjs) - the ONE place a folder is
+ * decided. There is no default folder: with no workspace chosen, `cwd` is null, and anything
+ * that needs one says so instead of guessing.
+ */
 function loadConfig() {
   // Capture aid: JARVIS_CAPTURE_CWD points a screenshot run at a throwaway workspace, so a
   // capture can show states (an unpushed commit, a discard dialog) without touching real
   // repositories. Ignored unless JARVIS_CAPTURE is set.
   if (process.env.JARVIS_CAPTURE && process.env.JARVIS_CAPTURE_CWD) {
-    return { cwd: process.env.JARVIS_CAPTURE_CWD, phone: {} };
+    const dir = path.resolve(process.env.JARVIS_CAPTURE_CWD);
+    return { cwd: dir, phone: {}, workspaces: [{ id: 'ws_capture', name: path.basename(dir), path: dir }], activeWorkspaceId: 'ws_capture' };
   }
-  // The whole file, so every setting is visible (budget, phone web app, update notes, ...).
-  try {
-    const c = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    return { ...c, cwd: c.cwd || DEFAULT_CWD, phone: c.phone || {} };
-  } catch {
-    return { cwd: DEFAULT_CWD, phone: {} };
-  }
+  const c = rawConfig();
+  const ws = normalizeWorkspaces(c);
+  return { ...c, workspaces: ws.workspaces, activeWorkspaceId: ws.activeWorkspaceId, cwd: ws.activePath, phone: c.phone || {} };
+}
+/** The active workspace entry ({ id, name, path, projects? }), or null. */
+function activeWs() {
+  const c = loadConfig();
+  return c.workspaces.find((w) => w.id === c.activeWorkspaceId) || null;
 }
 
-/** Merge into config.json. Only ever called with settings the user chose. */
+/**
+ * Merge into config.json. Only ever called with settings the user chose. Written through a
+ * temp file and a rename; a config that is there but cannot be read is never overwritten -
+ * nothing is saved until it reads again, and Health says why (config-file.mjs).
+ */
 function saveConfig(patch) {
-  let current = {};
-  try { current = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { /* first write */ }
-  const next = { ...current, ...patch };
-  try { fs.writeFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`); } catch (e) { log('could not save config:', e?.message || e); }
-  return next;
+  try {
+    const r = mergeConfigFile(configPath, patch);
+    if (r.ok) { configProblem = null; return r.value; }
+    configProblem = `config.json ${r.problem}`;
+    log(`settings not saved: ${configProblem}`);
+  } catch (e) { log('could not save config:', e?.message || e); }
+  return { ...patch };
 }
+
+// Version 2 keeps a list of workspaces. An older config (one `cwd`) is migrated once, at
+// start: the folder becomes the first workspace, `cwd` stays (mirrored, for older JARVIS
+// versions), and the config as it was is kept beside it as config.before-v2.json.
+(function migrateWorkspaces() {
+  if (process.env.JARVIS_CAPTURE || !fs.existsSync(configPath)) return;
+  const raw = rawConfig();
+  if (configProblem) { log(`${configProblem} - JARVIS runs on its defaults and saves nothing until it is fixed`); return; }
+  const n = normalizeWorkspaces(raw);
+  if (!n.migrated) return;
+  if (!Array.isArray(raw.workspaces)) {
+    const backup = path.join(userDir, 'config.before-v2.json');
+    try { if (!fs.existsSync(backup)) fs.copyFileSync(configPath, backup); } catch { /* the migration keeps cwd anyway */ }
+  }
+  saveConfig(n.patch);
+  log(`workspaces: ${n.workspaces.length} known, active ${n.activePath || 'none'}${Array.isArray(raw.workspaces) ? '' : ' (migrated from the single workspace folder)'}`);
+})();
+
+// The active workspace's projects (project-discovery.mjs), kept a minute, shared by every view.
+const projectIndex = createProjectIndex({ log: (...a) => log(...a) });
+// What a repository is called on screen (Source Control, the dashboard, Telegram's /diff):
+// the person's own name for it, else the name its files carry, else its folder's name.
+setRepoNames((rel) => {
+  const ws = activeWs();
+  if (!ws) return null;
+  const own = projectSettings(ws, rel).name;
+  if (own) return own;
+  const found = projectIndex.peek(ws)?.projects.find((p) => p.relativePath === rel);
+  return found && found.displayName && found.displayName !== found.name ? found.displayName : null;
+});
+// Git only in a trusted workspace (workspace.mjs, GIT_RESTRICTED). Asked before every git
+// call, so it is remembered for a moment rather than read from config.json each time.
+let trustMemo = { at: 0, value: false };
+setGitTrust(() => {
+  if (Date.now() - trustMemo.at > 2000) trustMemo = { at: Date.now(), value: workspaceTrusted() };
+  return trustMemo.value;
+});
+// The last ClickUp sync's failure, for Health - cleared by the next sync that works.
+let clickupLastError = null;
 
 /**
  * Phone alerts: { enabled, route, serial, address, minSeconds, telegram }.
@@ -243,7 +318,8 @@ const remote = createRemote({
   diff: (query) => diffReport(loadConfig().cwd, query),
   brief: buildBrief,
   briefSet: (patch) => { const next = { ...briefConfig(), ...patch }; saveConfig({ brief: next }); log('morning brief:', next.on ? `on at ${next.at}` : 'off'); return next; },
-  sessions: () => listRecent(loadConfig().cwd),
+  // No workspace, no list: the SDK reads a missing folder as "every project's conversations".
+  sessions: async () => { const { cwd } = loadConfig(); return cwd ? listRecent(cwd) : []; },
   // /deleteapp (Telegram only): removes this install, and - in a dev checkout - old
   // installer builds, so a GitHub Release download or Update has nothing old in the way.
   // Nothing is relaunched; JARVIS quits once the cleanup is safely started.
@@ -331,6 +407,23 @@ const features = createFeatures({
   authState: async () => noteAccount(await authStatus(claudeExe())),
   githubOn: async () => !!(await resolveToken(tokenStore)).source,
   telegramOn: () => { const t = phoneConfig().telegram || {}; return !!(t.token && (t.chatId || t.groupId)); },
+  // Switched on in Settings (alerts by Telegram, or remote control) - set up or not.
+  telegramWanted: () => { const c = phoneConfig(); return c.route === 'telegram' && (c.enabled || c.remote); },
+  // Set up = a member name is set. Synced before but no name now: it needs one to carry on.
+  clickupState: () => {
+    const member = cleanMember(loadConfig().clickup?.member);
+    const before = !!readClickUp(userDir).fetchedAt;
+    return { used: !!member, error: clickupLastError || (!member && before ? 'JARVIS needs your name as it appears in ClickUp (on the Tasks page) to keep syncing.' : null), member };
+  },
+  projects: ({ refresh } = {}) => projectIndex.get(activeWs(), { refresh: !!refresh }),
+  // A folder is trusted when it is a workspace the person trusted (workspaces.mjs, TRUST).
+  folderTrusted: (dir) => {
+    if (!dir) return false;
+    const want = path.resolve(dir).toLowerCase();
+    return loadConfig().workspaces.some((w) => w.trusted === true && path.resolve(w.path).toLowerCase() === want);
+  },
+  workspaceTrusted: () => workspaceTrusted(),
+  configProblem: () => configProblem,
   updateInfo: () => lastUpdateInfo,
 });
 features.registerIpc();
@@ -351,13 +444,12 @@ async function captureScreens() {
 // involved. Sent once a day - the date is kept in the config, so a restart does not repeat
 // it - and only within three hours of the time: a PC switched on at 3 pm gets no "morning".
 function briefConfig() {
-  let b = {};
-  try { b = JSON.parse(fs.readFileSync(configPath, 'utf8')).brief || {}; } catch { /* defaults */ }
+  const b = rawConfig().brief || {};
   return { on: b.on !== false, at: /^\d\d:\d\d$/.test(b.at || '') ? b.at : '08:00', sent: typeof b.sent === 'string' ? b.sent : null };
 }
 async function buildBrief() {
   const { cwd } = loadConfig();
-  const recent = await listRecent(cwd).catch(() => []);
+  const recent = cwd ? await listRecent(cwd).catch(() => []) : [];
   return morningBrief({ cwd, userDir, lastSession: recent[0] || null });
 }
 const localDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -542,17 +634,8 @@ function createWindow() {
     }
   });
 
-  // Links open in the real browser; the app window never navigates away.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
-    return { action: 'deny' };
-  });
-  win.webContents.on('will-navigate', (e, url) => {
-    if (url !== win.webContents.getURL()) {
-      e.preventDefault();
-      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
-    }
-  });
+  // Links open in the real browser and the window never navigates away - for this window and
+  // every other one, by the app-wide guard (see 'web-contents-created' below).
 
   // Ctrl+Shift+I for developer tools (there is no menu bar).
   win.webContents.on('before-input-event', (_e, input) => {
@@ -762,10 +845,21 @@ function createWindow() {
 }
 
 // ---------------------------------------------------------------- IPC: session
+/** Is the active workspace trusted (workspaces.mjs, TRUST)? A screenshot run's folder is a throwaway one. */
+function workspaceTrusted() {
+  if (process.env.JARVIS_CAPTURE && process.env.JARVIS_CAPTURE_CWD) return true;
+  return activeWs()?.trusted === true;
+}
+/**
+ * What a restricted workspace is told when something would run its code. Restricted means
+ * JARVIS reads the folder and nothing more: no build, test, script, app, analysis or Git -
+ * each of those runs code or configuration the folder itself supplies.
+ */
+const RESTRICTED_RUN = 'This workspace is restricted, so JARVIS runs nothing from it - no builds, tests, apps or Git. If it is your code, trust it in Settings > Workspaces.';
 function ensureSession() {
   if (!session) {
     const { cwd } = loadConfig();
-    session = new JarvisSession({ cwd, exe: claudeExe(), emit: send, log });
+    session = new JarvisSession({ cwd, exe: claudeExe(), emit: send, log, trusted: workspaceTrusted() });
   }
   return session;
 }
@@ -789,6 +883,7 @@ function sessionFor(e) {
         features.onEvent(evt, { pane: true });
       },
       log,
+      trusted: workspaceTrusted(),
     });
     paneSessions.set(wc.id, s);
     wc.once('destroyed', () => {
@@ -814,7 +909,8 @@ function interruptAll() {
  */
 function submitMessage(payload, e = null) {
   const atts = Array.isArray(payload?.attachments) ? payload.attachments : [];
-  const r = signedOut ? { ok: false, error: SIGNED_OUT } : sessionFor(e).send(payload);
+  const r = !loadConfig().cwd ? { ok: false, error: NO_WORKSPACE }
+    : signedOut ? { ok: false, error: SIGNED_OUT } : sessionFor(e).send(payload);
   features.noteUser(payload?.text, payload?.origin || 'desk');
   // Every message is noted with where it came from, so its reply can go back there.
   try {
@@ -874,8 +970,17 @@ function claudeVersion() {
 }
 
 ipcMain.handle('jarvis:info', () => {
-  const { cwd } = loadConfig();
-  return { cwd, cwdExists: fs.existsSync(cwd), version: app.getVersion(), electron: process.versions.electron, exeFound: fs.existsSync(claudeExe()), capture: !!process.env.JARVIS_CAPTURE };
+  const ws = activeWs();
+  const cwd = ws?.path || null;
+  return {
+    cwd,
+    cwdExists: !!cwd && fs.existsSync(cwd),
+    workspace: ws ? { id: ws.id, name: ws.name, path: ws.path, trusted: workspaceTrusted() } : null,
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    exeFound: fs.existsSync(claudeExe()),
+    capture: !!process.env.JARVIS_CAPTURE,
+  };
 });
 
 // Settings > Updates. Checks only look; nothing installs until the user presses Update.
@@ -990,48 +1095,241 @@ ipcMain.handle('jarvis:titleBar', (e, theme) => {
   return true;
 });
 
-// ---------------------------------------------------------------- the workspace folder
-// Chosen in Settings. The session takes its folder when it is created, and so do the file
-// index, the memory path and every git read, so a change cannot be applied in place
-// honestly: the new folder is saved and JARVIS restarts into it. Picking a folder and
-// switching to it are separate calls, so the window can confirm in between.
+// ---------------------------------------------------------------- workspaces
+// The folders JARVIS can work in (workspaces.mjs), one active at a time. The session takes
+// its folder when it is created, and so do the file index, the memory path, every git read,
+// every flutter run and dotnet watch - so a switch is never applied in place: the choice is
+// saved and JARVIS restarts into it, through the same shutdown as quitting.
+// (projectIndex - the active workspace's discovered projects - is created near the top.)
+
+/** Restart JARVIS - after a workspace switch or a new sign-in. One path, one shutdown. */
+function restartJarvis(reason) {
+  log(reason);
+  // Give the reply a moment to reach the window, then stop everything this app started -
+  // app.exit skips window-all-closed, and claude.exe, a dotnet watch or a flutter run left
+  // behind would keep running against the old folder.
+  setTimeout(async () => {
+    await shutdownChildren();
+    // Not --hidden (a JARVIS started at login would come back with no window) and not
+    // --updated (it would announce the same update again): this restart is the person's.
+    const keep = process.argv.slice(1).filter((a) => !['--restarted', '--hidden', '--updated'].includes(a));
+    app.relaunch({ args: [...keep, '--restarted'] });
+    app.exit(0);
+  }, 400);
+  return { ok: true, restarting: true };
+}
+
+/** What would stop if JARVIS restarted now - so the window can say so before a switch. */
+function activeWork() {
+  const busy = (s) => !!s && (!!s.running || s.pending?.size > 0);
+  const busyChat = busy(session) || [...paneSessions.values()].some(busy);
+  let flutter = 0;
+  let web = 0;
+  try { flutter = runningFlutter(); } catch { /* none */ }
+  try { web = runningWebApps(); } catch { /* none */ }
+  return { chat: busyChat, flutter, web, tasks: runningTasks().length, remote: !!remote.ready };
+}
+
 ipcMain.handle('jarvis:pickWorkspace', async () => {
   const cur = loadConfig().cwd;
   const r = await dialog.showOpenDialog(win, {
-    title: 'Choose the workspace folder',
-    defaultPath: fs.existsSync(cur) ? cur : app.getPath('home'),
+    title: 'Choose a workspace folder - the one that holds your projects',
+    defaultPath: cur && fs.existsSync(cur) ? cur : app.getPath('home'),
     properties: ['openDirectory'],
   });
   if (r.canceled || !r.filePaths?.[0]) return { ok: false, canceled: true };
   return { ok: true, path: r.filePaths[0] };
 });
-ipcMain.handle('jarvis:setWorkspace', (_e, dir) => {
-  if (typeof dir !== 'string' || !path.isAbsolute(dir)) return { ok: false, error: 'That is not a full folder path.' };
-  let st = null;
-  try { st = fs.statSync(dir); } catch { /* reported below */ }
-  if (!st || !st.isDirectory()) return { ok: false, error: 'That folder does not exist.' };
-  const resolved = path.resolve(dir);
-  if (resolved === path.resolve(loadConfig().cwd)) return { ok: true, unchanged: true };
-  saveConfig({ cwd: resolved });
-  log('workspace changed to', resolved, '- restarting');
-  // Give the reply a moment to reach the window, then stop everything this app started -
-  // app.exit skips window-all-closed, and claude.exe, a dotnet watch or a flutter run left
-  // behind would keep running against the old folder.
-  setTimeout(async () => { await shutdownChildren(); app.relaunch({ args: [...process.argv.slice(1), '--restarted'] }); app.exit(0); }, 400);
-  return { ok: true, restarting: true };
+ipcMain.handle('workspaces:list', () => workspacesForWindow(rawConfig()));
+ipcMain.handle('workspaces:busy', () => activeWork());
+ipcMain.handle('workspaces:add', async (_e, dir, name) => {
+  const r = await addWorkspace(rawConfig(), dir, { name });
+  if (!r.ok) return r;
+  if (!r.duplicate) { saveConfig(r.patch); log('workspace added:', r.workspace.path); }
+  return { ok: true, duplicate: !!r.duplicate, workspace: { id: r.workspace.id, name: r.workspace.name, path: r.workspace.path } };
+});
+ipcMain.handle('workspaces:rename', (_e, id, name) => {
+  const r = renameWorkspace(rawConfig(), id, name);
+  if (!r.ok) return r;
+  saveConfig(r.patch);
+  return { ok: true, workspace: { id: r.workspace.id, name: r.workspace.name, path: r.workspace.path } };
+});
+/** Make a workspace active. Saved first, then JARVIS restarts into it. */
+ipcMain.handle('workspaces:select', async (_e, id, opts) => {
+  if (process.env.JARVIS_CAPTURE) return { ok: false, error: 'A screenshot run never switches workspaces.' };
+  const trust = typeof opts?.trust === 'boolean' ? opts.trust : undefined;
+  const r = await selectWorkspace(rawConfig(), id, { trust });
+  if (!r.ok || r.unchanged) return r.ok ? { ok: true, unchanged: true } : r;
+  saveConfig(r.patch);
+  return restartJarvis(`workspace switched to ${r.workspace.path} (${r.workspace.trusted ? 'trusted' : 'restricted'}) - restarting`);
+});
+/**
+ * Trust a workspace, or take trust back. Trusted: its .claude settings, hooks and MCP load
+ * and its knowledge script may run. The active one restarts, so nothing half-applies.
+ */
+ipcMain.handle('workspaces:trust', (_e, id, trusted) => {
+  if (process.env.JARVIS_CAPTURE) return { ok: false, error: 'A screenshot run never changes workspaces.' };
+  const r = setWorkspaceTrust(rawConfig(), id, trusted === true);
+  if (!r.ok) return r;
+  saveConfig(r.patch);
+  log(`workspace ${trusted === true ? 'trusted' : 'restricted'}:`, r.workspace.path);
+  return r.active && r.changed ? restartJarvis('workspace trust changed - restarting') : { ok: true };
+});
+/** Forget a workspace. The folder is not touched. Forgetting the active one restarts. */
+ipcMain.handle('workspaces:remove', (_e, id) => {
+  if (process.env.JARVIS_CAPTURE) return { ok: false, error: 'A screenshot run never changes workspaces.' };
+  const r = removeWorkspace(rawConfig(), id);
+  if (!r.ok) return r;
+  saveConfig(r.patch);
+  log('workspace removed from the list:', r.removed.path);
+  if (!r.switched) return { ok: true };
+  return restartJarvis(`the active workspace was removed - restarting ${r.next ? `in ${r.next.path}` : 'with no workspace'}`);
+});
+/** The active workspace's projects (project-discovery.mjs, read-only). refresh: scan again. */
+ipcMain.handle('workspaces:projects', async (_e, refresh) => {
+  const ws = activeWs();
+  const r = await projectIndex.get(ws, { refresh: !!refresh });
+  return { ...r, workspace: ws ? { id: ws.id, name: ws.name, path: ws.path } : null };
+});
+// ---------------------------------------------------------------- project actions
+// What can be done with a project (project-providers.mjs): jumps into existing views, and
+// Build / Test / script tasks (task-runner.mjs). The window names a project and an action -
+// never a command: the command is worked out here, from the project's own files, each time.
+async function actionsFor(key) {
+  const hit = await resolveProject(key);
+  if (!hit) return null;
+  const caps = await getCapabilities().catch(() => []);
+  const trusted = workspaceTrusted();
+  const inSourceControl = new Set(sourceRepos(hit.ws.path).map((x) => x.key));
+  const actions = (await projectActions(hit.project, hit.dir, caps)).map((a) => {
+    // Restricted: every action runs the folder's own code or configuration (Git included).
+    if (!trusted) return { ...a, available: false, reason: RESTRICTED_RUN };
+    // Source Control lists repositories down to two folders; a deeper one is not offered there.
+    if (a.id === 'git' && !inSourceControl.has(a.repoKey)) {
+      return { ...a, available: false, reason: 'Source Control shows the repositories at the top of the workspace and up to two folders down - this one is deeper. Ask JARVIS, or open it in a terminal.' };
+    }
+    return a;
+  });
+  return { hit, actions, trusted };
+}
+ipcMain.handle('projects:actions', async (_e, key) => {
+  const r = await actionsFor(key);
+  if (!r) return { ok: false, error: 'That project is not in this workspace.' };
+  return { ok: true, key: r.hit.project.id, actions: r.actions.map(actionForWindow) };
+});
+ipcMain.handle('projects:run', async (_e, key, actionId) => {
+  if (typeof actionId !== 'string') return { ok: false, error: 'Unknown action.' };
+  const r = await actionsFor(key);
+  if (!r) return { ok: false, error: 'That project is not in this workspace.' };
+  const a = r.actions.find((x) => x.id === actionId);
+  if (!a || a.kind !== 'task') return { ok: false, error: 'Unknown action.' };
+  if (!a.available) return { ok: false, error: a.reason || 'That cannot run on this PC.' };
+  try {
+    const run = startTask({ ...a.spec, cwd: r.hit.dir, projectKey: r.hit.project.id, actionId: a.id, label: `${a.label} - ${r.hit.project.displayName || r.hit.project.name}` }, send);
+    log('project task started', r.hit.project.id, a.id, `(${run.command})`);
+    return { ok: true, run };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+/**
+ * One project, as the Projects view shows it: what it is, what it needs from this PC and
+ * whether that is here, what can be done with it, and the person's own settings for it.
+ */
+ipcMain.handle('projects:detail', async (_e, key) => {
+  const r = await actionsFor(key);
+  if (!r) return { ok: false, error: 'That project is not in this workspace.' };
+  const caps = await getCapabilities().catch(() => []);
+  const installed = new Map(caps.filter((c) => c.installed).map((c) => [c.id, c]));
+  const p = r.hit.project;
+  const needs = requirementsFor(p).map((group) => {
+    const by = group.find((id) => installed.has(id)) || null;
+    const first = caps.find((c) => c.id === group[0]);
+    return { ids: group, label: first?.label || group[0], met: !!by, by: by ? { id: by, label: installed.get(by).label, version: installed.get(by).version || null } : null, hint: by ? null : INSTALL_HINT[group[0]] || null };
+  });
+  const settings = projectSettings(r.hit.ws, p.relativePath);
+  const repos = sourceRepos(r.hit.ws.path);
+  const repo = repos.find((x) => x.key === p.relativePath) || null;
+  return {
+    ok: true,
+    project: { id: p.id, name: p.name, displayName: p.displayName, foundName: p.foundName, relativePath: p.relativePath, types: p.types, role: p.role, parentId: p.parentId, children: p.children, meta: p.meta, warning: p.warning || null },
+    settings: { name: settings.name || '', warning: settings.warning || '', casePrefix: settings.casePrefix || '' },
+    needs,
+    actions: r.actions.map(actionForWindow),
+    repoKey: repo ? repo.key : null,
+    restricted: !r.trusted,
+  };
+});
+/** The machine's developer tools, for onboarding and Settings: names and versions, never paths. */
+ipcMain.handle('capabilities:list', async (_e, refresh) => (await getCapabilities({ force: refresh === true }).catch(() => []))
+  .map((c) => ({ id: c.id, label: c.label, installed: c.installed, version: c.version, configured: c.configured })));
+/**
+ * Onboarding: what is in a workspace that was just added, before switching to it - looked at,
+ * not changed. Only a folder already in the list (added through the folder dialog and checked
+ * there) can be looked at, never a path from the window.
+ */
+ipcMain.handle('workspaces:preview', async (_e, id) => {
+  const ws = workspacesForWindow(rawConfig()).workspaces.find((w) => w.id === id);
+  if (!ws) return { ok: false, error: 'That workspace is not in the list.' };
+  const r = await discoverProjects(ws.path, { maxDirs: 8000 });
+  const caps = await getCapabilities().catch(() => []);
+  const rel = capabilityRelevance(r.projects, caps);
+  const tops = r.projects.filter((p) => p.parentId === null);
+  return {
+    ok: !r.errors.some((e) => e.path === ws.path),
+    error: r.errors[0]?.error || null,
+    truncated: r.truncated,
+    count: r.projects.length,
+    projects: tops.slice(0, 60).map((p) => ({ id: p.id, name: p.displayName || p.name, types: p.types })),
+    needs: Object.entries(rel).filter(([, v]) => v.used).map(([id, v]) => {
+      const c = caps.find((x) => x.id === id);
+      return { id, label: c?.label || id, installed: !!c?.installed, version: c?.version || null, unmet: v.unmet, hint: c?.installed ? null : INSTALL_HINT[id] || null };
+    }),
+  };
+});
+ipcMain.handle('projects:stop', (_e, id) => (typeof id === 'string' ? stopTask(id) : { ok: false, error: 'Unknown task.' }));
+ipcMain.handle('projects:tasks', () => runningTasks());
+ipcMain.handle('projects:taskLog', (_e, id) => (typeof id === 'string' ? taskLog(id) : []));
+
+/** A person's own name or Run warning for one project. Stored in config, never in the project. */
+ipcMain.handle('workspaces:projectSettings', (_e, relPath, patch) => {
+  const ws = activeWs();
+  if (!ws) return { ok: false, error: NO_WORKSPACE };
+  const r = setProjectSettings(rawConfig(), ws.id, relPath, patch && typeof patch === 'object' ? patch : {});
+  if (!r.ok) return r;
+  saveConfig(r.patch);
+  return { ok: true, settings: r.settings };
+});
+// The older one-step call (the setup walk-through, New project): add the folder if it is
+// new, make it active, restart. Same checks as above.
+ipcMain.handle('jarvis:setWorkspace', async (_e, dir) => {
+  if (process.env.JARVIS_CAPTURE) return { ok: false, error: 'A screenshot run never switches workspaces.' };
+  const added = await addWorkspace(rawConfig(), dir);
+  if (!added.ok) return added;
+  if (!added.duplicate) saveConfig(added.patch);
+  const r = await selectWorkspace(rawConfig(), added.workspace.id);
+  if (!r.ok) return r;
+  if (r.unchanged) return { ok: true, unchanged: true };
+  saveConfig(r.patch);
+  return restartJarvis(`workspace changed to ${r.workspace.path} - restarting`);
 });
 
 /**
- * Stop everything this app started: the Claude Code session, any web app or API run from
- * the Devices view, phone mirrors and flutter runs. The apps stay installed on the phones.
- * Bounded at three seconds, so a phone that never answers cannot hold the app open.
+ * Stop everything this app started: the Claude Code sessions (the main chat and any side
+ * chat), any web app or API run from the Devices view, phone mirrors and flutter runs, a
+ * project scan. The apps stay installed on the phones. Bounded at three seconds, so a phone
+ * that never answers cannot hold the app open.
  */
 async function shutdownChildren() {
   try { remote.stop(); } catch { /* shutting down */ }
   try { await features.stop(); } catch { /* shutting down */ }
   try { session?.close(); } catch { /* shutting down */ }
+  for (const s of paneSessions.values()) { try { s.close(); } catch { /* shutting down */ } }
   try { shutdownWebApps(); } catch { /* shutting down */ }
   try { shutdownAnalysis(); } catch { /* shutting down */ }
+  try { shutdownTasks(); } catch { /* shutting down */ }
+  try { cancelAllRemotes(); } catch { /* shutting down */ }
+  try { projectIndex.stop(); } catch { /* shutting down */ }
   await Promise.race([shutdownDevices().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
 }
 ipcMain.handle('jarvis:claudeVersion', () => (fs.existsSync(claudeExe()) ? claudeVersion() : null));
@@ -1075,12 +1373,10 @@ ipcMain.handle('jarvis:authLogout', async () => {
   return { ok: true };
 });
 /** Restart JARVIS itself - how a new sign-in is picked up everywhere at once. */
-ipcMain.handle('jarvis:restartApp', () => {
-  log('restarting at the window\'s request');
-  setTimeout(async () => { await shutdownChildren(); app.relaunch({ args: [...process.argv.slice(1), '--restarted'] }); app.exit(0); }, 400);
-  return { ok: true, restarting: true };
-});
+ipcMain.handle('jarvis:restartApp', () => restartJarvis('restarting at the window\'s request'));
 ipcMain.handle('jarvis:start', async (_e, opts) => {
+  // No workspace, no session: Claude Code always works IN a folder, and there is no default.
+  if (!loadConfig().cwd) { toWindow({ kind: 'status', state: 'closed' }); return { ok: false, error: NO_WORKSPACE, needsWorkspace: true }; }
   // Starting with nobody signed in would only fail inside the session; say so here instead.
   if (fs.existsSync(claudeExe())) {
     noteAccount(await authStatus(claudeExe()));
@@ -1143,21 +1439,30 @@ ipcMain.handle('jarvis:setMode', (_e, mode) => {
 ipcMain.handle('jarvis:setEffort', (_e, level) => sessionFor(_e).setEffort(level));
 ipcMain.handle('jarvis:setThinking', (_e, on) => sessionFor(_e).setThinking(on));
 ipcMain.handle('jarvis:context', (_e, detail) => sessionFor(_e).refreshContext(detail === 'full' ? 'full' : 'summary'));
+// Conversations belong to a folder (Claude Code keeps them per project). With no workspace
+// there are none to show - never another folder's.
 ipcMain.handle('jarvis:sessions', async () => {
-  try { return await listRecent(loadConfig().cwd); }
+  const { cwd } = loadConfig();
+  if (!cwd) return [];
+  try { return await listRecent(cwd); }
   catch (e) { log('listSessions failed', e?.message || e); return []; }
 });
 ipcMain.handle('jarvis:history', async (_e, id) => {
-  try { return await loadHistory(loadConfig().cwd, id); }
+  const { cwd } = loadConfig();
+  if (!cwd) return [];
+  try { return await loadHistory(cwd, id); }
   catch (e) { log('history failed', e?.message || e); return []; }
 });
 ipcMain.handle('jarvis:findSessions', async (_e, text) => {
-  try { return await findSessions(loadConfig().cwd, text); }
+  const { cwd } = loadConfig();
+  if (!cwd) return [];
+  try { return await findSessions(cwd, text); }
   catch (e) { log('findSessions failed', e?.message || e); return []; }
 });
 /** Permanently delete a session. This app's own conversation is closed first; the window then starts a new one. */
 ipcMain.handle('jarvis:deleteSession', async (_e, id) => {
   if (!isSessionId(id)) return { ok: false, error: 'That is not a session id.' };
+  if (!loadConfig().cwd) return { ok: false, error: NO_WORKSPACE }; // never another folder's conversation
   const own = !!session && session.sessionId === id;
   try {
     if (own) session.close();
@@ -1174,6 +1479,7 @@ ipcMain.handle('jarvis:renameSession', async (_e, id, title) => {
   const t = typeof title === 'string' ? title.replace(/\s+/g, ' ').trim() : '';
   if (!isSessionId(id)) return { ok: false, error: 'That is not a session id.' };
   if (!t || t.length > 100) return { ok: false, error: 'A title is 1 to 100 characters.' };
+  if (!loadConfig().cwd) return { ok: false, error: NO_WORKSPACE };
   try {
     if (session && session.sessionId === id && session.canRenameLive) {
       const r = session.send(`/rename ${t}`);
@@ -1451,17 +1757,43 @@ ipcMain.handle('jarvis:devices', async () => {
     return { ok: true, list: list.map((d) => ({ ...d, popped: phoneWindows.has(d.serial) })) };
   } catch (e) { log('listDevices failed', e?.message || e); return { ok: false, error: String(e?.message || e), list: [] }; }
 });
-// Dart analysis (analysis.mjs): what is wrong with an app, for the Devices view. Reading only.
-ipcMain.handle('jarvis:analyze', async (_e, appKey) => {
-  if (typeof appKey !== 'string' || !FLUTTER_APPS[appKey]) return { ok: false, error: 'Unknown app.' };
-  const r = await analyzeApp(loadConfig().cwd, appKey, { log });
-  if (r.ok) log('dart analyze', appKey, `${r.counts.error} errors, ${r.counts.warning} warnings, ${r.counts.hint} hints`, `${r.ms} ms`);
+/**
+ * A discovered project of the active workspace, by its id, with its folder checked again
+ * against the workspace at the moment of use (project-providers.mjs, projectDir) - or null.
+ * Every Run, Analyse and Stop goes through here: nothing acts on a name from the window.
+ */
+async function resolveProject(key, accept) {
+  const ws = activeWs();
+  if (!ws || typeof key !== 'string' || !key || key.length > 400) return null;
+  const p = await projectIndex.find(ws, key);
+  if (!p || (accept && !accept(p))) return null;
+  const dir = projectDir(ws.path, p);
+  return dir ? { project: p, dir, ws } : null;
+}
+const isDartProject = (p) => p.types.includes('dart') && p.role !== 'platform';
+const isFlutterApp = (p) => p.types.includes('flutter') && !!p.meta?.app && p.role !== 'platform';
+const runTarget = (hit) => ({ key: hit.project.id, name: hit.project.displayName || hit.project.name, dir: hit.dir, rel: hit.project.relativePath });
+
+// Dart analysis (analysis.mjs): what is wrong with a project, for the Devices view. Reading only.
+ipcMain.handle('jarvis:analyze', async (_e, key) => {
+  // dart analyze can load analyzer plugins the project names: the project's code, so trust first.
+  if (!workspaceTrusted()) return { ok: false, restricted: true, error: RESTRICTED_RUN };
+  const hit = await resolveProject(key, isDartProject);
+  if (!hit) return { ok: false, error: 'That project is not in this workspace.' };
+  const r = await analyzeApp(runTarget(hit), { log });
+  if (r.ok) log('dart analyze', key, `${r.counts.error} errors, ${r.counts.warning} warnings, ${r.counts.hint} hints`, `${r.ms} ms`);
   return r;
 });
-ipcMain.handle('jarvis:analyzeCancel', (_e, appKey) => (typeof appKey === 'string' ? cancelAnalysis(appKey) : false));
-ipcMain.handle('jarvis:flutterApps', () => {
-  const { cwd } = loadConfig();
-  return Object.entries(FLUTTER_APPS).map(([key, a]) => ({ key, name: a.name, dir: a.dir, found: fs.existsSync(path.join(cwd, a.dir, 'pubspec.yaml')) }));
+ipcMain.handle('jarvis:analyzeCancel', (_e, key) => (typeof key === 'string' ? cancelAnalysis(key) : false));
+/** The workspace's Flutter APPS (what a phone can run), discovered - never a fixed list. */
+ipcMain.handle('jarvis:flutterApps', async () => {
+  const ws = activeWs();
+  return ws ? flutterApps((await projectIndex.get(ws)).projects || []) : [];
+});
+/** Every Dart and Flutter project, packages too - what Dart analysis can look at. */
+ipcMain.handle('jarvis:dartProjects', async () => {
+  const ws = activeWs();
+  return ws ? dartProjects((await projectIndex.get(ws)).projects || []) : [];
 });
 ipcMain.handle('jarvis:mirror', async (_e, serial, on) => {
   if (!isSerial(serial)) return { ok: false, error: 'Not a device serial.' };
@@ -1479,8 +1811,13 @@ ipcMain.handle('jarvis:resetVideo', (_e, serial) => (isSerial(serial) ? resetVid
 ipcMain.on('jarvis:deviceInput', (_e, serial, ev) => {
   if (isSerial(serial)) sendInput(serial, ev).catch((err) => log('device input failed', serial, err?.message || err));
 });
-ipcMain.handle('jarvis:flutterRun', (_e, serial, app) => {
-  try { return { ok: true, run: flutterRun(loadConfig().cwd, serial, app, send) }; }
+ipcMain.handle('jarvis:flutterRun', async (_e, serial, key) => {
+  if (!isSerial(serial)) return { ok: false, error: 'Not a device serial.' };
+  // A run builds the app - its Gradle scripts and plugins included: the project's own code.
+  if (!workspaceTrusted()) return { ok: false, restricted: true, error: RESTRICTED_RUN };
+  const hit = await resolveProject(key, isFlutterApp);
+  if (!hit) return { ok: false, error: 'That app is not in this workspace.' };
+  try { return { ok: true, run: flutterRun(runTarget(hit), serial, send) }; }
   catch (e) { return { ok: false, error: String(e?.message || e) }; }
 });
 ipcMain.handle('jarvis:flutterCmd', (_e, serial, cmd) => (isSerial(serial) ? flutterCommandFor(serial, cmd) : { ok: false, error: 'Not a device serial.' }));
@@ -1596,6 +1933,8 @@ ipcMain.handle('jarvis:phoneWifi', async (_e, serial) => {
 // key afresh, so a reply can never belong to a repository other than the one asked about.
 // No model is involved: a status costs zero tokens.
 ipcMain.handle('jarvis:gitRepos', async () => {
+  // A restricted workspace runs no Git (workspace.mjs): said once, here, not per repository.
+  if (loadConfig().cwd && !workspaceTrusted()) return { ok: false, restricted: true, error: GIT_RESTRICTED, list: [] };
   try { return { ok: true, list: await allRepoStates(loadConfig().cwd) }; }
   catch (e) { log('gitRepos failed', e?.message || e); return { ok: false, error: String(e?.message || e), list: [] }; }
 });
@@ -1628,6 +1967,26 @@ ipcMain.handle('jarvis:gitUnstageAll', async (_e, key) => {
   try { return await unstageAll(loadConfig().cwd, key); }
   catch (e) { log('gitUnstageAll failed', key, e?.message || e); return { ok: false, error: String(e?.message || e) }; }
 });
+/**
+ * What the git assistant is told about where it is - from discovery, never a fixed story:
+ * the workspace's name, this repository's name and the kinds of code in it, and up to eight
+ * neighbouring projects by name and kind. Plus the repository's own case-code prefix, if the
+ * person set one. Short on purpose: it rides along with every request.
+ */
+async function gitContextFor(key, repo) {
+  const ws = activeWs();
+  const where = { repo: repo?.nickname || repo?.name || key };
+  if (!ws || key === '@app') return { where, casePrefix: null };
+  const all = (await projectIndex.get(ws).catch(() => null))?.projects || [];
+  const inside = (p, rel) => rel === '.' || p.relativePath === rel || p.relativePath.startsWith(`${rel}/`);
+  const kindsOf = (list) => [...new Set(list.filter((p) => p.role !== 'platform').flatMap((p) => p.types).filter((t) => t !== 'git'))].map((t) => TYPE_LABEL[t] || t);
+  const related = key === '.' ? [] : all
+    .filter((p) => p.parentId === null && !inside(p, key))
+    .map((p) => ({ name: p.displayName || p.name, kinds: kindsOf(all.filter((q) => inside(q, p.relativePath))) }));
+  const prefix = projectSettings(ws, key).casePrefix;
+  return { where: { workspace: ws.name, ...where, kinds: kindsOf(all.filter((p) => inside(p, key))), related }, casePrefix: prefix || null };
+}
+
 // Optional JARVIS assistance. EVERY handler here exists because a person pressed an
 // assistance button; nothing in Phases 1-7 calls them, so normal Source Control still
 // costs zero model tokens. An assistance failure never touches git - these only return text.
@@ -1648,7 +2007,7 @@ ipcMain.handle('jarvis:gitAssist', async (_e, key, action, opts, id) => {
       context.secrets.length ? `[redacted: ${context.secrets.join(', ')}]` : '');
     const r = await assist({
       cwd, exe: claudeExe(), log, id: id || null, action, context,
-      extra: { repoName: context.repo.name, path: (opts || {}).path, meta: context.meta },
+      extra: { repoName: context.repo.name, path: (opts || {}).path, meta: context.meta, ...(await gitContextFor(key, context.repo)) },
     });
     log('git assist finished', key, action, r.ok ? `ok (${(r.text || '').length} chars)` : `failed: ${(r.error || '').slice(0, 160)}`);
     return { ...r, key, scopeInfo: { files: context.files, lines: context.lines, label: context.scope, secrets: context.secrets, condensed: context.condensed || null } };
@@ -1851,10 +2210,22 @@ ipcMain.handle('jarvis:phoneTest', async (_e, serial) => {
 });
 
 // ---------------------------------------------------------------- IPC: web apps (ASP.NET)
-ipcMain.handle('jarvis:webApps', () => listWebApps(loadConfig().cwd));
+// The workspace's sites and APIs, discovered (project-providers.mjs, webAppsFrom): any .NET
+// project on the Web SDK. A warning shown before Run is the person's own, per project.
+async function webAppList() {
+  const ws = activeWs();
+  if (!ws) return [];
+  return webAppsFrom(ws.path, (await projectIndex.get(ws)).projects || []);
+}
+ipcMain.handle('jarvis:webApps', async () => listWebApps(await webAppList()));
 ipcMain.handle('jarvis:webRun', async (_e, key, watch) => {
+  // A run builds the project - its MSBuild targets included: the project's own code.
+  if (!workspaceTrusted()) return { ok: false, restricted: true, error: RESTRICTED_RUN };
   try {
-    const run = await webRun(loadConfig().cwd, key, { watch: watch !== false }, send);
+    const app = typeof key === 'string' ? (await webAppList()).find((a) => a.key === key) : null;
+    if (!app) return { ok: false, error: 'That project is not in this workspace.' };
+    const dotnet = (await getCapabilities()).find((c) => c.id === 'dotnet' && c.installed)?.where || null;
+    const run = await webRun(app, { watch: watch !== false, dotnet }, send);
     log('web app started', key, watch !== false ? '(dotnet watch)' : '(dotnet run)');
     return { ok: true, run };
   } catch (e) {
@@ -1909,9 +2280,28 @@ ipcMain.handle('jarvis:ghRuns', (_e, key, sha) => github.runs(key, sha ?? null))
 ipcMain.handle('jarvis:ghCancel', (_e, key) => github.cancel(key));
 
 // ---------------------------------------------------------------- IPC: tasks (ClickUp + draft)
-ipcMain.handle('jarvis:clickup', () => readClickUp(userDir));
+// ClickUp is optional, and whose tasks it shows is the person's own setting - a name as it
+// appears in ClickUp. Never guessed; a board fetched for a different name is not shown as theirs.
+const clickupMember = () => cleanMember(loadConfig().clickup?.member);
+ipcMain.handle('jarvis:clickup', () => {
+  const member = clickupMember();
+  const c = readClickUp(userDir);
+  const mine = !!member && c.member === member;
+  return { ...(mine ? c : { tasks: [], fetchedAt: null }), member, cachedFor: !mine && c.fetchedAt ? c.member || null : null };
+});
+ipcMain.handle('jarvis:clickupMember', (_e, name) => {
+  const raw = String(name ?? '').trim();
+  if (!raw) { saveConfig({ clickup: { ...(loadConfig().clickup || {}), member: null } }); return { ok: true, member: null }; }
+  const member = cleanMember(raw);
+  if (!member) return { ok: false, error: 'Use your name as it appears in ClickUp: letters, digits, spaces, dots, dashes.' };
+  saveConfig({ clickup: { ...(loadConfig().clickup || {}), member } });
+  log('clickup: tasks will be read for the member set in Settings');
+  return { ok: true, member };
+});
 ipcMain.handle('jarvis:draftTasks', () => {
-  try { return readDraft(loadConfig().cwd); }
+  const { cwd } = loadConfig();
+  if (!cwd) return { available: false, sections: [] };
+  try { return readDraft(cwd); }
   catch (e) { log('readDraft failed', e?.message || e); return { available: false, sections: [] }; }
 });
 let syncing = null;
@@ -1919,16 +2309,18 @@ ipcMain.handle('jarvis:clickupSync', () => {
   // One sync at a time; a second click joins the one already running.
   if (!syncing) {
     log('clickup sync requested');
-    syncing = syncClickUp({ cwd: loadConfig().cwd, exe: claudeExe(), userDir, log })
+    syncing = syncClickUp({ cwd: loadConfig().cwd || app.getPath('home'), exe: claudeExe(), userDir, log, member: clickupMember() })
+      .then((r) => { clickupLastError = r?.ok || r?.needsMember ? null : (r?.error || 'The sync did not finish.'); return r; })
       .finally(() => { syncing = null; });
   }
   return syncing;
 });
 
 // ---------------------------------------------------------------- IPC: workspace (read-only)
-ipcMain.handle('jarvis:stats', () => systemStats(loadConfig().cwd));
+// The disk gauge is the workspace's drive; with no workspace, the home folder's.
+ipcMain.handle('jarvis:stats', () => systemStats(loadConfig().cwd || app.getPath('home')));
 ipcMain.handle('jarvis:online', () => net.isOnline());
-ipcMain.handle('jarvis:savedEffort', (_e, model) => savedEffort(loadConfig().cwd, model));
+ipcMain.handle('jarvis:savedEffort', (_e, model) => savedEffort(loadConfig().cwd || app.getPath('home'), model));
 
 let wsCache = null;
 let wsAt = 0;
@@ -1937,10 +2329,15 @@ ipcMain.handle('jarvis:workspace', async (_e, force) => {
   if (wsBusy) return wsBusy;
   if (!force && wsCache && Date.now() - wsAt < 20000) return wsCache;
   const { cwd } = loadConfig();
+  if (!cwd) return { repos: [], knowledge: { available: false }, issues: { available: false, list: [] }, focus: { available: false, items: [] }, at: Date.now() };
   wsBusy = (async () => {
     const [repos, knowledge, issues, focus] = await Promise.all([
       gitStatus(cwd).catch((e) => { log('git status failed', e?.message || e); return []; }),
-      knowledgeStatus(cwd).catch((e) => ({ available: false, error: String(e?.message || e) })),
+      // The knowledge check RUNS a script from the workspace (.claude/knowledge/scan-status.py):
+      // only in a workspace the person has trusted, never in a restricted one.
+      workspaceTrusted()
+        ? knowledgeStatus(cwd).catch((e) => ({ available: false, error: String(e?.message || e) }))
+        : Promise.resolve({ available: false, restricted: true }),
       openIssues(cwd).catch(() => ({ available: false, list: [] })),
       handoffFocus(cwd).catch(() => ({ available: false, items: [] })),
     ]);
@@ -1963,7 +2360,10 @@ ipcMain.handle('jarvis:search', async (_e, q) => {
   try { return await searchDocs(loadConfig().cwd, q); }
   catch (e) { log('search failed', e?.message || e); return []; }
 });
-ipcMain.handle('jarvis:roots', () => Object.fromEntries(Object.entries(docRoots(loadConfig().cwd)).map(([k, v]) => [k, v.label])));
+ipcMain.handle('jarvis:roots', () => {
+  const { cwd } = loadConfig();
+  return cwd ? Object.fromEntries(Object.entries(docRoots(cwd)).map(([k, v]) => [k, v.label])) : {};
+});
 /** Open a browsable document in the default editor (same folder checks as reading it). */
 ipcMain.handle('jarvis:openDoc', async (_e, root, rel) => {
   try { const d = await readDoc(loadConfig().cwd, root, rel); return (await shell.openPath(d.full)) === ''; }
@@ -2017,22 +2417,53 @@ ipcMain.handle('jarvis:fileText', async (_e, rel) => {
 /** Hand a workspace file (or folder) to VS Code; fall back to whatever Windows uses. */
 ipcMain.handle('jarvis:openInCode', async (_e, rel, line) => {
   const { cwd } = loadConfig();
+  if (!cwd) return { ok: false, error: NO_WORKSPACE };
   const r = await openInVsCode(cwd, rel, Number.isInteger(line) ? line : undefined);
-  if (r.ok) return r;
+  if (r.ok || r.outside) return r;
   log('open in VS Code failed', rel, r.error);
-  const full = path.resolve(cwd, String(rel || ''));
-  if (full.startsWith(path.resolve(cwd))) {
-    const err = await shell.openPath(full);
-    if (!err) return { ok: true, fallback: true };
-  }
-  return r;
+  const full = insideDir(cwd, String(rel || ''));
+  if (!full || !fs.existsSync(full) || !(await reallyInside(cwd, full))) return r;
+  // Without VS Code: a folder opens in Explorer, a plain document or picture in its usual
+  // app (files.mjs, OPENABLE). Anything else - a script, a program, a shortcut, a type this
+  // PC may run - is only shown in Explorer.
+  let isDir = false;
+  try { isDir = fs.statSync(full).isDirectory(); } catch { /* gone: shown below */ }
+  if (!isDir && !OPENABLE.test(full)) { shell.showItemInFolder(full); return { ok: true, fallback: true, revealed: true }; }
+  const err = await shell.openPath(full);
+  return err ? r : { ok: true, fallback: true };
 });
 ipcMain.handle('jarvis:revealFile', (_e, rel) => {
   const { cwd } = loadConfig();
-  const full = path.resolve(cwd, String(rel || ''));
-  if (!full.startsWith(path.resolve(cwd))) return false;
+  const full = cwd ? insideDir(cwd, String(rel || '')) : null;
+  if (!full) return false;
   shell.showItemInFolder(full);
   return true;
+});
+
+// ---------------------------------------------------------------- every window: our pages only
+// The preload gives a page the whole window.jarvis bridge, so only JARVIS's own pages may
+// ever hold it. For EVERY web contents - the main window, side chats, phone windows, and any
+// future one - a link opens in the real browser (http/https only), a new window is never
+// made, a navigation away from the page is refused, and <webview> is never attached. One
+// guard, here, so a window that forgets its own (side chats once did) is still covered.
+const OWN_PAGES = new Set(['index.html', 'phone.html'].map((f) => path.join(SRC, 'renderer', f).toLowerCase()));
+const isOwnPage = (url) => {
+  try { const u = new URL(url); return u.protocol === 'file:' && OWN_PAGES.has(fileURLToPath(u).toLowerCase()); } catch { return false; }
+};
+const openOutside = (url) => {
+  if (!/^https?:\/\//i.test(String(url))) { log('refused to open a non-web link'); return; }
+  if (process.env.JARVIS_CAPTURE) { log('capture: would open a link'); return; }
+  shell.openExternal(url);
+};
+app.on('web-contents-created', (_e, contents) => {
+  contents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' }; });
+  contents.on('will-navigate', (e, url) => {
+    if (url === contents.getURL() || isOwnPage(url)) return;
+    e.preventDefault();
+    openOutside(url);
+  });
+  contents.on('will-redirect', (e, url) => { if (!isOwnPage(url)) e.preventDefault(); });
+  contents.on('will-attach-webview', (e) => e.preventDefault());
 });
 
 // ---------------------------------------------------------------- lifecycle

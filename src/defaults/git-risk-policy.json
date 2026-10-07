@@ -1,0 +1,101 @@
+{
+  "_about": "JARVIS's built-in git risk policy. Used only when a workspace has no .claude/jarvis/git-risk-policy.json of its own - a workspace's own file always takes precedence, and a workspace file that cannot be read still fails closed. Conservative on purpose: everyday work (stage, commit, branch, switch, fetch, pull, an ordinary push, unstage, undo of an unpushed commit) runs; anything that can throw work away or rewrite shared history asks first; anything not listed is treated as destructive.",
+  "version": 1,
+  "unknownOperation": { "ui": "destructive" },
+  "operations": {
+    "status": { "level": "read" },
+    "diff": { "level": "read" },
+    "log": { "level": "read" },
+    "show": { "level": "read" },
+    "rev-parse": { "level": "read" },
+    "ls-files": { "level": "read" },
+    "for-each-ref": { "level": "read" },
+    "symbolic-ref": { "level": "read" },
+    "remote": { "level": "read" },
+    "fetch": { "level": "mutate" },
+    "add": { "level": "mutate" },
+    "mv": { "level": "mutate" },
+    "merge": { "level": "mutate" },
+    "cherry-pick": { "level": "mutate" },
+    "revert": { "level": "mutate" },
+    "commit": {
+      "level": "mutate",
+      "rules": [
+        { "when": { "flagsAny": ["--amend"] }, "level": "destructive", "gate": "always", "reason": "`git commit --amend` rewrites the last commit" }
+      ]
+    },
+    "restore": {
+      "level": "destructive",
+      "gate": "dirty",
+      "rules": [
+        { "when": { "flagsAny": ["--worktree", "-W"] }, "level": "destructive", "gate": "dirty", "reason": "`git restore` on the working tree throws away uncommitted changes" },
+        { "when": { "flagsAny": ["--staged", "-S"] }, "level": "mutate" }
+      ]
+    },
+    "reset": {
+      "level": "mutate",
+      "rules": [
+        { "when": { "flagsAny": ["--hard", "--merge", "--keep"] }, "level": "destructive", "gate": "dirty", "reason": "a hard `git reset` throws away uncommitted changes" },
+        { "when": { "flagsAny": ["--soft"] }, "level": "mutate" }
+      ]
+    },
+    "clean": { "level": "destructive", "gate": "always" },
+    "checkout": {
+      "level": "mutate",
+      "rules": [
+        { "when": { "hasPathSeparator": true }, "level": "destructive", "gate": "dirty", "reason": "`git checkout -- <path>` throws away that file's changes" },
+        { "when": { "flagsAny": ["-f", "--force"] }, "level": "destructive", "gate": "dirty", "reason": "`git checkout --force` throws away uncommitted changes" }
+      ]
+    },
+    "switch": {
+      "level": "mutate",
+      "rules": [
+        { "when": { "flagsAny": ["--discard-changes", "-f", "--force"] }, "level": "destructive", "gate": "dirty", "reason": "`git switch` that discards changes throws away uncommitted work" }
+      ]
+    },
+    "branch": {
+      "level": "mutate",
+      "rules": [
+        { "when": { "flagsAny": ["-D", "--force", "-f"] }, "level": "destructive", "gate": "always", "reason": "a forced branch delete can lose commits that are on no other branch" }
+      ]
+    },
+    "stash": {
+      "level": "destructive",
+      "gate": "always",
+      "rules": [
+        { "when": { "firstPlainIn": ["drop", "clear"] }, "level": "destructive", "gate": "always", "reason": "`git stash {arg}` deletes stashed work for good" },
+        { "when": { "firstPlainIn": ["apply", "pop", "list", "show", "branch"] }, "level": "mutate" }
+      ]
+    },
+    "pull": {
+      "level": "mutate",
+      "rules": [
+        { "when": { "flagsAny": ["--force", "-f"] }, "level": "destructive", "gate": "always", "reason": "a forced `git pull` can overwrite local work" }
+      ]
+    },
+    "push": {
+      "level": "mutate",
+      "rules": [
+        { "when": { "flagsAny": ["--force", "-f", "--force-with-lease", "--mirror", "--delete", "-d", "--prune"] }, "level": "destructive", "gate": "always", "reason": "`git push` with that option can delete or overwrite work on the remote" }
+      ]
+    },
+    "tag": {
+      "level": "mutate",
+      "rules": [
+        { "when": { "flagsAny": ["-d", "--delete", "-f", "--force"] }, "level": "destructive", "gate": "always", "reason": "deleting or moving a tag can break releases that point at it" }
+      ]
+    },
+    "rm": {
+      "level": "destructive",
+      "gate": "dirty",
+      "rules": [
+        { "when": { "flagsAny": ["--cached"] }, "level": "mutate" }
+      ]
+    },
+    "rebase": { "level": "destructive", "gate": "always" },
+    "gc": { "level": "destructive", "gate": "always" },
+    "prune": { "level": "destructive", "gate": "always" },
+    "filter-branch": { "level": "destructive", "gate": "always" },
+    "update-ref": { "level": "destructive", "gate": "always" }
+  }
+}

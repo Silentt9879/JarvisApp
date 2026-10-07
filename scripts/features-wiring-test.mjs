@@ -118,7 +118,7 @@ await check('health reads the signed-in account, the folder, and the policy file
   assert.equal(by.policy.state, 'ok', 'the policy file was found in the workspace');
   fs.rmSync(path.join(T, '.claude'), { recursive: true, force: true });
   const h2 = await call('health:get');
-  assert.equal(Object.fromEntries(h2.checks.map((c) => [c.id, c])).policy.state, 'warn');
+  assert.equal(Object.fromEntries(h2.checks.map((c) => [c.id, c])).policy.state, 'off', 'missing: the safe confirm-everything default, shown as information');
 });
 
 // ------------------------------------------------------------------ the phone web app

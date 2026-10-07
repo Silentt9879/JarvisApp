@@ -80,7 +80,7 @@
         document.body.dataset.status = e.state;
         renderSysStatus();
         renderMini();
-        if (e.state === 'closed') JV.feed({ key: 'session', level: 'err', title: 'Session offline', sub: 'Send a message to reconnect', action: 'chat' });
+        if (e.state === 'closed' && state.info?.workspace) JV.feed({ key: 'session', level: 'err', title: 'Session offline', sub: 'Send a message to reconnect', action: 'chat' });
         break;
       case 'init':
         JV.feed({ key: 'session', level: 'live', title: `Session online · ${JV.prettyModel(e.model)}`, sub: `Claude Code v${e.version}`, action: 'core' });
@@ -198,13 +198,17 @@
     const reasons = [];
     let level = 'ok';
     let word = 'All systems normal';
-    if (state.status === 'closed' || state.status === 'offline') { level = 'bad'; word = 'Offline'; reasons.push('The Claude Code session is not running.'); }
+    // No workspace yet is a first step to take, not a failure: no session runs without a folder.
+    const noWorkspace = state.info && !state.info.workspace;
+    if (noWorkspace) { level = 'info'; word = 'Choose a workspace'; reasons.push('JARVIS needs the folder that holds your projects before Claude can start.'); }
+    else if (state.status === 'closed' || state.status === 'offline') { level = 'bad'; word = 'Offline'; reasons.push('The Claude Code session is not running.'); }
     else if (state.status === 'starting') { level = 'info'; word = 'Connecting'; }
     else if (state.pendingPrompts > 0 || state.status === 'waiting') { level = 'warn'; word = 'Awaiting you'; reasons.push('JARVIS is waiting for your decision.'); }
     const bad = state.mcp.filter((m) => m.status === 'failed' || m.status === 'needs-auth');
     if (bad.length) reasons.push(`${bad.map((m) => m.name).join(', ')}: not connected.`);
+    // Only a workspace that HAS a knowledge index can have a stale one; most have none at all.
     const k = state.workspace?.knowledge;
-    if (k && k.state !== 'current') reasons.push(`Knowledge is ${k.state === 'stale' ? 'stale' : k.state}.`);
+    if (k?.available && k.state && k.state !== 'current') reasons.push(`Knowledge is ${k.state === 'stale' ? 'stale' : k.state}.`);
     if (level === 'ok' && reasons.length) { level = 'warn'; word = 'Needs attention'; }
     if (level === 'ok' && state.status === 'working') word = 'Working';
     const box = $('sysStatus');
@@ -244,7 +248,7 @@
     if (q.length < 2) { sRes.hidden = true; return; }
     const ql = q.toLowerCase();
     const groups = [];
-    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['GitHub Desktop', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Notes', 'notes'], ['Agents', 'agents'], ['Workspace', 'workspace'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
+    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['GitHub Desktop', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Notes', 'notes'], ['Agents', 'agents'], ['Projects', 'workspace'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
       .filter(([n]) => n.toLowerCase().includes(ql)).map(([n, v]) => ({ title: n, sub: 'Go to view', run: () => JV.show(v) }));
     if (views.length) groups.push(['Views', views]);
     const sessions = state.sessions.filter((s) => s.title.toLowerCase().includes(ql)).slice(0, 6).map((s) => ({ title: s.title, sub: JV.ago(s.lastModified), run: () => JV.chat.resumeSession(s.id, s.title) }));
@@ -314,7 +318,7 @@
   // Digits are read from e.code, not e.key, so they work on any keyboard layout. None of
   // these combinations does anything by default in this window (it has no menu), so taking
   // them costs nothing - including while typing in the composer.
-  const PRIMARY = ['chat', 'command', 'source', 'notes', 'files'];
+  const PRIMARY = ['chat', 'command', 'source', 'notes', 'files', 'workspace'];
   document.addEventListener('keydown', (e) => {
     if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
     const key = e.key.toLowerCase();
@@ -365,48 +369,197 @@
   function closeSettings() {
     if ($('settingsVeil').hidden) return;
     $('settingsVeil').hidden = true;
-    $('wsConfirm').hidden = true;
     if (settingsReturn && document.contains(settingsReturn)) settingsReturn.focus();
     settingsReturn = null;
   }
   JV.openSettings = openSettings;
 
-  // ------------------------------------------------------------- workspace folder
-  // Picking a folder only proposes it; the switch happens on "Restart in this folder",
-  // because the session, the file index and every git read are tied to the folder they
-  // started in, so JARVIS restarts into the new one rather than half-switching.
-  let wsPending = null;
-  function renderWorkspace() {
-    const info = state.info || {};
-    $('wsPath').textContent = info.cwd || '–';
-    $('wsPath').title = info.cwd || '';
-    const missing = info.cwd && info.cwdExists === false;
-    $('wsPath').parentElement.classList.toggle('missing', !!missing);
-    $('wsPathNote').textContent = missing
-      ? 'This folder does not exist on this machine - choose the right one.'
-      : 'The folder JARVIS works in: its repos, CLAUDE.md and .claude settings.';
+  // ------------------------------------------------------------- workspaces
+  // The session, the file index, every git read, flutter run and dotnet watch are tied to the
+  // folder they started in - so a switch is never done in place: the choice is saved and
+  // JARVIS restarts into it (main.mjs, restartJarvis). Removing only forgets the folder.
+  async function renderWorkspace() {
+    const host = $('wsList');
+    let list = null;
+    try { list = await window.jarvis.workspaces(); } catch { /* shown below */ }
+    host.replaceChildren();
+    if (!list) { host.appendChild(el('li', 'ws-item muted', 'Could not read the list. Try again in a moment.')); return; }
+    if (!list.workspaces.length) {
+      host.appendChild(el('li', 'ws-item muted', 'No workspace yet. Add the folder that holds your projects - JARVIS looks through it and lists what it finds.'));
+    }
+    for (const w of list.workspaces) {
+      const li = el('li', `ws-item${w.active ? ' active' : ''}${w.exists ? '' : ' missing'}`);
+      const text = el('div', 'ws-path');
+      const title = el('b', null, w.name);
+      if (w.active) title.appendChild(el('span', 'ws-badge', 'Active'));
+      if (!w.trusted) { const b = el('span', 'ws-badge muted', 'Restricted'); b.title = 'Its .claude hooks, MCP servers and settings are not loaded, and JARVIS runs nothing from it - no scripts, builds, tests, apps or Git.'; title.appendChild(b); }
+      if (!w.exists) title.appendChild(el('span', 'ws-badge bad', 'Folder missing'));
+      text.appendChild(title);
+      const p = el('small', null, w.path);
+      p.title = w.path;
+      text.appendChild(p);
+      li.appendChild(text);
+      const acts = el('div', 'ws-acts');
+      if (!w.active) {
+        const go = el('button', 'btn btn-primary small', 'Switch');
+        go.type = 'button';
+        go.disabled = !w.exists;
+        go.title = w.exists ? `Restart JARVIS in ${w.name}` : 'The folder is not there - it cannot be opened.';
+        go.onclick = () => switchTo(w, go);
+        acts.appendChild(go);
+      }
+      const trust = el('button', 'btn small', w.trusted ? 'Restrict' : 'Trust…');
+      trust.type = 'button';
+      trust.title = w.trusted ? 'Stop loading this folder\'s own .claude hooks, MCP servers and settings' : 'Load this folder\'s own .claude hooks, MCP servers and settings';
+      trust.onclick = () => setTrust(w, !w.trusted);
+      acts.appendChild(trust);
+      const ren = el('button', 'btn small', 'Rename');
+      ren.type = 'button';
+      ren.onclick = () => renameWs(w);
+      acts.appendChild(ren);
+      const rem = el('button', 'btn btn-ghost small', 'Remove');
+      rem.type = 'button';
+      rem.title = 'Take it off this list. The folder and its files stay where they are.';
+      rem.onclick = () => removeWs(w, list);
+      acts.appendChild(rem);
+      li.appendChild(acts);
+      host.appendChild(li);
+    }
   }
-  $('wsChange').onclick = async () => {
-    const r = await window.jarvis.pickWorkspace();
-    if (!r?.ok) return;
-    if (r.path === state.info?.cwd) { $('wsConfirm').hidden = true; return; }
-    wsPending = r.path;
-    $('wsNew').textContent = r.path;
-    $('wsConfirm').hidden = false;
-    $('wsGo').focus();
+  JV.renderWorkspaces = renderWorkspace;
+
+  /** What a restart would stop, in words - asked fresh each time, so it is never stale. */
+  async function stoppingNote() {
+    const b = await window.jarvis.workspaceBusy().catch(() => null);
+    if (!b) return '';
+    const parts = [];
+    if (b.chat) parts.push('the reply JARVIS is working on');
+    if (b.flutter) parts.push(`${b.flutter} app${b.flutter === 1 ? '' : 's'} running on a phone`);
+    if (b.web) parts.push(`${b.web} web app${b.web === 1 ? '' : 's'} or API${b.web === 1 ? '' : 's'}`);
+    if (b.tasks) parts.push(`${b.tasks} build or test run${b.tasks === 1 ? '' : 's'}`);
+    return parts.length ? ` This stops ${parts.join(', ')}.` : '';
+  }
+
+  /**
+   * Trust a folder? Asked the first time JARVIS is to work in it, as Claude Code asks: a
+   * folder's .claude settings can run hooks and MCP servers - commands on this PC. Resolves
+   * true (trust), false (open it restricted) or null (do not switch).
+   */
+  async function askTrust(w, intro = '') {
+    if (w.trusted) return true;
+    const v = await JV.dialog({
+      title: `Do you trust ${w.name}?`,
+      wide: true,
+      body: [
+        intro ? JV.node('p', { class: 'dlg-text' }, intro) : null,
+        JV.node('p', { class: 'dlg-text' }, `A folder's own CLAUDE.md and .claude settings can include hooks and MCP servers - commands that run on this PC while Claude works there - and permission rules that let tools run without asking. Its builds, tests and Git configuration can run commands too.`),
+        JV.node('ul', { class: 'wiz-list' },
+          JV.node('li', null, JV.node('b', null, 'Trust it'), ' if it is your own code, or code you have reviewed: Claude works with all of its settings, as in a terminal, and JARVIS can build, test, run and use Git there.'),
+          JV.node('li', null, JV.node('b', null, 'Open restricted'), ' for anything else: Claude works with your own settings only, and JARVIS reads the folder but runs nothing from it - no scripts, builds, tests, apps or Git. You can trust it later in Settings.')),
+        JV.node('small', { class: 'dlg-hint' }, w.path),
+      ].filter(Boolean),
+      buttons: [
+        { label: 'Cancel', value: null },
+        { label: 'Open restricted', value: 'restricted' },
+        { label: 'Trust it', primary: true, value: 'trust' },
+      ],
+    });
+    return v === 'trust' ? true : v === 'restricted' ? false : null;
+  }
+  JV.askTrust = askTrust;
+
+  async function switchTo(w, btn) {
+    let trust;
+    if (!w.trusted) {
+      trust = await askTrust(w, `JARVIS restarts in ${w.name}.${await stoppingNote()}`);
+      if (trust === null) return;
+    } else {
+      const ok = await JV.confirm(`JARVIS restarts in ${w.name} (${w.path}). Conversations are kept per folder, so you will see that workspace's sessions.${await stoppingNote()}`, { title: `Switch to ${w.name}?`, yes: 'Switch and restart' });
+      if (!ok) return;
+    }
+    if (btn) btn.disabled = true;
+    const r = await window.jarvis.workspaceSelect(w.id, typeof trust === 'boolean' ? { trust } : {}).catch((err) => ({ ok: false, error: err.message }));
+    if (r?.restarting) { if (btn) btn.textContent = 'Restarting…'; return; }
+    if (btn) btn.disabled = false;
+    if (!r?.ok) JV.notify(r?.error || 'Could not switch. Try again in a moment.', { level: 'err', action: openSettings });
+  }
+  JV.switchWorkspace = switchTo;
+
+  async function setTrust(w, trusted) {
+    if (trusted && (await askTrust({ ...w, trusted: false }, w.active ? 'JARVIS restarts so the change applies everywhere.' : '')) !== true) return;
+    if (!trusted && !(await JV.confirm(`Claude will work in ${w.name} with your own settings only - its .claude hooks, MCP servers, agents and permission rules stop loading - and JARVIS will run nothing from it: no builds, tests, apps or Git.${w.active ? ' JARVIS restarts.' : ''}`, { title: `Restrict ${w.name}?`, yes: w.active ? 'Restrict and restart' : 'Restrict' }))) return;
+    const r = await window.jarvis.workspaceTrust(w.id, trusted).catch((err) => ({ ok: false, error: err.message }));
+    if (!r?.ok) { JV.notify(r?.error || 'Could not change that.', { level: 'err', action: openSettings }); return; }
+    if (!r.restarting) renderWorkspace();
+  }
+  JV.trustActiveWorkspace = async () => {
+    const list = await window.jarvis.workspaces().catch(() => null);
+    const w = list?.workspaces.find((x) => x.active);
+    if (w) await setTrust(w, true);
   };
-  $('wsCancel').onclick = () => { wsPending = null; $('wsConfirm').hidden = true; $('wsChange').focus(); };
-  // Same rule as the account buttons: keep the button before the await, and always give it back.
-  $('wsGo').onclick = async (e) => {
-    if (!wsPending) return;
-    const btn = e.currentTarget;
-    btn.disabled = true;
-    const r = await window.jarvis.setWorkspace(wsPending).catch((err) => ({ ok: false, error: err.message }));
-    if (r?.ok && r.restarting) { btn.textContent = 'Restarting…'; return; }
-    btn.disabled = false;
-    if (r?.unchanged) { $('wsConfirm').hidden = true; return; }
-    if (!r?.ok) JV.notify(r?.error || 'Could not switch to that folder. Try again in a moment.', { level: 'err', action: openSettings });
-  };
+
+  async function renameWs(w) {
+    const box = JV.node('input', { class: 'field', value: w.name, maxlength: '60', 'aria-label': 'Workspace name', autocomplete: 'off' });
+    const name = await JV.dialog({
+      title: 'Rename workspace',
+      body: [JV.field('Name', box, 'Only how JARVIS shows it. The folder keeps its own name.')],
+      buttons: [{ label: 'Cancel', value: null }, { label: 'Rename', primary: true, onClick: () => { if (!box.value.trim()) return false; return undefined; }, value: 'go' }],
+      onOpen: () => { box.focus(); box.select(); },
+    });
+    if (name !== 'go') return;
+    const r = await window.jarvis.workspaceRename(w.id, box.value).catch((err) => ({ ok: false, error: err.message }));
+    if (!r?.ok) JV.notify(r?.error || 'Could not rename it.', { level: 'err', action: openSettings });
+    renderWorkspace();
+  }
+
+  async function removeWs(w, list) {
+    const others = list.workspaces.filter((x) => x.id !== w.id);
+    const next = [...others].sort((a, b) => (b.lastOpened || 0) - (a.lastOpened || 0))[0];
+    const msg = w.active
+      ? `${w.name} is the active workspace. JARVIS restarts ${next ? `in ${next.name}` : 'with no workspace, and asks for one'}.${await stoppingNote()} The folder and its files stay exactly where they are.`
+      : `${w.name} comes off the list. The folder and its files stay exactly where they are, and you can add it again any time.`;
+    if (!(await JV.confirm(msg, { title: `Remove ${w.name}?`, yes: w.active ? 'Remove and restart' : 'Remove', danger: true }))) return;
+    const r = await window.jarvis.workspaceRemove(w.id).catch((err) => ({ ok: false, error: err.message }));
+    if (!r?.ok) JV.notify(r?.error || 'Could not remove it.', { level: 'err', action: openSettings });
+    if (!r?.restarting) renderWorkspace();
+  }
+
+  /** Pick a folder, add it, and offer to switch to it. Used by Settings, Health and onboarding. */
+  async function addWorkspaceFlow({ switchNow = null } = {}) {
+    const picked = await window.jarvis.pickWorkspace().catch(() => null);
+    if (!picked?.ok) return null;
+    const r = await window.jarvis.workspaceAdd(picked.path).catch((err) => ({ ok: false, error: err.message }));
+    if (!r?.ok) { JV.notify(r?.error || 'That folder cannot be a workspace.', { level: 'err', action: openSettings }); return null; }
+    await renderWorkspace();
+    if (r.duplicate) JV.notify(`${r.workspace.name} is already in your list.`, { level: 'info' });
+    const listed = (await window.jarvis.workspaces().catch(() => null))?.workspaces.find((x) => x.id === r.workspace.id) || { ...r.workspace, trusted: false };
+    if (listed.active) return r.workspace;
+    let trust;
+    if (!listed.trusted) {
+      // Switching now (or asked to): the trust question is the switch question.
+      if (switchNow === false) return r.workspace;
+      trust = await askTrust(listed, `Work in ${listed.name} now? JARVIS restarts there.${await stoppingNote()}`);
+      if (trust === null) return r.workspace;
+    } else {
+      const go = switchNow ?? await JV.confirm(`Work in ${listed.name} now? JARVIS restarts there.${await stoppingNote()}`, { title: 'Switch to it?', yes: 'Switch and restart', no: 'Not now' });
+      if (!go) return r.workspace;
+    }
+    const s = await window.jarvis.workspaceSelect(listed.id, typeof trust === 'boolean' ? { trust } : {}).catch(() => null);
+    if (s && !s.ok && !s.unchanged) JV.notify(s.error || 'Could not switch.', { level: 'err' });
+    return r.workspace;
+  }
+  JV.addWorkspace = addWorkspaceFlow;
+
+  $('wsAdd').onclick = () => addWorkspaceFlow();
+  $('wsRescan').onclick = (e) => JV.spinWhile(e.currentTarget, async () => {
+    const note = $('wsScanNote');
+    note.textContent = 'Looking…';
+    const r = await window.jarvis.projects(true).catch(() => null);
+    note.textContent = !r ? 'Could not look just now.'
+      : !r.ok ? (r.error || 'Could not look just now.')
+        : `Found ${r.projects.length} project${r.projects.length === 1 ? '' : 's'} in ${r.ms} ms${r.truncated ? ' (stopped at the folder limit)' : ''}.`;
+    JV.emit('projects_changed', r);
+  });
 
   // ------------------------------------------------------------- the account
   // Who JARVIS works as, with one button beside it - sign out when signed in, sign in when
@@ -531,9 +684,10 @@
   // event there: dismissing a dialog must never stop JARVIS mid-task.
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || $('settingsVeil').hidden) return;
+    // A dialog opened from Settings (rename, confirm) closes first, on its own.
+    if (document.querySelector('.dlg-veil')) return;
     e.preventDefault();
     e.stopPropagation();
-    if (!$('wsConfirm').hidden) { $('wsCancel').click(); return; }
     closeSettings();
   }, true);
   // Tab stays inside the dialog while it is open, as it would in a native one.
@@ -631,6 +785,12 @@
 
   // ------------------------------------------------------------- core mini panel (sidebar)
   function renderMini() {
+    if (state.info && !state.info.workspace) {
+      $('miniState').textContent = 'No workspace yet';
+      $('miniSub').textContent = 'Choose a folder to begin';
+      $('coreMini').className = 'core-mini s-starting';
+      return;
+    }
     const word = { starting: 'Connecting…', ready: 'Standing by', working: 'Working…', waiting: 'Awaiting you', closed: 'Offline', offline: 'Offline' }[state.status] || state.status;
     $('miniState').textContent = word;
     const running = [...state.agentActive.keys()];
@@ -679,6 +839,28 @@
     if (!document.hidden && wsDirty) { wsDirty = false; JV.refreshWorkspace(true); }
   });
 
+  /**
+   * No workspace chosen yet: there is no default folder to fall back on, so the chat says what
+   * JARVIS needs and offers the one button that gives it.
+   */
+  function showNoWorkspace() {
+    const w = $('welcome');
+    if (!w) return;
+    const b = el('button', 'btn btn-primary', 'Choose a workspace folder…');
+    b.type = 'button';
+    b.onclick = () => JV.addWorkspace({ switchNow: true });
+    const chips = el('div', 'suggestions');
+    chips.appendChild(b);
+    const img = el('img');
+    img.src = '../../build/icon.png';
+    img.alt = '';
+    w.replaceChildren(img, el('h1', null, 'Welcome to JARVIS.'),
+      el('p', null, 'Choose the folder that holds your projects. JARVIS looks through it, lists what it finds, and works with Claude Code inside it. Nothing in it is changed until you ask.'),
+      chips);
+    document.body.dataset.workspace = 'none';
+  }
+  JV.showNoWorkspace = showNoWorkspace;
+
   // ------------------------------------------------------------- boot
   (async () => {
     JV.fillIcons();
@@ -694,6 +876,8 @@
     JV.startOrb();
 
     state.info = await window.jarvis.info();
+    renderSysStatus();
+    renderMini();
     // The features of 2026-10-07. Each one sets itself up from what it needs; see its file.
     JV.applyPrefs?.();
     JV.initSettingsExtra?.();
@@ -710,7 +894,10 @@
     window.jarvis.claudeVersion().then((v) => { if (v && !state.version) { state.version = v; JV.emit('init', {}); } });
     if (!state.info.exeFound) JV.chatError('Claude Code was not found inside the app. Reinstall JARVIS.', false);
     state.sessionStart = Date.now();
-    await window.jarvis.start({});
+    if (state.info.workspace) {
+      $('welcomeLine').textContent = `JARVIS is ready in ${state.info.workspace.name}.`;
+      await window.jarvis.start({});
+    } else showNoWorkspace();
     JV.chat.loadSessions();
     JV.loadMemory();
     JV.loadDocCounts();

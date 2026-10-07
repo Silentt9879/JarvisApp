@@ -7,12 +7,16 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { NICKNAMES } from './workspace.mjs';
+import { repoDisplayName } from './workspace.mjs';
 
-/** Folders that hold build output or dependencies - never worth browsing. */
+/**
+ * Folders that hold build output or dependencies - never worth browsing. (`packages` is
+ * not one: in a monorepo, or a Flutter app with local packages, it is real source.)
+ */
 const SKIP = new Set([
   'node_modules', '.git', 'build', 'obj', 'bin', '.dart_tool', '.vs', 'dist', '.gradle',
-  'Pods', '.idea', 'coverage', '.next', 'packages', '.nuget', 'TestResults', '.angular',
+  'Pods', '.idea', 'coverage', '.next', '.nuget', 'TestResults', '.angular', 'target',
+  '__pycache__', '.venv', 'venv',
 ]);
 /** Text we can show. Anything else is left to VS Code. */
 const EXT = new Set([
@@ -23,11 +27,11 @@ const EXT = new Set([
 const MAX_FILES = 12000;
 const MAX_PREVIEW = 1024 * 1024; // 1 MB of text is far more than anyone reads in a panel
 
-/** Which part of the workspace a path belongs to, in the user's own words. */
+/** Which part of the workspace a path belongs to: its top folder, by the name shown for it. */
 function areaOf(rel) {
   const top = rel.split(/[\\/]/)[0];
   if (top === '.claude') return 'JARVIS';
-  return NICKNAMES[top] || (rel.includes(path.sep) ? top : 'Workspace root');
+  return rel.includes(path.sep) ? repoDisplayName(top, top) : 'Workspace root';
 }
 
 function walk(dir, base, out) {
@@ -61,16 +65,36 @@ export function listFiles(cwd) {
 }
 
 /** A path inside the workspace, or null. Keeps every read and open within it. */
-function inside(cwd, rel) {
-  if (typeof rel !== 'string' || !rel || rel.includes('\0')) return null;
+export function inside(cwd, rel) {
+  if (typeof cwd !== 'string' || !cwd || typeof rel !== 'string' || !rel || rel.includes('\0')) return null;
   const base = path.resolve(cwd);
   const full = path.resolve(base, rel);
-  return full === base || full.startsWith(base + path.sep) ? full : null;
+  const lower = full.toLowerCase();
+  const b = base.toLowerCase();
+  return lower === b || lower.startsWith(b.endsWith(path.sep) ? b : b + path.sep) ? full : null;
+}
+
+/**
+ * What "Open" may hand to Windows' own app for the file when VS Code is not there: plain
+ * documents and pictures, which their app shows and nothing more. An allowlist, not a list of
+ * dangers - a .sh opens in Git Bash and runs, a .py in Python, and no blocklist keeps up with
+ * every handler a PC has. Anything else is shown in Explorer instead, so a click on a
+ * project's file never runs it.
+ */
+export const OPENABLE = /\.(txt|md|markdown|json|jsonc|yaml|yml|toml|ini|cfg|conf|xml|csv|tsv|log|sql|png|jpe?g|gif|webp|bmp|ico|pdf)$/i;
+
+/** Through links too: a symlink or junction inside the workspace may not lead out of it. */
+export async function reallyInside(cwd, full) {
+  try {
+    const real = (await fsp.realpath(full)).toLowerCase();
+    const base = (await fsp.realpath(cwd)).toLowerCase();
+    return real === base || real.startsWith(base.endsWith(path.sep) ? base : base + path.sep);
+  } catch { return false; }
 }
 
 export async function readWorkspaceFile(cwd, rel) {
   const full = inside(cwd, rel);
-  if (!full) throw new Error('That file is outside the workspace.');
+  if (!full || !(await reallyInside(cwd, full))) throw new Error('That file is outside the workspace.');
   const st = await fsp.stat(full);
   if (!st.isFile()) throw new Error('That is not a file.');
   const clipped = st.size > MAX_PREVIEW;
@@ -117,12 +141,13 @@ export const hasVsCode = () => !!vscode() || process.platform !== 'win32';
  * the existing window, while `-g path:line` and the `code.cmd` wrapper both did nothing at
  * all. So there is no jump-to-line through this route; `line` is accepted and ignored.
  */
-export function openInVsCode(cwd, rel, line) {
+export async function openInVsCode(cwd, rel, line) {
   const full = inside(cwd, rel);
-  if (!full) return Promise.resolve({ ok: false, error: 'That path is outside the workspace.' });
-  if (!fs.existsSync(full)) return Promise.resolve({ ok: false, error: 'That file is no longer there.' });
+  if (!full) return { ok: false, error: 'That path is outside the workspace.' };
+  if (!fs.existsSync(full)) return { ok: false, error: 'That file is no longer there.' };
+  if (!(await reallyInside(cwd, full))) return { ok: false, outside: true, error: 'That path leads outside the workspace.' };
   const exe = vscode();
-  if (!exe) return Promise.resolve({ ok: false, error: 'VS Code was not found on this machine.' });
+  if (!exe) return { ok: false, error: 'VS Code was not found on this machine.' };
   const args = [full];
   const env = { ...process.env };
   // Code.exe is an Electron binary: with this set it would run as plain Node and reject

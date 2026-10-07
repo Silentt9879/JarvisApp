@@ -21,14 +21,9 @@ const APP_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SERVER_FILE = path.join(APP_ROOT, 'vendor', 'scrcpy-server-v3.3.3');
 const SERVER_ON_DEVICE = '/data/local/tmp/jarvis-scrcpy-server-v3.3.3.jar';
 
-/** The Flutter apps in the workspace (directory -> the user's nickname). */
-export const FLUTTER_APPS = {
-  customer: { dir: 'bantupanduv2', name: 'Customer App' },
-  advisor: { dir: 'advisorv2', name: 'Advisor App' },
-  driver: { dir: 'BantuRescueDriver_v2', name: 'Driver App' },
-  panel: { dir: 'BantuAutoPanel_v2', name: 'Panel App' },
-  merchant: { dir: 'bantu2u_merchant', name: 'Merchant App' },
-};
+// The Flutter apps a phone can run are DISCOVERED (project-discovery.mjs, project-providers.mjs's
+// flutterApps): main.mjs resolves one and hands flutterRun its folder. Nothing here knows any
+// project by name.
 
 const SERIAL = /^[A-Za-z0-9._:-]{1,80}$/;
 export const isSerial = (s) => typeof s === 'string' && SERIAL.test(s);
@@ -226,27 +221,34 @@ const runs = new Map(); // serial -> run
 const MAX_LOG = 1500;
 
 function runState(r) {
-  return { app: r.app, name: FLUTTER_APPS[r.app].name, state: r.state, since: r.since };
+  return { app: r.app, name: r.name, state: r.state, since: r.since };
 }
 
 function flutterCommand() {
   // flutter is a .bat on Windows: it has to go through cmd. Arguments are fixed words and
-  // a checked serial, never free text.
-  return process.platform === 'win32' ? ['cmd.exe', ['/d', '/s', '/c', 'flutter']] : ['flutter', []];
+  // a checked serial, never free text. cmd.exe by its full path: it starts in the app's
+  // folder, which Node would otherwise search for a cmd.exe first.
+  const cmd = path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'cmd.exe');
+  return process.platform === 'win32' ? [cmd, ['/d', '/s', '/c', 'flutter']] : ['flutter', []];
 }
 
-/** Start `flutter run` for one app on one phone. `emit(e)` gets flutter_state / flutter_log. */
-export function flutterRun(workspace, serial, appKey, emit) {
+/**
+ * Start `flutter run` for one app on one phone. `app` is a discovered Flutter app, already
+ * resolved and checked by the caller: { key, name, dir (its folder), rel (for messages) }.
+ * The folder is only ever the working directory - never part of the command line.
+ * `emit(e)` gets flutter_state / flutter_log.
+ */
+export function flutterRun(app, serial, emit) {
   if (!isSerial(serial)) throw new Error('Not a device serial.');
-  const app = FLUTTER_APPS[appKey];
-  if (!app) throw new Error('Unknown app.');
+  if (!app || typeof app.key !== 'string' || typeof app.dir !== 'string' || !path.isAbsolute(app.dir)) throw new Error('Unknown app.');
   if (runs.has(serial)) throw new Error(`${runs.get(serial).name} is already running on this phone - stop it first.`);
-  const cwd = path.join(workspace, app.dir);
-  if (!fs.existsSync(path.join(cwd, 'pubspec.yaml'))) throw new Error(`${app.name} (${app.dir}) was not found in the workspace.`);
+  const cwd = app.dir;
+  const where = app.rel || path.basename(cwd);
+  if (!fs.existsSync(path.join(cwd, 'pubspec.yaml'))) throw new Error(`${app.name} (${where}) was not found in the workspace.`);
 
   const [cmd, pre] = flutterCommand();
-  const proc = spawn(cmd, [...pre, 'run', '--machine', '-d', serial], { cwd, windowsHide: true, env: { ...process.env } });
-  const r = { serial, app: appKey, name: app.name, proc, state: 'building', since: Date.now(), appId: null, seq: 0, lines: [], pending: [], flush: null, emit };
+  const proc = spawn(cmd, [...pre, 'run', '--machine', '-d', serial], { cwd, windowsHide: true, env: { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' } });
+  const r = { serial, app: app.key, name: app.name, proc, state: 'building', since: Date.now(), appId: null, seq: 0, lines: [], pending: [], flush: null, emit };
   runs.set(serial, r);
   const state = (s, message) => { r.state = s; r.since = Date.now(); emit({ kind: 'flutter_state', serial, ...runState(r), message: message || null }); };
   const line = (text, level = 'info') => {
@@ -259,7 +261,7 @@ export function flutterRun(workspace, serial, appKey, emit) {
     // Batched: a build prints hundreds of lines a second.
     if (!r.flush) r.flush = setTimeout(() => { r.flush = null; const lines = r.pending.splice(0); if (lines.length) emit({ kind: 'flutter_log', serial, lines }); }, 150);
   };
-  state('building', `flutter run -d ${serial} in ${app.dir}`);
+  state('building', `flutter run -d ${serial} in ${where}`);
 
   const onMessage = (m) => {
     if (m.event) {
@@ -333,6 +335,11 @@ export function flutterCommandFor(serial, cmd) {
 
 export function flutterLog(serial) {
   return runs.get(serial)?.lines.slice(-600) || [];
+}
+
+/** How many flutter runs JARVIS has going - so a restart can say what it would stop. */
+export function runningFlutter() {
+  return runs.size;
 }
 
 function killTree(proc) {

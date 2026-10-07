@@ -13,7 +13,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
-import { FLUTTER_APPS } from './devices.mjs';
 
 export const MAX_PROBLEMS = 3000;      // sent to the window; the counts are always complete
 const TIMEOUT_MS = 5 * 60 * 1000;
@@ -83,11 +82,15 @@ export function findConflicts(problems, appDir, { readFile = (p) => fs.readFileS
 }
 
 // ------------------------------------------------------------------ running it
-const running = new Map(); // appKey -> { proc, promise }
+const running = new Map(); // project key -> { proc, promise }
 
-/** dart is a .bat on Windows: through cmd, with fixed words only - never free text. */
+/**
+ * dart is a .bat on Windows: through cmd, with fixed words only - never free text. cmd.exe by
+ * its full path: it starts in the project folder, which Node would otherwise search first.
+ */
 function dartCommand() {
-  return process.platform === 'win32' ? ['cmd.exe', ['/d', '/s', '/c', 'dart']] : ['dart', []];
+  const cmd = path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'cmd.exe');
+  return process.platform === 'win32' ? [cmd, ['/d', '/s', '/c', 'dart']] : ['dart', []];
 }
 
 function killTree(proc) {
@@ -97,16 +100,20 @@ function killTree(proc) {
 }
 
 /**
- * Analyse one app. Resolves - never throws - with the problems and their counts, or
- * { ok:false, error }. A second call for an app already being analysed joins the first.
+ * Analyse one Dart or Flutter project - any one discovery found, an app or a package. `app`
+ * is resolved and checked by the caller: { key (its stable id), name, dir (its folder),
+ * rel (its path in the workspace, which the window uses to open files) }. Resolves - never
+ * throws - with the problems and their counts, or { ok:false, error }. A second call for a
+ * project already being analysed joins the first.
  */
-export function analyzeApp(workspace, appKey, { spawnFn = spawn, log } = {}) {
-  const app = FLUTTER_APPS[appKey];
-  if (!app) return Promise.resolve({ ok: false, error: 'Unknown app.' });
+export function analyzeApp(app, { spawnFn = spawn, log } = {}) {
+  if (!app || typeof app.key !== 'string' || !app.key || typeof app.dir !== 'string' || !path.isAbsolute(app.dir)) return Promise.resolve({ ok: false, error: 'Unknown app.' });
+  const appKey = app.key;
   const had = running.get(appKey);
   if (had) return had.promise;
-  const appDir = path.join(workspace, app.dir);
-  if (!fs.existsSync(path.join(appDir, 'pubspec.yaml'))) return Promise.resolve({ ok: false, app: appKey, name: app.name, error: `${app.name} (${app.dir}) was not found in the workspace.` });
+  const appDir = app.dir;
+  const rel = app.rel || path.basename(appDir);
+  if (!fs.existsSync(path.join(appDir, 'pubspec.yaml'))) return Promise.resolve({ ok: false, app: appKey, name: app.name, error: `${app.name} (${rel}) was not found in the workspace.` });
 
   const started = Date.now();
   const entry = { proc: null, promise: null, cancelled: false };
@@ -122,10 +129,10 @@ export function analyzeApp(workspace, appKey, { spawnFn = spawn, log } = {}) {
       done = true;
       clearTimeout(timer);
       if (running.get(appKey) === entry) running.delete(appKey);
-      resolve({ app: appKey, name: app.name, dir: app.dir, at: Date.now(), ms: Date.now() - started, ...r });
+      resolve({ app: appKey, name: app.name, dir: rel, at: Date.now(), ms: Date.now() - started, ...r });
     };
     let proc;
-    try { proc = spawnFn(cmd, [...pre, 'analyze', '--format=machine'], { cwd: appDir, windowsHide: true, env: { ...process.env } }); }
+    try { proc = spawnFn(cmd, [...pre, 'analyze', '--format=machine'], { cwd: appDir, windowsHide: true, env: { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' } }); }
     catch (e) { finish({ ok: false, error: `Could not start dart: ${String(e?.message || e)}` }); return; }
     entry.proc = proc;
     timer = setTimeout(() => { killTree(proc); finish({ ok: false, error: 'The analysis took more than five minutes and was stopped.' }); }, TIMEOUT_MS);

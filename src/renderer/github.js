@@ -1,4 +1,4 @@
-/* JARVIS window - Source Control: the GitHub tab (P-009 Phase 9). READ-ONLY.
+/* JARVIS window - Source Control: the GitHub tab (Source Control's Phase 9). READ-ONLY.
 
    Pull requests and checks for the selected repository, and links to its GitHub pages,
    beside the git tabs rather than instead of them. git.js holds no GitHub logic: it

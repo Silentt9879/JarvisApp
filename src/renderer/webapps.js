@@ -29,6 +29,10 @@
     return b;
   }
 
+  // A project's key is its path in the workspace (discovered), so it can hold "/" or spaces:
+  // ids made from it are tidied for the capture harness, which clicks by id.
+  const idOf = (key) => String(key).replace(/[^\w-]/g, '_');
+
   function makeCard(a) {
     const c = { key: a.key, name: a.name, info: a, run: null, logCount: 0, opened: false, failed: null, note: null };
     c.root = el('div', 'web-card');
@@ -52,15 +56,15 @@
 
     // --- what running it touches, and how it runs - before anything starts
     const meta = el('div', 'web-meta');
-    if (a.warn) {
-      const tag = el('span', 'web-tag warn');
-      tag.appendChild(JV.icon('alert'));
-      tag.appendChild(el('span', null, a.warn));
-      tag.title = a.key === 'insurapi'
-        ? 'On this machine it uses the shared database and starts its reminder jobs, which send real push notifications.'
-        : 'On localhost this site reads and writes the live data through the deployed API.';
-      meta.appendChild(tag);
-    }
+    // A warning is the person's own, set for this project (Projects > the project > Settings):
+    // JARVIS cannot know what a project touches when it runs, so it never invents one.
+    c.warnTag = el('span', 'web-tag warn');
+    c.warnTag.appendChild(JV.icon('alert'));
+    c.warnText = el('span', null, a.warn || '');
+    c.warnTag.appendChild(c.warnText);
+    c.warnTag.title = 'Your warning for this project - shown before it runs. Change it in Projects.';
+    c.warnTag.hidden = !a.warn;
+    meta.appendChild(c.warnTag);
     c.watchBox = el('input');
     c.watchBox.type = 'checkbox';
     c.watchBox.checked = true;
@@ -79,17 +83,17 @@
     // --- actions
     const actions = el('div', 'web-actions');
     c.runBtn = iconButton('btn-primary web-run', 'play', 'Run');
-    c.runBtn.id = `webRun-${a.key}`;
+    c.runBtn.id = `webRun-${idOf(a.key)}`;
     c.runBtn.onclick = () => (active(c) ? stop(c) : start(c));
     actions.appendChild(c.runBtn);
 
     c.openBtn = iconButton('web-open', 'external', 'Open', 'Open in your browser');
-    c.openBtn.id = `webOpen-${a.key}`;
+    c.openBtn.id = `webOpen-${idOf(a.key)}`;
     c.openBtn.onclick = () => { const u = c.run?.url || c.info.external?.url; if (u) window.jarvis.openUrl(u); };
     actions.appendChild(c.openBtn);
 
     c.logBtn = iconButton('btn-ghost web-logbtn', 'chevron', 'Log', 'Show the dotnet output');
-    c.logBtn.id = `webLog-${a.key}`;
+    c.logBtn.id = `webLog-${idOf(a.key)}`;
     c.logBtn.onclick = () => showLog(c, !c.root.classList.contains('show-log'));
     actions.appendChild(c.logBtn);
     c.root.appendChild(actions);
@@ -248,7 +252,9 @@
     let list = [];
     try { list = await window.jarvis.webApps(); } catch { return; }
     const grid = $('webGrid');
+    const seen = new Set();
     for (const a of list) {
+      seen.add(a.key);
       let c = cards.get(a.key);
       if (!c) {
         c = makeCard(a);
@@ -260,12 +266,19 @@
           append(c, await window.jarvis.webLog(a.key));
         }
       }
-      c.info = { ...c.info, found: a.found, planned: a.planned, external: a.external };
+      c.info = { ...c.info, name: a.name, warn: a.warn, found: a.found, planned: a.planned, external: a.external };
+      c.warnText.textContent = a.warn || '';
+      c.warnTag.hidden = !a.warn;
       render(c);
     }
+    // A project that is no longer there (a rescan) goes - unless JARVIS is still running it.
+    for (const [key, c] of cards) if (!seen.has(key) && !active(c)) { c.root.remove(); cards.delete(key); }
+    // No ASP.NET project in this workspace: the section is not shown at all.
+    document.querySelector('.dev-section.web')?.toggleAttribute('hidden', !cards.size);
     renderHeader();
     tick();
   }
+  JV.on('projects_changed', () => { if (visible) refresh(); });
 
   $('webStopAll').onclick = async () => {
     const r = await window.jarvis.webStopAll();

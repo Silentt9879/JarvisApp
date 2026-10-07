@@ -55,16 +55,14 @@
 
   // ------------------------------------------------------------- minion names
   // Every specialist is a minion with a name of its own (the specialist code stays beside it).
-  // Fixed, so Otto is always the Admin Web one; an agent added later gets one from the pool.
+  // Claude Code's built-in agents have fixed names; any other agent - whatever a workspace or
+  // its user defines - gets one from the pool by its own name, so it keeps it every time.
   const MINION_NAMES = {
-    commander: 'Kevin', scout: 'Stuart', friday: 'Bob', diagnostic: 'Dave', verifier: 'Jerry',
-    gatekeeper: 'Carl', control: 'Phil', underwriter: 'Tim', roadrunner: 'Mark', edith: 'Jorge',
-    'codebase-learner': 'Tom', auditor: 'Mel', sentry: 'Otto',
-    archivist: 'Josh', taskmaster: 'Tony', scribe: 'Eric',
     'general-purpose': 'Norbert', Explore: 'Lance', Plan: 'Ken', claude: 'Mike',
     'statusline-setup': 'Paul', 'claude-code-guide': 'Donnie',
   };
-  const NAME_POOL = ['Steve', 'Larry', 'Chris', 'Jon', 'Henry', 'Walter', 'Herb', 'Bernard', 'Pete', 'Frank', 'Gus', 'Ned'];
+  const NAME_POOL = ['Kevin', 'Stuart', 'Bob', 'Dave', 'Jerry', 'Carl', 'Phil', 'Tim', 'Mark', 'Jorge', 'Tom', 'Mel', 'Otto', 'Josh', 'Tony', 'Eric',
+    'Steve', 'Larry', 'Chris', 'Jon', 'Henry', 'Walter', 'Herb', 'Bernard', 'Pete', 'Frank', 'Gus', 'Ned'];
   JV.minionName = (agent) => {
     if (MINION_NAMES[agent]) return MINION_NAMES[agent];
     let h = 0;
@@ -348,18 +346,18 @@
     const t0 = Date.now();
     const agentsOf = (state.agentList || []).map((a) => a.name);
     const pick = (n, alt) => (agentsOf.includes(n) ? n : alt);
-    feed({ kind: 'tool_use', id: 'demo-a', name: 'Agent', agent: pick('sentry', 'general-purpose'), agentTask: 'Approval pages: tabs and UX', parent: null });
+    feed({ kind: 'tool_use', id: 'demo-a', name: 'Agent', agent: pick('sentry', 'general-purpose'), agentTask: 'Settings page: tabs and layout', parent: null });
     feed({ kind: 'agent_task', phase: 'started', taskId: 'ta', toolUseId: 'demo-a', background: true });
     feed({ kind: 'tool_result', id: 'demo-a', preview: 'Async agent launched successfully.', parent: null });
-    feed({ kind: 'tool_use', id: 'demo-b', name: 'Agent', agent: pick('friday', 'Explore'), agentTask: 'Hunt bugs: account and money', parent: null });
-    feed({ kind: 'tool_use', id: 'demo-c', name: 'Agent', agent: pick('verifier', 'Plan'), agentTask: 'Build and test the Panel App change', parent: null });
+    feed({ kind: 'tool_use', id: 'demo-b', name: 'Agent', agent: pick('friday', 'Explore'), agentTask: 'Hunt bugs: sign-in and payments', parent: null });
+    feed({ kind: 'tool_use', id: 'demo-c', name: 'Agent', agent: pick('verifier', 'Plan'), agentTask: 'Build and test the checkout change', parent: null });
     // Background, so the session's own startup "ready" cannot close them mid-capture.
     feed({ kind: 'agent_task', phase: 'started', taskId: 'tb', toolUseId: 'demo-b', background: true });
     feed({ kind: 'agent_task', phase: 'started', taskId: 'tc', toolUseId: 'demo-c', background: true });
     const steps = [
-      ['demo-a', 'Read', 'C:\\repo\\Controllers\\ApprovalController.cs'], ['demo-b', 'Grep', 'loginByPhoneMail  in lib'],
-      ['demo-c', 'Bash', 'dotnet build -c Release'], ['demo-a', 'Edit', 'C:\\repo\\Views\\Approval\\ApprovalWorkshop.cshtml'],
-      ['demo-b', 'Read', 'C:\\repo\\lib\\Services\\HttpService.dart'], ['demo-c', 'Bash', 'flutter test test/insurance_panel_request_test.dart'],
+      ['demo-a', 'Read', 'C:\\repo\\Controllers\\SettingsController.cs'], ['demo-b', 'Grep', 'signInWithEmail  in lib'],
+      ['demo-c', 'Bash', 'dotnet build -c Release'], ['demo-a', 'Edit', 'C:\\repo\\Views\\Settings\\Index.cshtml'],
+      ['demo-b', 'Read', 'C:\\repo\\lib\\Services\\HttpService.dart'], ['demo-c', 'Bash', 'flutter test test/checkout_test.dart'],
     ];
     steps.forEach(([parent, name, detail], k) => {
       feed({ kind: 'tool_use', id: `s${k}`, name, detail, parent });

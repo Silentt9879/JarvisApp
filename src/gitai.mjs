@@ -25,15 +25,15 @@ const BIG_LINES = 1500;          // beyond this the user is asked before anythin
 const BIG_BYTES = 180 * 1024;
 const HARD_CAP = 400 * 1024;     // never sent, whatever the answer
 
-/** Case-code prefixes per repository. A project without one gets NOTHING invented for it. */
-const CASE_PREFIX = {
-  'Bantu2U_Center-Module': 'AWAV',
-  bantupanduv2: 'CV',
-};
+/**
+ * A case-code prefix ("AB" for codes like AB123) is a project's own convention, set by the
+ * person in that project's settings - never a list in JARVIS. Without one, nothing is invented.
+ */
+export const CASE_PREFIX_RE = /^[A-Z][A-Z0-9]{0,9}$/;
 
 // ---------------------------------------------------------------- secrets
 //
-// SECURITY.md is not weakened to make an AI feature convenient. A diff that looks like it
+// Security is not weakened to make an AI feature convenient. A diff that looks like it
 // carries a credential is reported, and the value is masked before the text is sent.
 
 const SECRET_PATTERNS = [
@@ -307,8 +307,25 @@ export function cancelAssist(id) {
 }
 
 // ---------------------------------------------------------------- the actions
-const SYSTEM = `You are JARVIS assisting with git in the BantuApps workspace: Flutter apps,
-ASP.NET Core MVC web apps and APIs, and a shared MySQL backend.
+const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f`]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
+
+/**
+ * What the model is told about where it is: the workspace, this repository and what kind of
+ * projects it holds, and - briefly - what else is in the workspace, so a review can notice a
+ * change that its neighbours would need too. Built from discovery, never from a fixed story,
+ * and kept short: names and kinds only, at most eight neighbours.
+ *   ws = { workspace, repo, kinds: ['Flutter', ...], related: [{ name, kinds }] }
+ */
+export function systemFor(ws = {}) {
+  const where = [];
+  const repo = clean(ws.repo, 80);
+  const workspace = clean(ws.workspace, 80);
+  const kinds = (ws.kinds || []).map((k) => clean(k, 20)).filter(Boolean).slice(0, 6);
+  where.push(`You are JARVIS assisting with git${repo ? ` in the repository "${repo}"` : ''}${workspace ? ` (workspace "${workspace}")` : ''}.`);
+  if (kinds.length) where.push(`It holds ${kinds.join(', ')} code.`);
+  const related = (ws.related || []).slice(0, 8).map((r) => `${clean(r.name, 60)}${r.kinds?.length ? ` (${r.kinds.map((k) => clean(k, 20)).join(', ')})` : ''}`).filter(Boolean);
+  if (related.length) where.push(`Other projects in the same workspace: ${related.join('; ')}.`);
+  return `${where.join(' ')}
 
 You are given a diff and nothing else. You have no tools and cannot read the repository, so
 never claim to have looked at a file you were not given; if something cannot be judged from
@@ -316,6 +333,7 @@ the diff, say which file would settle it.
 
 Be direct and brief. Lead with what matters. Do not praise ordinary code, do not restate the
 diff line by line, and do not pad.`;
+}
 
 /**
  * Every action: what it sends, and what it asks. The caller supplies the already-measured
@@ -356,8 +374,8 @@ ${ctx.diff}`,
     prompt: (ctx) => `Review these changes and report problems worth acting on.
 
 Look for bugs, regressions, security issues, data-loss risks, broken assumptions, missing
-error handling, and mismatches with the other BantuApps projects (an API change the apps or
-the Gateway would need too).
+error handling, and - where other projects in the workspace are named above - mismatches
+with them (an API or data change that its clients would need too).
 
 List findings strongest first as "- <file>: <problem> -> <what to do>". If there is nothing
 worth raising, say exactly "Nothing worth raising." and stop.
@@ -441,10 +459,12 @@ ${ctx.diff}`,
   },
 };
 
-/** The note about case codes, which never invents a prefix for a project without one. */
-export function caseNote(repoName) {
-  const prefix = CASE_PREFIX[repoName];
-  if (!prefix) {
+/**
+ * The note about case codes, which never invents a prefix for a project without one. The
+ * prefix is the person's own setting for the project (checked here again: letters and digits).
+ */
+export function caseNote(prefix) {
+  if (typeof prefix !== 'string' || !CASE_PREFIX_RE.test(prefix)) {
     return 'This project has no case-code prefix. Do not invent one and do not add a code to the summary.';
   }
   return `This project uses the "${prefix}" case prefix (for example ${prefix}123). Only use a code that already appears in the changes - do not invent or guess the next number.`;
@@ -468,8 +488,8 @@ export async function assist({ cwd, exe, log, id, action, context, extra = {}, s
     return { ok: false, error: `Even shortened, ${context.files} files is too many to send at once (${Math.round(context.bytes / 1024)} KB). Stage fewer files and try again.` };
   }
 
-  const ctx = { diff: context.text, caseNote: caseNote(extra.repoName), ...extra };
-  const r = await ask({ cwd, exe, log, id, system: SYSTEM, prompt: spec.prompt(ctx), signal, ...(timeoutMs ? { timeoutMs } : {}) });
+  const ctx = { diff: context.text, caseNote: caseNote(extra.casePrefix), ...extra };
+  const r = await ask({ cwd, exe, log, id, system: systemFor(extra.where || { repo: extra.repoName }), prompt: spec.prompt(ctx), signal, ...(timeoutMs ? { timeoutMs } : {}) });
   if (!r.ok) return { ...r, action };
   return { ok: true, action, text: r.text, scope: { files: context.files, lines: context.lines, secrets: context.secrets } };
 }

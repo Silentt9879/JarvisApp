@@ -1,4 +1,4 @@
-// GitHub - read-only GitHub data for Source Control (P-009 Phase 9).
+// GitHub - read-only GitHub data for Source Control (its Phase 9).
 //
 // git.mjs is normal git; this module is everything GitHub-specific, and it only READS. The
 // dependency runs one way: this file reads repository facts through git and `run()`, and

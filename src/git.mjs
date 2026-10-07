@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listRepos, repoStateAt, run, killTree, NICKNAMES } from './workspace.mjs';
+import { listRepos, repoStateAt, run, killTree, repoFolderName, repoDisplayName } from './workspace.mjs';
 import { classify } from './git-policy.mjs';
 import { measure, budgetFor } from './gitai.mjs';
 
@@ -57,19 +57,22 @@ function appRepoRoot() {
 /**
  * Every repository Source Control can act on, discovered, never hardcoded.
  *
- * The workspace holds nine independent repositories and is deliberately NOT one itself, so
- * `listRepos` finds them by looking for `.git` in each child. The app's own repository is
- * a sibling of the workspace rather than a child, so no amount of scanning the workspace
- * will ever find it - it is discovered separately, by asking whether APP_ROOT is a repo.
+ * `listRepos` finds them by looking for `.git`: the workspace itself (key "."), each child
+ * folder, and repositories one level inside a plain grouping folder. A key is the path
+ * relative to the workspace. The app's own repository may sit outside the workspace, so it
+ * is discovered separately, by asking whether APP_ROOT is a repo (in a development run).
  */
 export function sourceRepos(cwd) {
-  const list = listRepos(cwd).map((name) => ({
-    key: name,
-    dir: path.join(cwd, name),
-    name,
-    nickname: NICKNAMES[name] || name,
-    scope: 'workspace',
-  }));
+  const list = listRepos(cwd).map((rel) => {
+    const name = repoFolderName(cwd, rel);
+    return {
+      key: rel,
+      dir: rel === '.' ? path.resolve(cwd) : path.join(cwd, ...rel.split('/')),
+      name,
+      nickname: repoDisplayName(rel, name),
+      scope: 'workspace',
+    };
+  });
   const appRoot = appRepoRoot();
   // Only if it is genuinely a separate repository - never a second entry for one the
   // workspace scan already found.
@@ -1819,6 +1822,21 @@ export function remoteState(cwd, key) {
   };
 }
 
+/**
+ * Stop every remote operation still running - on quit, or before a restart into another
+ * workspace, so no fetch or push carries on against the folder JARVIS just left.
+ */
+export function cancelAllRemotes() {
+  let n = 0;
+  for (const live of remoteOps.values()) {
+    live.op = 'cancelling';
+    try { live.controller.abort(); } catch { /* already finished */ }
+    killTree(live.child);
+    n += 1;
+  }
+  return n;
+}
+
 /** Stop the remote operation running for one repository. Never reported as success. */
 export function cancelRemote(cwd, key) {
   const repo = resolveRepo(cwd, key);
@@ -1835,8 +1853,8 @@ export function cancelRemote(cwd, key) {
  * The shared shape of every remote operation.
  *
  * `key` is captured once, here, and every later step resolves it again rather than reading
- * whatever is selected now. A push started for Admin Web finishes as a push for Admin Web
- * even if the window has moved to Customer App - the result carries the key it began with,
+ * whatever is selected now. A push started for one repository finishes as a push for that
+ * repository even if the window has moved to another - the result carries the key it began with,
  * and the window drops a result that is not for the repository it is showing.
  */
 async function remoteOp(cwd, key, op, build, { onProgress } = {}) {

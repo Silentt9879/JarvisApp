@@ -6,7 +6,7 @@
 
 **Claude Code on your desktop, and in your pocket.**
 
-A Windows app for the Bantu Apps workspace that you can also drive from your phone over Telegram.
+A Windows command center for Claude Code and the projects in your workspace: chat, Git, devices and builds in one window, which you can also drive from your phone over Telegram.
 
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![Electron](https://img.shields.io/badge/Electron-app-47848F?logo=electron&logoColor=white)
@@ -17,7 +17,30 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🆕 What's new in v1.12.0
+## 🆕 What's new in v2.0.0
+
+**Simplified**
+
+- 🗂️ **Any folder, any projects.** JARVIS no longer comes set up for one particular set of apps. Choose the folder that holds your work and it finds what is inside: Flutter and Dart, .NET, Node, Python, Gradle and Maven projects and Git repositories, including projects nested inside others. It only looks - nothing runs while it reads.
+- 🧭 **A Projects page.** Each project in one place: what it is, what it needs from this PC and whether that is here, its Git state, what is running, and the Build, Test and Run actions its own files support. Every action is a click and shows its exact command.
+- 🔀 **More than one workspace.** Add, rename, switch and remove them in **Settings → Workspaces**. A switch says what would stop, then restarts JARVIS cleanly in the new folder.
+- 🛡️ **Workspace trust.** A folder you add starts restricted: Claude works there with your own settings only, and JARVIS reads the folder but runs nothing from it - no hooks, MCP servers, scripts, builds, tests, apps or Git - until you trust it.
+- 🩺 **Health that knows your projects.** A missing tool is a warning only when a project here needs it.
+- ✍️ **Your own names and warnings.** Give a project your name for it, a warning shown before it runs, and the case-code prefix your commit messages use.
+- 🔐 **Source Control in any workspace.** Without a policy file of its own, a workspace gets JARVIS's built-in rules: everyday work runs, and anything that can throw work away asks first.
+- 👋 **A fuller walk-through** for new installs, and Agents, ClickUp and Git AI that assume nothing about you or your projects.
+
+**Upgrading from 1.x:** your workspace folder carries over, already trusted. The project names and warnings 1.x had built in are gone - set your own with a project's **Settings** button on the Projects page. ClickUp asks once whose tasks to show.
+
+**Technical**
+
+- New: `workspaces.mjs` (config v2 with several workspaces; the old config is kept as `config.before-v2.json`), `project-discovery.mjs` (asynchronous, bounded, read-only), `project-index.mjs`, `project-providers.mjs` (needs and actions per ecosystem), `task-runner.mjs`, `capabilities.mjs` (the developer tools on this PC), `defaults/git-risk-policy.json` and `renderer/projects-view.js`.
+- Retired: `FLUTTER_APPS`, `WEB_APPS`, `NICKNAMES` and the default workspace path. Devices, Web apps, Dart analysis, Source Control and Files read the discovered projects.
+- Hardening: every window refuses to navigate away from JARVIS's own pages; `NoDefaultCurrentDirectoryInExePath` is set for JARVIS and everything it starts, and `cmd.exe` and `dotnet` start by full path; file reads are checked through real paths, so a link or junction cannot lead outside the workspace; a crafted project file cannot stall a scan.
+- Tests: six new suites; `npm test` runs 23, all passing.
+
+<details>
+<summary><b>Earlier: v1.12.0</b></summary>
 
 **Simplified**
 
@@ -31,6 +54,8 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - `src/remote.mjs`: `/deleteapp` - refused while JARVIS is busy (like `/new` and `/switch`), confirmed in chat before anything runs, and plain if an older host has no `deleteApp` to call.
 - `scripts/clean-and-run.ps1` (`npm run clean`): the same steps, run by hand - safe to re-run, everything no-ops once there's nothing left to do.
 - `scripts/updates-test.mjs`: 15 new checks (96 in all) on the generated script and the wiring into `main.mjs` and `remote.mjs`.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.11.0</b></summary>
@@ -47,7 +72,7 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 - New `src/analysis.mjs`: `analyzeApp` runs `dart analyze --format=machine` in the app's folder (single flight per app, 5 minute limit, `cancelAnalysis`), `parseMachine` reads the `SEVERITY|TYPE|CODE|file|line|col|len|message` lines with their `\|` escapes from stdout or stderr, and `findConflicts` looks for conflict markers in files that have errors. Reading only: no `dart fix`, no write. At most 3000 problems go to the window; the counts stay complete.
 - `src/main.mjs`: `jarvis:analyze` / `jarvis:analyzeCancel`, stopped on quit. `src/devices.mjs`: the exit event of a `flutter run` now carries `failed` (it ended by itself, not by Stop) and `built` (the app had started).
 - New `src/renderer/problems.js` and the `devProblems` section: app chips with an error badge, severity toggles, grouped rows that call `openInCode(file, line)`, and the auto-run on `failed && !built`. `JARVIS_DEMO=problems` draws a made-up result for screenshots.
-- `scripts/analysis-test.mjs`: 37 checks with a stand-in `dart`. It caught one real fault before release (a start that failed at once left the app marked as busy). A real run on the Panel App returned its list and found the conflict in `lib/Views/inprogress_cases.dart`.
+- `scripts/analysis-test.mjs`: 37 checks with a stand-in `dart`. It caught one real fault before release (a start that failed at once left the app marked as busy). A real run on a Flutter app returned its list and found a real merge conflict.
 
 </details>
 
@@ -296,22 +321,79 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 | | |
 |---|---|
-| 💬 **Chat** | Talk to JARVIS. Attach images and files, pick the model and effort level, and approve each action |
-| 📱 **Telegram remote** | Send messages, photos, files and voice notes from your phone, and approve actions with one tap |
-| 🧑‍🏭 **Agents** | Watch the specialists work as minions on the Agent floor, or from the "N agents" pill in the chat box |
-| 🐙 **GitHub Desktop** | Changes, commits, Undo, stashes, branches, push and pull, plus pull requests and checks from GitHub |
-| ✅ **Clickup** | Your ClickUp board, synced and grouped by sprint |
-| 📂 **Files** | Read any workspace file, and double-click to open it in VS Code |
+| 💬 **Chat** | Talk to Claude Code. Attach images and files, pick the model and effort level, and approve each action |
+| 🧭 **Projects** | Every project JARVIS found in your workspace: type, needs, Git state, and the actions its own files support |
+| 🐙 **GitHub Desktop** | Changes, commits, Undo, stashes, branches, push and pull, plus pull requests and checks from GitHub (read-only) |
+| 📲 **Devices** | Live Android phone screens with `flutter run`, ASP.NET sites and APIs with `dotnet watch`, and Dart analysis |
+| 🧑‍🏭 **Agents** | Your Claude Code subagents and the built-in ones, working as minions on the Agent floor |
+| 📂 **Files** | Read any text file in the workspace, and double-click to open it in VS Code |
 | 📝 **Notes** | Write something down, save it, and send it to your Telegram |
-| 📲 **Devices** | Live phone screens with `flutter run` (also in their own window), and web apps with `dotnet watch` |
+| ✅ **ClickUp** | Your ClickUp tasks, synced through Claude Code's ClickUp connection and grouped by sprint (optional) |
 | ↩️ **Undo** | Undo every file change made since any message, in one click |
+| 🩺 **Health** | What is in order and what needs setting up, judged against the projects you actually have |
 | ⬆️ **Updates** | One press in the app: from a GitHub release, or straight from a build made on this PC |
+
+---
+
+## 🧰 What you need
+
+- **Windows 10 or 11**, 64-bit.
+- **A Claude account that can use Claude Code.** Claude Code itself comes inside JARVIS; you sign in from the walk-through or **Settings → Account**.
+- **Git for Windows**, for Source Control.
+- Only for the projects you have: the **Flutter SDK** and Android **platform-tools** (`adb`) to run apps on a phone, the **.NET SDK**, **Node.js**, **Python**, or a **JDK** for Gradle and Maven. **Health** lists what is missing - and says nothing about a tool none of your projects need.
+
+---
+
+## 🚀 Getting started
+
+1. Download `JARVIS-Setup-<version>.exe` from this repository's **Releases** page and run it. It installs for you alone, with no administrator rights. The installer is not code-signed yet, so Windows SmartScreen may warn the first time: **More info → Run anyway**.
+2. The walk-through opens: sign in to Claude, **choose your workspace** (the folder that holds your projects), see what JARVIS found in it and what this PC has, then the optional extras. Every step can be skipped and done later.
+3. Decide whether to **trust** the workspace (below). JARVIS asks when you add one.
+
+---
+
+## 🗂️ Workspaces and projects
+
+A **workspace** is a folder: one project, or many side by side. Keep as many as you like in **Settings → Workspaces** - add, rename, remove (nothing on disk is deleted) and switch. Switching restarts JARVIS in the new folder, because the session, file index and Git views all belong to the folder they started in. JARVIS asks first, and says what would stop: a chat turn, a phone run, a web app, a build.
+
+**Discovery** reads the workspace to find its projects. It looks at folder listings and a few small marker files, and nothing else: no project code runs, nothing is installed, no file is written, and it does not even run `git`. It goes up to 6 folders deep, skips dependency and build folders (`node_modules`, `bin`, `obj`, `build`, `.dart_tool`, `.gradle`, virtual environments…), never follows a link or junction out of the workspace, and stops at 20,000 folders. Results are kept for a minute; **Look again** on the Projects page reads the folder afresh.
+
+**Nested projects** stay together: a Flutter app's `android/` and `ios/` folders show as its platforms, not as separate apps, and packages, modules and test projects inside another project sit under it.
+
+**Your own settings per project** (the **Settings** button on a project): the name JARVIS shows, a **warning** shown before anything runs (for example "Uses the live database"), and the **case-code prefix** your commit messages carry, so a suggested commit message keeps your ticket codes. All optional; nothing is built in.
+
+| Ecosystem | Found by | What JARVIS offers |
+|---|---|---|
+| **Git** | a `.git` folder | Source Control (the GitHub Desktop page); GitHub pull requests and workflow runs, read-only |
+| **Flutter** | `pubspec.yaml` using Flutter | **Run on a phone** (Devices: live screen, hot reload), **Analyse**, **Test** (`flutter test`) when there is a `test` folder |
+| **Dart** | `pubspec.yaml` | **Analyse** (`dart analyze`), **Test** (`dart test`) |
+| **.NET** | `*.csproj`, `*.sln` | **Run** (`dotnet watch run`) for ASP.NET sites and APIs, **Build** (`dotnet build`), **Test** (`dotnet test`) for test projects and solutions |
+| **Node** | `package.json` | Only scripts the project defines, from `dev`, `start`, `serve`, `test`, `build`, `lint`, `typecheck`, `check` - through its own package manager (npm, pnpm, yarn or bun, from its lock file) |
+| **Python** | `pyproject.toml`, `requirements.txt`, `setup.py` | **Test** (`python -m pytest`), only when pytest is already in the project's own `.venv`, `venv` or `env`. Nothing is installed or created |
+| **Gradle** | `build.gradle(.kts)`, `settings.gradle(.kts)`, `gradlew` | **Build** (`assemble`) and **Test**, through the project's own wrapper first |
+| **Maven** | `pom.xml` | **Build** (`compile`) and **Test**, wrapper first. Never `install` or `deploy` |
+
+An action this PC cannot run yet still shows, with the reason ("The .NET SDK is not installed on this PC"). Builds never publish or deploy. Anything else - a migration, a release, a one-off command - is a message to JARVIS in the chat, where it is approved like any other action.
+
+---
+
+## 🛡️ Safety
+
+- **You approve what Claude does.** Every action goes through Claude Code's permission prompt in the mode you pick (Ask, Accept edits, Plan or Auto). There is deliberately no "bypass permissions".
+- **Workspace trust.** A workspace you have not trusted runs Claude with your own user settings only - its `CLAUDE.md`, `.claude` hooks, MCP servers, agents and permission rules are not loaded - and JARVIS reads it but runs nothing from it: no scripts, builds, tests, apps, Dart analysis or Git (a repository's own `.git/config` can name programs Git runs by itself). Trust it in **Settings → Workspaces** once it is your code or you have read it. The folder JARVIS 1.x was using is trusted when you upgrade, because it already ran there.
+- **Git safety rules.** Source Control classifies every Git operation before it runs. A workspace's own `.claude/jarvis/git-risk-policy.json` always wins; without one, JARVIS's built-in rules apply - staging, committing, branching and an ordinary push run, while discarding, a hard reset, a forced push, deleting a branch or tag, or rewriting history asks first, and anything unknown is treated as destructive. A policy file that exists but cannot be read makes every change ask. **Discard** copies your changes to the Recycle Bin before it removes them.
+- **Actions run only when you press them.** Each is a fixed command, shown before it runs, with your warning first and a Stop button; nothing from a project's files reaches a command line unchecked. Everything JARVIS started stops when it quits or switches workspace.
+- **Programs are found safely.** Windows is told never to look for a program in the folder a command runs in - for JARVIS itself and for everything it starts - and `cmd.exe` and .NET start by their full paths, so a file planted in a project cannot stand in for `cmd`, `git`, `npm`, `flutter` or `dotnet`.
+- **Reading stays in the workspace.** Files, documents and **Open in VS Code** only reach paths inside it, checked through the real path, so a link cannot lead elsewhere. Without VS Code, only plain documents and pictures open in their usual app; anything else - a script, a program - is shown in Explorer, never run.
+- **Your settings file is never overwritten.** If `config.json` cannot be read (a hand edit gone wrong), JARVIS runs on its defaults, saves nothing, and Health shows the file to fix.
+- **A locked-down window.** No Node.js in the page, context isolation, a sandbox, a strict content security policy, and every window refuses to navigate anywhere but JARVIS's own pages. Web links open in your browser.
+- **Secrets stay put.** The Telegram bot token and the GitHub sign-in never go back to the window, and secrets are scrubbed from logs, the activity export and error messages. The phone web app's access code is shown only when you press **Show the access code**.
 
 ---
 
 ## 📱 From your phone
 
-> Set up once in **Settings → Phone alerts**: create a bot with @BotFather, press **Check token**, then press **Find my chat**.
+> Set up once in **Settings → Phone alerts**: create a bot with @BotFather, press **Check token**, then press **Find my chat**. Remote control is off until you switch it on.
 
 | Send | You get |
 |---|---|
@@ -321,8 +403,9 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 | `/status` `/stop` `/new` | What JARVIS is doing, stop the current turn, start fresh |
 | `/sessions` `/switch` | Pick up an earlier conversation |
 | `/screen` | A screenshot of the PC |
-| `/diff` | What has changed in each repo |
+| `/diff` | What has changed in each repository |
 | `/brief` | The morning brief (sent automatically on weekdays at 08:00) |
+| `/deleteapp` | Uninstall JARVIS from this PC, after you confirm, ready for a fresh install |
 
 **PC → phone:** with mirroring on, what you type and attach on the PC shows up in Telegram too.
 
@@ -340,7 +423,7 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 | Keys | Action |
 |---|---|
-| `Ctrl` + `1`…`6` | Switch view |
+| `Ctrl` + `1`…`6` | Chat, Overview, GitHub Desktop, Notes, Files, Projects |
 | `Ctrl` + `N` | New session |
 | `Ctrl` + `K` | Search everything |
 | `Ctrl` + `,` | Settings |
@@ -348,12 +431,22 @@ A Windows app for the Bantu Apps workspace that you can also drive from your pho
 
 ---
 
-## 🚀 Run it
+## ⚠️ Good to know
+
+- **Windows only**, and phones are **Android** (through `adb`).
+- **Updates from GitHub** need a GitHub sign-in that can read this repository (**Settings → Updates**). Without one, install a newer version by hand, or deliver a local build with `npm run deliver`.
+- **Source Control** lists the repositories at the top of the workspace and up to two folders down; the Projects page shows deeper ones too.
+- **ClickUp** works through Claude Code's own ClickUp connection, so connect ClickUp in Claude Code first. JARVIS only reads; nothing is written back.
+- **Voice** runs on this PC; the speech model (about 250 MB) downloads the first time you use it.
+
+---
+
+## 🔧 Build from source
 
 ```powershell
 npm install        # first time
 npm start          # run from source
-npm test           # tests (no network needed)
+npm test           # every test suite (no network needed)
 npm run pack       # build -> dist\win-unpacked\JARVIS.exe
 npm run dist       # installer -> dist-installer\JARVIS-Setup-<version>.exe
 npm run deliver    # offer that installer to the JARVIS installed on this PC

@@ -1,7 +1,12 @@
 // GitHub Desktop page (formerly "Source Control"), 2026-10-05: Undo the last commit,
 // Discard all changes and the "Last fetched" time, against throwaway repositories.
-// Real git, a copy of the workspace's git-risk-policy.json, no network and no model.
-// The Recycle Bin is replaced by a folder this test owns. Run: node scripts/sc-undo-discard-test.mjs
+// Real git, no network and no model. The Recycle Bin is replaced by a folder this test owns.
+// Run: node scripts/sc-undo-discard-test.mjs
+//
+// The rules: a workspace's own .claude/jarvis/git-risk-policy.json when it has one
+// (src/git-policy.mjs). Set JARVIS_POLICY_FILE to a real one to run against it; without it,
+// the throwaway workspace has no policy file and JARVIS's built-in default applies - which is
+// what every new user's workspace gets.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,23 +14,19 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
   lastCommit, undoLastCommit, discardAll, changedFiles, stageFiles, stageAll, commit, repoDetail,
+  deleteBranch, createStash,
 } from '../src/git.mjs';
+import { classify, policySource } from '../src/git-policy.mjs';
 
-// The undo and discard rules live in the workspace's policy file (src/git-policy.mjs explains why),
-// not in this repo. Point JARVIS_POLICY_FILE at it to run this test. Without it, the test is
-// SKIPPED and says so - it is not faked, because a missing policy correctly blocks undo.
-const POLICY = process.env.JARVIS_POLICY_FILE || '';
-if (!POLICY || !fs.existsSync(POLICY)) {
-  console.log('sc-undo-discard-test: SKIPPED - no git risk policy found. Set JARVIS_POLICY_FILE to your workspace\'s .claude\\jarvis\\git-risk-policy.json to run it.');
-  process.exit(0);
-}
+const POLICY = process.env.JARVIS_POLICY_FILE && fs.existsSync(process.env.JARVIS_POLICY_FILE) ? process.env.JARVIS_POLICY_FILE : null;
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jv-sc-undo-'));
 const ws = path.join(root, 'ws');
 const bin = path.join(root, 'bin');
 fs.mkdirSync(path.join(ws, '.claude', 'jarvis'), { recursive: true });
 fs.mkdirSync(bin);
-fs.copyFileSync(POLICY, path.join(ws, '.claude', 'jarvis', 'git-risk-policy.json'));
+if (POLICY) fs.copyFileSync(POLICY, path.join(ws, '.claude', 'jarvis', 'git-risk-policy.json'));
+console.log(`sc-undo-discard-test: using ${POLICY ? `the policy in ${POLICY}` : 'JARVIS\'s built-in default policy (no workspace policy file)'}`);
 
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const write = (dir, rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); };
@@ -211,6 +212,36 @@ try {
     assert.equal((await lastCommit(ws, 'nope')).ok, false);
     assert.equal((await undoLastCommit(ws, 'nope', { sha: 'abc' })).ok, false);
   });
+
+  // ------------------------------------------------------------- the rules themselves
+  if (!POLICY) {
+    await step('the built-in default: everyday work runs; anything that throws work away asks first', async () => {
+      assert.equal(policySource(ws), 'default');
+      for (const [sub, args] of [['add', []], ['commit', []], ['switch', []], ['branch', []], ['branch', ['-d']], ['fetch', []], ['pull', []], ['push', []], ['restore', ['--staged']], ['reset', []], ['reset', ['--soft', 'HEAD~1']], ['stash', ['pop']], ['stash', ['apply']]]) {
+        assert.notEqual(classify(ws, sub, args).level, 'destructive', `${sub} ${args.join(' ')}`);
+      }
+      for (const [sub, args] of [['reset', ['--hard']], ['clean', ['-f']], ['restore', ['--worktree', '--', '.']], ['checkout', ['--', 'a.txt']], ['push', ['--force']], ['push', ['--force-with-lease']], ['push', ['--delete']], ['branch', ['-D']], ['stash', ['drop']], ['stash', ['push']], ['commit', ['--amend']], ['rebase', []], ['some-new-command', []]]) {
+        assert.equal(classify(ws, sub, args).level, 'destructive', `${sub} ${args.join(' ')}`);
+      }
+    });
+    await step('a forced branch delete and a stash still wait for a person to confirm', async () => {
+      git(dir, 'branch', 'scrap');
+      const del = await deleteBranch(ws, KEY, 'scrap', { force: true });
+      assert.equal(del.needsConfirmation, true);
+      write(dir, 'a.txt', 'stash me\n');
+      const st = await createStash(ws, KEY, {});
+      assert.equal(st.needsConfirmation, true);
+      assert.equal(read(dir, 'a.txt'), 'stash me\n', 'nothing was moved');
+    });
+    await step('a workspace policy file that cannot be read fails closed - it is never swapped for the default', async () => {
+      fs.writeFileSync(path.join(ws, '.claude', 'jarvis', 'git-risk-policy.json'), '{ not json');
+      assert.equal(policySource(ws), 'unreadable');
+      assert.equal(classify(ws, 'add', []).level, 'destructive');
+      assert.equal(classify(ws, 'add', []).policyMissing, true);
+      fs.rmSync(path.join(ws, '.claude', 'jarvis', 'git-risk-policy.json'));
+      assert.equal(classify(ws, 'add', []).level, 'mutate', 'removed again: back to the default');
+    });
+  }
 
   console.log(`sc-undo-discard-test: all ${passed} checks passed`);
 } finally {

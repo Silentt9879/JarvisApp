@@ -4,7 +4,7 @@
 // readers the dashboard uses. They return text (and, for a diff, a file to attach); sending
 // it is remote.mjs's job.
 import { sourceRepos, allRepoStates } from './git.mjs';
-import { run, systemStats, openIssues, handoffFocus } from './workspace.mjs';
+import { run, systemStats, openIssues, handoffFocus, GIT_RESTRICTED } from './workspace.mjs';
 import { readClickUp } from './tasks.mjs';
 
 const MAX_PATCH_BYTES = 8 * 1024 * 1024;
@@ -48,13 +48,21 @@ export function findRepo(cwd, query) {
 export async function diffReport(cwd, query) {
   if (!String(query || '').trim()) {
     const all = await states(cwd);
+    // A restricted workspace runs no Git (workspace.mjs): say that - never "all clean".
+    if (all.length && all.every((r) => r.restricted)) return { text: GIT_RESTRICTED };
     const busy = all.filter(dirty);
-    if (!busy.length) return { text: `All ${all.length} repositories are clean - nothing to commit, push or pull.` };
-    const lines = [`📝 ${busy.length} of ${all.length} repositories have changes:`, ''];
-    for (const r of busy) lines.push(`• ${label(r)} on ${r.branch || '?'} - ${counts(r)}`);
-    const clean = all.length - busy.length;
-    if (clean) lines.push('', `${clean} other${clean > 1 ? 's are' : ' is'} clean.`);
-    lines.push('', `Send /diff <name> for the full diff, e.g. /diff ${busy[0].nickname.split(' ')[0].toLowerCase()}`);
+    // A repository git could not read is not clean, just unknown.
+    const unread = all.filter((r) => !r.ok);
+    const clean = all.length - busy.length - unread.length;
+    if (!busy.length && !unread.length) return { text: `All ${all.length} repositories are clean - nothing to commit, push or pull.` };
+    const lines = [];
+    if (busy.length) {
+      lines.push(`📝 ${busy.length} of ${all.length} repositories have changes:`, '');
+      for (const r of busy) lines.push(`• ${label(r)} on ${r.branch || '?'} - ${counts(r)}`);
+      if (clean) lines.push('', `${clean} other${clean > 1 ? 's are' : ' is'} clean.`);
+    } else if (clean) lines.push(`${clean} of ${all.length} repositories are clean.`);
+    if (unread.length) lines.push(...(lines.length ? [''] : []), `Could not read ${unread.map(label).join(', ')}.`);
+    if (busy.length) lines.push('', `Send /diff <name> for the full diff, e.g. /diff ${busy[0].nickname.split(' ')[0].toLowerCase()}`);
     return { text: lines.join('\n') };
   }
 
@@ -129,9 +137,14 @@ export async function morningBrief({ cwd, userDir, lastSession = null, now = new
     lines.push('', `💻 PC: ${up ? `up ${up} day${up > 1 ? 's' : ''}` : 'restarted today'} · RAM ${sys.ram.pct}%${sys.disk ? ` · disk ${sys.disk.pct}% full` : ''}`);
   }
 
-  if (repos?.length) {
+  if (repos?.length && repos.every((r) => r.restricted)) {
+    lines.push('', '🗂 Repositories not read: this workspace is restricted, so JARVIS runs no Git in it.');
+  } else if (repos?.length) {
     const busy = repos.filter(dirty);
-    lines.push('', busy.length ? `🗂 ${busy.length} of ${repos.length} repositories have work in progress:` : `🗂 All ${repos.length} repositories are clean.`);
+    const unread = repos.filter((r) => !r.ok).length;
+    lines.push('', busy.length ? `🗂 ${busy.length} of ${repos.length} repositories have work in progress:`
+      : unread ? `🗂 Nothing in progress in the ${repos.length - unread} repositories read; ${unread} could not be read.`
+        : `🗂 All ${repos.length} repositories are clean.`);
     for (const r of busy.slice(0, 8)) lines.push(`• ${r.nickname} (${r.branch || '?'}) - ${counts(r)}`);
   }
 

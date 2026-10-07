@@ -34,6 +34,7 @@
   }
 
   const c = { live: false, starting: false, run: null, state: 'device', screen: null };
+  const appInfo = new Map(); // app key -> { name, warn }, from the workspace's Flutter apps
 
   function iconBtn(icon, title, onClick) {
     const b = el('button', 'icon-btn dev-btn');
@@ -153,7 +154,7 @@
     const active = r && r.state !== 'exited';
     c.runBtn.textContent = active ? 'Stop' : 'Run';
     c.runBtn.className = `btn ${active ? 'btn-danger' : 'btn-primary'}`;
-    c.runBtn.disabled = c.state !== 'device';
+    c.runBtn.disabled = c.state !== 'device' || (!active && !c.app.value);
     c.app.disabled = !!active;
     const ready = active && r.state === 'running';
     c.reloadBtn.disabled = !ready;
@@ -165,7 +166,21 @@
     if (r && active) c.app.value = r.app;
   }
 
+  /**
+   * The person's own warning for an app (Projects > the project > Settings), asked on the
+   * screen before it runs. What the screen showed before comes back either way.
+   */
+  function askFirst(app) {
+    return new Promise((resolve) => {
+      const was = { hidden: c.overlay.hidden, kids: [...c.ov.children] };
+      const done = (yes) => { c.ov.replaceChildren(...was.kids); c.overlay.hidden = was.hidden; resolve(yes); };
+      setOverlay('alert', `Run ${app.name}?`, app.warn, [{ label: `Run ${app.name}`, run: () => done(true) }, { label: 'Cancel', run: () => done(false) }]);
+    });
+  }
+
   async function flutterRun() {
+    const app = appInfo.get(c.app.value);
+    if (app?.warn && !(await askFirst(app))) return;
     const r = await window.jarvis.flutterRun(serial, c.app.value);
     if (!r?.ok) { c.runState.textContent = r?.error || 'Could not start flutter run.'; c.runState.className = 'dev-run-state pill bad'; return; }
     c.run = r.run;
@@ -284,11 +299,19 @@
     let apps = [];
     let list = [];
     try { [apps, { list = [] } = {}] = await Promise.all([window.jarvis.flutterApps(), window.jarvis.devices()]); } catch { /* shown below */ }
+    // The workspace's Flutter apps, discovered - never a fixed list.
     for (const a of apps) {
-      const o = el('option', null, a.found ? a.name : `${a.name} (not found)`);
+      const o = el('option', null, a.name === a.dir ? a.name : `${a.name}  ·  ${a.dir}`);
       o.value = a.key;
-      o.disabled = !a.found;
       c.app.appendChild(o);
+      appInfo.set(a.key, { name: a.name, warn: a.warn || null });
+    }
+    if (!apps.length) {
+      const o = el('option', null, 'No Flutter app in this workspace');
+      o.value = '';
+      o.disabled = true;
+      c.app.appendChild(o);
+      c.runBtn.disabled = true;
     }
     const d = list.find((x) => x.serial === serial);
     if (d) {

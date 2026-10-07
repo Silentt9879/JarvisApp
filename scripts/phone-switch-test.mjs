@@ -5,14 +5,18 @@
 // confirm the main-process bookkeeping (wireDocking, the rebind IPC) that makes video and
 // docking follow the window to its new phone.
 import fs from 'node:fs';
+import path from 'node:path';
 import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 
 let pass = 0; const fails = [];
 const check = (n, c, extra) => {
   if (c) { pass += 1; console.log('PASS  ' + n); }
   else { fails.push(n); console.log('FAIL  ' + n + (extra ? '\n        ' + String(extra).slice(0, 300) : '')); }
 };
-const APP = process.env.P9_APP || 'C:/Users/bantu/Downloads/JarvisApp';
+// JARVIS's own source, found from this file - not a path on any one machine. No workspace is
+// involved at all: the phone window is driven against a stand-in DOM and a recorded bridge.
+const APP = process.env.P9_APP || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => fs.readFileSync(p, 'utf8');
 const tick = async (n = 10) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setImmediate(r)); };
 
@@ -68,13 +72,13 @@ function makeEnv(serial) {
   };
   // The test's view into the main process: a controllable device list, and every call the
   // renderer makes recorded for the checks below.
-  const state = { devices: [], mirrorOk: false, rebindOk: true };
+  const state = { devices: [], mirrorOk: false, rebindOk: true, apps: [] };
   const calls = { mirror: [], rebind: [], flutterRun: [], flutterCmd: [] };
   const jarvis = {
     deviceInput: () => {},
     mirror: async (s, on) => { calls.mirror.push({ serial: s, on }); return state.mirrorOk ? { ok: true } : { ok: false, error: `device '${s}' not found` }; },
     devices: async () => ({ ok: true, list: state.devices }),
-    flutterApps: async () => [],
+    flutterApps: async () => state.apps,
     flutterRun: async (s, app) => { calls.flutterRun.push({ s, app }); return { ok: true, run: { app, name: app, state: 'starting', since: Date.now() } }; },
     flutterCmd: async (s, cmd) => { calls.flutterCmd.push({ s, cmd }); return { ok: true }; },
     flutterLog: async () => [],
@@ -208,6 +212,62 @@ function makeEnv(serial) {
   await tick();
   check('and switching by hand uses the same rebind path', env.calls.rebind.length === 1 && env.calls.rebind[0].extra === 'B');
 }
+
+// ------------------------------------------------------------------ scenario F: the person's own warning comes before a run
+{
+  const env = makeEnv('A');
+  env.state.mirrorOk = true;
+  env.state.devices = [{ serial: 'A', state: 'device', model: 'Phone A', popped: false }];
+  env.state.apps = [
+    { key: 'shop', name: 'Shop App', dir: 'shop', found: true, warn: 'Uses the live database' },
+    { key: 'demo', name: 'Demo App', dir: 'demo', found: true, warn: null },
+  ];
+  vm.runInContext(read(`${APP}/src/renderer/phone.js`), env.ctx, { filename: 'phone.js' });
+  await tick();
+  const root = env.root.children[0];
+  const select = find(root, (n) => n.tagName === 'SELECT');
+  const runBtn = find(root, (n) => n.tagName === 'BUTTON' && n.textContent === 'Run');
+  const overlayTitle = () => find(root, (n) => n.className === 'ov-title')?.textContent;
+  const overlayButton = (label) => findAll(root, (n) => n.tagName === 'BUTTON' && n.className === 'btn small').find((b) => b.textContent === label);
+  const before = overlayTitle();
+
+  select.value = 'shop';
+  runBtn.onclick();
+  await tick();
+  check('an app with a warning asks first, on the screen, in the person\'s own words',
+    overlayTitle() === 'Run Shop App?' && /Uses the live database/.test(find(root, (n) => n.className === 'ov-sub')?.textContent || '') && env.calls.flutterRun.length === 0,
+    overlayTitle());
+  overlayButton('Cancel').onclick();
+  await tick();
+  check('Cancel runs nothing, and the screen shows what it showed before',
+    env.calls.flutterRun.length === 0 && overlayTitle() === before, `${overlayTitle()} / ${before}`);
+  runBtn.onclick();
+  await tick();
+  overlayButton('Run Shop App').onclick();
+  await tick();
+  check('confirming runs exactly that app on this phone',
+    env.calls.flutterRun.length === 1 && env.calls.flutterRun[0].app === 'shop' && env.calls.flutterRun[0].s === 'A');
+
+  const env2 = makeEnv('A');
+  env2.state.mirrorOk = true;
+  env2.state.devices = [{ serial: 'A', state: 'device', model: 'Phone A', popped: false }];
+  env2.state.apps = env.state.apps;
+  vm.runInContext(read(`${APP}/src/renderer/phone.js`), env2.ctx, { filename: 'phone.js' });
+  await tick();
+  const root2 = env2.root.children[0];
+  find(root2, (n) => n.tagName === 'SELECT').value = 'demo';
+  find(root2, (n) => n.tagName === 'BUTTON' && n.textContent === 'Run').onclick();
+  await tick();
+  check('an app with no warning runs at once - nothing is asked',
+    env2.calls.flutterRun.length === 1 && env2.calls.flutterRun[0].app === 'demo');
+}
+
+console.log('\n--- devices.js: the same question on the Devices page ---');
+const devices = read(`${APP}/src/renderer/devices.js`);
+check('a run from a phone card asks first when the app has a warning, and Run on every phone asks once',
+  /async function okToRun\(key\)[\s\S]{0,300}JV\.confirm\(/.test(devices)
+  && /async function flutterRun\(c, \{ asked = false \} = \{\}\) \{\s*if \(!asked && !\(await okToRun\(c\.app\.value\)\)\) return;/.test(devices)
+  && /if \(!app \|\| !\(await okToRun\(app\)\)\) return;[\s\S]{0,300}await flutterRun\(c, \{ asked: true \}\);/.test(devices));
 
 // ------------------------------------------------------------------ what must not have changed, and the main-process bookkeeping
 console.log('\n--- main.mjs: the window keeps working after a rebind, not just the renderer ---');

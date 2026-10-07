@@ -134,12 +134,27 @@
   $('ctxPrecise').onclick = () => { $('ctxPrecise').textContent = 'Counting…'; window.jarvis.context('full'); };
 
   // ------------------------------------------------------------- Agents
+  // Where each specialist comes from, read from the two folders Claude Code takes agents
+  // from: this workspace's .claude/agents, and the user's own ~/.claude/agents (every
+  // workspace). Anything else Claude Code reports is built in, or from a plugin. JARVIS only
+  // reads these folders - it never writes, replaces or removes an agent.
   let agentDocs = null;
+  let userAgentDocs = null;
+  async function loadAgentSources() {
+    if (!agentDocs) agentDocs = await window.jarvis.docs('agents').catch(() => []);
+    if (!userAgentDocs) userAgentDocs = await window.jarvis.docs('userAgents').catch(() => []);
+  }
+  JV.on('agents', () => { agentDocs = null; userAgentDocs = null; });
+  const sourceOf = (a) => (JV.agentInfo(a).builtin ? 'builtin'
+    : (agentDocs || []).some((d) => d.name === a.name) ? 'workspace'
+      : (userAgentDocs || []).some((d) => d.name === a.name) ? 'user' : 'other');
   async function agentDoc(a) {
     const drawer = $('agentDoc');
     drawer.hidden = false;
-    if (!agentDocs) agentDocs = await window.jarvis.docs('agents');
-    const d = agentDocs.find((x) => x.name === a.name);
+    await loadAgentSources();
+    const own = agentDocs.find((x) => x.name === a.name);
+    const mine = !own && userAgentDocs.find((x) => x.name === a.name);
+    const d = own || mine;
     const info = JV.agentInfo(a);
     drawer.replaceChildren();
     const head = el('div', 'drawer-head');
@@ -155,29 +170,46 @@
     drawer.appendChild(head);
     const body = el('div', 'reader');
     drawer.appendChild(body);
-    if (d) openDoc(body, 'agents', d.path, `${info.code} brief`);
+    if (d) openDoc(body, own ? 'agents' : 'userAgents', d.path, `${info.code} brief`);
     else { const p = el('div', 'content'); JV.renderMarkdown(p, a.description || 'A built-in Claude Code agent.'); body.appendChild(p); }
     drawer.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-  // The roster: compact cards (name, one-line role, status) grouped by what each specialist
-  // covers. The full brief is a hover (tooltip) or a click (the drawer) away, not on every card.
-  // A group is one icon, or several: git, ClickUp and notes each keep their page's icon.
-  const ROSTER = [['phone', 'Mobile apps'], ['globe', 'Web apps'], ['server', 'APIs'], ['github clickup edit', 'Git, tasks & notes']];
+  // The roster: compact cards (name, one-line role, status) grouped by where each specialist
+  // comes from. The full brief is a hover (tooltip) or a click (the drawer) away.
+  const SOURCES = [
+    ['workspace', 'This workspace\'s specialists', 'From .claude/agents in this workspace - here only.'],
+    ['user', 'Your specialists', 'From your own .claude/agents folder - in every workspace.'],
+    ['other', 'From plugins and other sources', 'Reported by Claude Code from its plugins or settings.'],
+  ];
   let builtinOpen = false; // the roster redraws while agents work; a fold you opened stays open
-  function renderAgents() {
+  let renderSeq = 0;
+  async function renderAgents() {
+    const seq = ++renderSeq;
+    await loadAgentSources();
+    if (seq !== renderSeq) return; // a newer redraw is on its way
     const box = $('agentAll');
     box.replaceChildren();
     const custom = JV.customAgents().slice().sort((a, b) => a.name.localeCompare(b.name));
-    // No specialists is no reason to hide the built-in agents: they are there either way.
-    if (!custom.length) box.appendChild(el('div', 'muted empty', JV.noSpecialistsText()));
-    const groups = new Map([...ROSTER.map(([, label]) => [label, []]), ['Support crew', []]]);
-    for (const a of custom) {
-      const g = ROSTER.find(([icons]) => icons.split(' ').includes(JV.agentInfo(a).icon));
-      groups.get(g ? g[1] : 'Support crew').push(a);
+    // No specialists is a normal state, not a broken page: JARVIS works with Claude Code's
+    // built-in agents, and the box says how to add one - or lets JARVIS draft one, through the
+    // chat, so the usual approval comes before any file is written.
+    if (!custom.length) {
+      const empty = el('div', 'agents-empty');
+      empty.appendChild(el('b', null, state.agentsLoaded ? 'No specialists yet - and JARVIS works fine without them' : 'Specialists load once the session is connected.'));
+      if (state.agentsLoaded) {
+        empty.appendChild(el('p', null, 'Claude Code\'s built-in agents (below) explore, plan and do general work. A specialist is a Claude Code subagent you define for work you repeat - a reviewer, a test writer, an expert in one of your projects. Put it in this workspace\'s .claude/agents folder, or in your own ~/.claude/agents to have it everywhere.'));
+        const b = el('button', 'btn small', 'Ask JARVIS to draft a specialist');
+        b.type = 'button';
+        b.onclick = () => JV.chat.insert('Draft a Claude Code subagent for this workspace in .claude/agents/ that ');
+        empty.appendChild(b);
+      }
+      box.appendChild(empty);
     }
-    for (const [label, list] of groups) {
+    for (const [key, label, why] of SOURCES) {
+      const list = custom.filter((a) => sourceOf(a) === key);
       if (!list.length) continue;
       const head = el('div', 'roster-head', label);
+      head.title = why;
       head.appendChild(el('em', null, String(list.length)));
       const grid = el('div', 'agent-grid roster');
       for (const a of list) grid.appendChild(JV.agentCard(a, { onClick: agentDoc }));
@@ -376,50 +408,18 @@
   }
   $('cmdFilter').addEventListener('input', renderTools);
 
-  // ------------------------------------------------------------- Workspace
+  // ------------------------------------------------------------- Workspace extras
+  // The project list itself is projects-view.js. Below it, two optional panels for a workspace
+  // that keeps them (.claude/knowledge): open issues and knowledge freshness. A workspace
+  // without them simply does not show them.
   function renderWorkspace() {
     const ws = state.workspace;
-    const g = $('repoGrid');
-    g.replaceChildren();
-    if (!ws) { g.appendChild(el('div', 'muted empty', 'Reading the repos…')); return; }
-    for (const r of ws.repos) {
-      const dirty = r.modified + r.staged + r.untracked;
-      const card = el('div', `hud-panel repo${dirty ? ' dirty' : ''}${r.ok ? '' : ' err'}`);
-      const head = el('div', 'repo-head');
-      head.appendChild(JV.icon(/App$/.test(r.nickname) ? 'phone' : /Web$/.test(r.nickname) ? 'globe' : 'server'));
-      const t = el('div');
-      t.appendChild(el('b', null, r.nickname));
-      t.appendChild(el('small', null, r.name));
-      head.appendChild(t);
-      const code = el('button', 'icon-btn repo-code');
-      code.title = `Open ${r.name} in VS Code`;
-      code.appendChild(JV.icon('code'));
-      code.onclick = (e) => { e.stopPropagation(); window.jarvis.openInCode(r.name); };
-      head.appendChild(code);
-      card.appendChild(head);
-      if (!r.ok) { card.appendChild(el('div', 'mcp-err', r.error || 'git failed')); g.appendChild(card); continue; }
-      const br = el('div', 'repo-branch');
-      br.appendChild(JV.icon('repo'));
-      br.appendChild(el('span', null, r.branch || '?'));
-      if (r.ahead) br.appendChild(el('em', 'ahead', `↑${r.ahead}`));
-      if (r.behind) br.appendChild(el('em', 'behind', `↓${r.behind}`));
-      card.appendChild(br);
-      const counts = el('div', 'repo-counts');
-      const c = (n, label, cls) => { const s = el('span', n ? cls : 'zero'); s.appendChild(el('b', null, String(n))); s.appendChild(el('small', null, label)); counts.appendChild(s); };
-      c(r.modified, 'modified', 'm');
-      c(r.staged, 'staged', 's');
-      c(r.untracked, 'untracked', 'u');
-      card.appendChild(counts);
-      if (r.lastCommit) {
-        const lc = el('div', 'repo-commit');
-        lc.appendChild(el('small', null, r.lastCommit.ago));
-        lc.appendChild(el('span', null, r.lastCommit.subject));
-        lc.title = r.lastCommit.subject;
-        card.appendChild(lc);
-      }
-      g.appendChild(card);
-    }
+    JV.renderProjects?.();
+    if (!ws) return;
     const iss = ws.issues;
+    $('issuePanel').hidden = !iss?.available;
+    $('knowledgePanel').hidden = !ws.knowledge?.available;
+    $('wsExtras').hidden = !iss?.available && !ws.knowledge?.available;
     $('issueCount').textContent = iss?.available ? `${iss.open} open of ${iss.list.length}` : '';
     const ul = $('issueList');
     ul.replaceChildren();
@@ -435,7 +435,9 @@
     if (!ul.children.length) ul.appendChild(el('li', 'muted empty', 'No open-issues file found.'));
     knowledgeBlock($('wsKnowledge'));
   }
-  $('wsRefresh').onclick = (e) => JV.spinWhile(e.currentTarget, () => JV.refreshWorkspace(true));
+  $('wsRefresh').onclick = (e) => JV.spinWhile(e.currentTarget, async () => {
+    await Promise.all([JV.refreshWorkspace(true), JV.rescanProjects?.()]);
+  });
 
   // ------------------------------------------------------------- routing + subscriptions
   const RENDER = { core: renderCore, agents: renderAgents, tasks: renderTasks, memory: renderMemory, knowledge: () => renderKnowledge(), tools: renderTools, workspace: renderWorkspace };

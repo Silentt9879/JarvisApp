@@ -23,6 +23,7 @@
     <nav class="nav-list" id="navList">
       <button id="navChat" data-view="chat" class="active" aria-current="page"><i data-icon="chat"></i><span>Chat</span><em class="nbadge" id="nbChat"></em></button>
       <button id="navCommand" data-view="command"><i data-icon="grid"></i><span>Overview</span></button>
+      <button id="navProjects" data-view="workspace"><i data-icon="layers"></i><span>Projects</span></button>
       <button id="navSource" data-view="source"><i data-icon="github"></i><span>GitHub Desktop</span><em class="nbadge" id="nbSource" hidden></em></button>
       <button id="navDevices" data-view="devices"><i data-icon="phone"></i><span>Devices</span><em class="nbadge" id="nbDevices" hidden></em></button>
       <button id="navCore" data-view="core"><i data-icon="core"></i><span>AI Core</span></button>
@@ -99,11 +100,11 @@
               <div id="welcome" class="welcome">
                 <img src="../../build/icon.png" alt="" />
                 <h1>Good day, sir.</h1>
-                <p>JARVIS is ready in the workspace, with all specialists standing by.</p>
-                <div class="suggestions">
-                  <button class="chip" data-prompt="What's the current status of the workspace?">Workspace status</button>
-                  <button class="chip" data-prompt="What should I work on next for the referral wheel?">Next on the wheel</button>
-                  <button class="chip" data-prompt="Check the knowledge base is current and list open issues.">Open issues</button>
+                <p id="welcomeLine">JARVIS is ready in your workspace.</p>
+                <div class="suggestions" id="welcomeChips">
+                  <button class="chip" data-prompt="Give me a short status of the projects in this workspace: what each one is, and anything uncommitted.">Workspace status</button>
+                  <button class="chip" data-prompt="Summarize what has changed in this workspace's repositories that is not committed yet.">What changed</button>
+                  <button class="chip" data-prompt="Look around this workspace and suggest what I should work on next, and why.">Where to start</button>
                 </div>
               </div>
             </div>
@@ -359,14 +360,20 @@
         </div>
       </section>
 
-      <!-- ========================================================== WORKSPACE -->
+      <!-- ========================================================== PROJECTS (the project command center; built by projects-view.js) -->
       <section class="view" id="view-workspace">
         <div class="page">
-          <div class="page-head"><h2>Workspace</h2><p>Every repo, knowledge freshness and known issues. Read-only: nothing here changes a repo. <button class="panel-link inline" id="wsRefresh"><i data-icon="refresh"></i>Refresh</button></p></div>
-          <div class="repo-grid" id="repoGrid"></div>
-          <div class="two-col">
-            <div class="hud-panel"><h3>Open issues <span class="h-note" id="issueCount"></span></h3><ul class="rows" id="issueList"></ul></div>
-            <div class="hud-panel"><h3>Knowledge</h3><div id="wsKnowledge"></div></div>
+          <div class="page-head"><h2>Projects</h2><p><span id="pjWsName"></span> <span class="muted" id="pjNote"></span> <button class="panel-link inline" id="wsRefresh"><i data-icon="refresh"></i>Look again</button></p></div>
+          <div class="pj-layout">
+            <aside class="pj-side">
+              <input class="field" id="pjFilter" placeholder="Filter projects…" autocomplete="off" spellcheck="false" aria-label="Filter projects" />
+              <ul class="pj-list" id="pjList" aria-label="Projects in this workspace"></ul>
+            </aside>
+            <div class="pj-detail hud-panel" id="pjDetail"></div>
+          </div>
+          <div class="two-col" id="wsExtras">
+            <div class="hud-panel" id="issuePanel"><h3>Open issues <span class="h-note" id="issueCount"></span></h3><ul class="rows" id="issueList"></ul></div>
+            <div class="hud-panel" id="knowledgePanel"><h3>Knowledge</h3><div id="wsKnowledge"></div></div>
           </div>
         </div>
       </section>
@@ -742,22 +749,14 @@
         </div>
       </section>
 
-      <section class="set-sec">
-        <div class="pop-sec">Workspace</div>
-        <div class="ws-row">
-          <div class="ws-path">
-            <b id="wsPath">–</b>
-            <small id="wsPathNote">The folder JARVIS works in: its repos, CLAUDE.md and .claude settings.</small>
-          </div>
-          <button class="btn small" id="wsChange">Change…</button>
-        </div>
-        <div class="ws-confirm" id="wsConfirm" hidden>
-          <div>
-            <b>Switch to <span id="wsNew"></span>?</b>
-            <small>JARVIS restarts in that folder. Conversations are kept per folder, so the list will show that folder's sessions.</small>
-          </div>
-          <button class="btn small" id="wsCancel">Cancel</button>
-          <button class="btn btn-primary small" id="wsGo">Restart in this folder</button>
+      <section class="set-sec" id="wsSec" data-title="Workspaces">
+        <div class="pop-sec">Workspaces</div>
+        <p class="set-note">The folders JARVIS works in - each holds your projects, and may have its own CLAUDE.md and .claude settings. One is active at a time. Switching restarts JARVIS, so nothing keeps running against the old folder. Removing a workspace only takes it off this list: the folder itself is never touched.</p>
+        <ul class="ws-list" id="wsList" aria-label="Workspaces"></ul>
+        <div class="wiz-actions">
+          <button class="btn small" id="wsAdd" type="button">Add a folder…</button>
+          <button class="btn small" id="wsRescan" type="button" title="Look through the active workspace for projects again">Look for projects again</button>
+          <span class="set-note" id="wsScanNote"></span>
         </div>
       </section>
 
@@ -936,7 +935,7 @@
 
     </div>
     <div class="modal-foot">
-      <span class="modal-keys">Ctrl+1–5 views · Ctrl+N new session · Ctrl+K search · Ctrl+, settings</span>
+      <span class="modal-keys">Ctrl+1–6 views · Ctrl+N new session · Ctrl+K search · Ctrl+, settings</span>
       <button class="btn" id="openLogs">Open log folder</button>
     </div>
   </div>
@@ -971,6 +970,7 @@
 <script src="crew-model.js"></script>
 <script src="crew.js"></script>
 <script src="problems.js"></script>
+<script src="projects-view.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

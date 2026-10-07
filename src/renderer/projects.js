@@ -17,8 +17,8 @@
     let parent = state.info?.cwd || '';
     const where = node('b', { class: 'wiz-path' }, parent || 'Choose a folder');
     const pick = node('button', { class: 'btn small', type: 'button', onclick: async () => {
-      const dir = await api.pickWorkspace().catch(() => null);
-      if (dir) { parent = dir; where.textContent = dir; }
+      const r = await api.pickWorkspace().catch(() => null);
+      if (r?.ok && r.path) { parent = r.path; where.textContent = r.path; }
     } }, 'Choose a different folder…');
     const result = node('div', { class: 'proj-result', 'aria-live': 'polite' });
 
@@ -50,7 +50,11 @@
             node('div', { class: 'wiz-actions' },
               node('button', { class: 'btn small', onclick: () => api.openProject(r.path) }, 'Open the folder'),
               node('button', { class: 'btn small btn-primary', onclick: async () => {
-                if (await JV.confirm(`Switch JARVIS to ${r.name}? It restarts once.`, { yes: 'Switch and restart' })) api.setWorkspace(r.path).catch(() => {});
+                // Added to the list, then the usual switch: it asks about trust, then restarts.
+                const added = await api.workspaceAdd(r.path).catch((e) => ({ ok: false, error: e.message }));
+                if (!added?.ok) { JV.notify(added?.error || 'It could not be added as a workspace.', { level: 'err' }); return; }
+                const listed = (await api.workspaces().catch(() => null))?.workspaces.find((x) => x.id === added.workspace.id) || { ...added.workspace, trusted: false };
+                JV.switchWorkspace?.(listed);
               } }, 'Use it as the workspace')));
           return false;
         } },

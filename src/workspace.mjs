@@ -1,6 +1,6 @@
-// Read-only facts about the machine and the BantuApps workspace, for the dashboard:
-// machine load, each repo's git state, knowledge freshness, open issues, the handoff's
-// current focus, and the memory / knowledge documents.
+// Read-only facts about the machine and the active workspace, for the dashboard: machine
+// load, each repo's git state, knowledge freshness, open issues, the handoff's current
+// focus, and the memory / knowledge documents.
 //
 // Nothing here writes. Git runs with --no-optional-locks (no index refresh), and
 // documents are only read from a fixed set of folders, and only .md files.
@@ -10,18 +10,18 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 
-/** The user's names for the nine repos (see .claude/CLAUDE.md section 4). */
-export const NICKNAMES = {
-  bantupanduv2: 'Customer App',
-  BantuRescueDriver_v2: 'Driver App',
-  BantuAutoPanel_v2: 'Panel App',
-  advisorv2: 'Advisor App',
-  bantu2u_merchant: 'Merchant App',
-  'Bantu2U_Center-Module': 'Admin Web',
-  BantuAutoPanelWeb_v2: 'Panel Web',
-  Bantu2u_APIGateway: 'API Gateway',
-  myInsurAPI: 'Insurance API',
-};
+// What a repository is called on screen. Never a list in JARVIS: the main process plugs in
+// the person's own name for a project (Settings) or the name its files carry (discovery),
+// and without either it is the folder's name.
+let nameFor = () => null;
+/** fn(relativePath) -> a display name, or null for the folder's own name. */
+export function setRepoNames(fn) { nameFor = typeof fn === 'function' ? fn : () => null; }
+export function repoDisplayName(rel, fallback) {
+  try { return nameFor(rel) || fallback; } catch { return fallback; }
+}
+
+// Folders never searched for repositories: dependencies and build output.
+const NOT_REPO_PARENTS = new Set(['node_modules', 'build', 'dist', 'bin', 'obj', '.dart_tool', '.gradle', 'target', 'out', 'venv', '.venv', '__pycache__']);
 
 /**
  * Run a command and collect its output.
@@ -39,7 +39,20 @@ export const NICKNAMES = {
  * A cancelled or timed-out run is NEVER reported as success: `ok` is false and the reason
  * is distinguishable, because "the user stopped it" and "it failed" are different things.
  */
+// Git runs only in a workspace the person trusts. A repository's own .git/config can name
+// programs git then starts by itself - an fsmonitor hook on every status, clean filters and
+// diff drivers, a signing program - and a folder that arrives with its .git (a zip, a shared
+// drive) carries that config along. So a restricted workspace gets no git at all, not even a
+// status read, until it is trusted. main.mjs supplies the check; it defaults to allowed for
+// the tests and scripts that use this module on their own folders.
+export const GIT_RESTRICTED = 'This workspace is restricted, so JARVIS does not run Git in it. If it is your code, trust it in Settings > Workspaces.';
+let gitAllowed = () => true;
+export function setGitTrust(fn) { gitAllowed = typeof fn === 'function' ? fn : () => true; }
+
 export function run(cmd, args, { cwd, timeout = 12000, signal, onChild, onLine } = {}) {
+  if (cmd === 'git' && !gitAllowed()) {
+    return Promise.resolve({ ok: false, code: 1, out: '', err: GIT_RESTRICTED, cancelled: false, timedOut: false, restricted: true });
+  }
   return new Promise((resolve) => {
     // GIT_OPTIONAL_LOCKS=0 reaches git run by child scripts too (scan-status.py): a status
     // refresh must never hold index.lock while the user or an agent commits.
@@ -137,14 +150,35 @@ export function systemStats(cwd) {
 }
 
 // ------------------------------------------------------------------ repos
-export function listRepos(cwd) {
+const hasGit = (dir) => { try { return fs.existsSync(path.join(dir, '.git')); } catch { return false; } };
+const childDirs = (dir) => {
   try {
-    return fs.readdirSync(cwd, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && fs.existsSync(path.join(cwd, d.name, '.git')))
-      .map((d) => d.name)
-      .sort((a, b) => a.localeCompare(b));
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !NOT_REPO_PARENTS.has(d.name))
+      .map((d) => d.name);
   } catch { return []; }
+};
+
+/**
+ * Every repository in the workspace, as a path relative to it ("/"-separated): the
+ * workspace itself if it is one ("."), each child folder that is one, and - for a child
+ * that is just a grouping folder ("work/", "clients/") - the repositories one level inside
+ * it. Cheap enough to run before every git call, which is what keeps a key from ever
+ * meaning a repository other than the one asked about.
+ */
+export function listRepos(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return [];
+  const out = [];
+  if (hasGit(cwd)) out.push('.');
+  for (const name of childDirs(cwd)) {
+    const dir = path.join(cwd, name);
+    if (hasGit(dir)) { out.push(name); continue; }
+    for (const inner of childDirs(dir)) if (hasGit(path.join(dir, inner))) out.push(`${name}/${inner}`);
+  }
+  return out.sort((a, b) => (a === '.' ? -1 : b === '.' ? 1 : a.localeCompare(b)));
 }
+/** A repository's own folder name ("." is the workspace folder itself). */
+export const repoFolderName = (cwd, rel) => (rel === '.' ? path.basename(path.resolve(cwd)) : rel.split('/').pop());
 
 /**
  * The state of one repository, given its directory. Source Control needs this for a repo
@@ -152,13 +186,13 @@ export function listRepos(cwd) {
  * real one and `repoState` below is the workspace-relative convenience over it. One
  * implementation, so the Workspace view and Source Control can never disagree.
  */
-export async function repoStateAt(dir, name = path.basename(dir)) {
+export async function repoStateAt(dir, name = path.basename(dir), nickname = name) {
   const [st, lg] = await Promise.all([
     run('git', ['--no-optional-locks', '-C', dir, 'status', '--porcelain=v1', '-b']),
     run('git', ['--no-optional-locks', '-C', dir, 'log', '-1', '--format=%cr%x1f%s%x1f%ct']),
   ]);
-  const r = { name, nickname: NICKNAMES[name] || name, ok: st.ok, branch: null, upstream: null, ahead: 0, behind: 0, modified: 0, staged: 0, untracked: 0, lastCommit: null };
-  if (!st.ok) { r.error = st.err.split('\n')[0].slice(0, 200); return r; }
+  const r = { name, nickname: nickname || name, ok: st.ok, branch: null, upstream: null, ahead: 0, behind: 0, modified: 0, staged: 0, untracked: 0, lastCommit: null };
+  if (!st.ok) { r.error = st.err.split('\n')[0].slice(0, 200); if (st.restricted) r.restricted = true; return r; }
   const lines = st.out.split(/\r?\n/).filter(Boolean);
   const head = lines.shift() || '';
   const m = /^## (.+?)(?:\.\.\.(\S+))?(?: \[(.+)\])?$/.exec(head);
@@ -187,7 +221,10 @@ export async function repoStateAt(dir, name = path.basename(dir)) {
 }
 
 export async function gitStatus(cwd) {
-  return Promise.all(listRepos(cwd).map((n) => repoStateAt(path.join(cwd, n), n)));
+  return Promise.all(listRepos(cwd).map(async (rel) => {
+    const folder = repoFolderName(cwd, rel);
+    return { key: rel, ...(await repoStateAt(path.join(cwd, rel), folder, repoDisplayName(rel, folder))) };
+  }));
 }
 
 // ------------------------------------------------------------------ knowledge
@@ -291,14 +328,20 @@ function projectDirFor(cwd) {
   } catch { return path.join(base, want); }
 }
 
-/** The folders the window may browse. Keys are what the window refers to. */
+/**
+ * The folders the window may browse, read-only. Keys are what the window refers to. The
+ * workspace's own .claude folder, Claude Code's memory for it, and - so the Agents page can
+ * say where each specialist comes from - the user's own agents, shared by every workspace.
+ */
 export function docRoots(cwd) {
   const c = path.join(cwd, '.claude');
+  const home = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   return {
     memory: { label: 'Memory', dir: path.join(projectDirFor(cwd), 'memory'), deep: false },
     knowledge: { label: 'Knowledge', dir: path.join(c, 'knowledge'), deep: true },
     rules: { label: 'Rules', dir: path.join(c, 'jarvis'), deep: false },
     agents: { label: 'Agents', dir: path.join(c, 'agents'), deep: false },
+    userAgents: { label: 'Your agents', dir: path.join(home, 'agents'), deep: false },
     skills: { label: 'Skills', dir: path.join(c, 'skills'), deep: true },
     commands: { label: 'Commands', dir: path.join(c, 'commands'), deep: false },
   };
@@ -368,7 +411,12 @@ export async function readDoc(cwd, rootKey, rel) {
   if (!root || typeof rel !== 'string') throw new Error('Unknown document.');
   const base = path.resolve(root.dir);
   const full = path.resolve(base, rel);
-  if (!full.startsWith(base + path.sep) || !full.toLowerCase().endsWith('.md')) throw new Error('That document is outside the allowed folders.');
+  if (!full.toLowerCase().startsWith(base.toLowerCase() + path.sep) || !full.toLowerCase().endsWith('.md')) throw new Error('That document is outside the allowed folders.');
+  // Through links too: a symlink in the folder may not lead out of it.
+  let real;
+  let realBase;
+  try { [real, realBase] = await Promise.all([fsp.realpath(full), fsp.realpath(base)]); } catch { throw new Error('That document is not there.'); }
+  if (!real.toLowerCase().startsWith(realBase.toLowerCase() + path.sep)) throw new Error('That document is outside the allowed folders.');
   const st = await fsp.stat(full);
   if (st.size > 2 * 1024 * 1024) throw new Error('That document is too large to show.');
   const text = (await fsp.readFile(full, 'utf8')).replace(/^﻿/, '');

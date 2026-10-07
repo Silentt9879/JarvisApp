@@ -1,19 +1,109 @@
 # JARVIS - desktop app
 
-A windowed front end for Claude Code in the BantuApps workspace. It is the same JARVIS
-as the terminal and VS Code: it runs in `C:\Users\bantu\Downloads\BantuApps` with the
-project `CLAUDE.md`, the 13 specialists in `.claude/agents`, skills, hooks and the MCP
-servers, on the signed-in Claude account.
+A windowed command center for Claude Code on Windows. It is the same Claude Code as the
+terminal and VS Code, driven through the Claude Agent SDK on the signed-in Claude account,
+in the folder you choose as your workspace - with that folder's `CLAUDE.md`, agents, skills,
+hooks and MCP servers once you trust it.
 
-Desktop shortcut **JARVIS** -> `dist\win-unpacked\JARVIS.exe`.
+Desktop shortcut **JARVIS** -> the installed app (`%LOCALAPPDATA%\Programs\JARVIS`), or
+`dist\win-unpacked\JARVIS.exe` for a local build.
 
-The workspace folder is chosen in **Settings → Workspace** and saved as `cwd` in
-`%APPDATA%\JARVIS\config.json`; until one is chosen it is `DEFAULT_CWD` in `src\main.mjs`.
-Settings marks the path in red when it does not exist on this machine. Switching restarts
-JARVIS into the new folder rather than half-switching: the session, the file index, the
-memory path and every git read are tied to the folder they started in. The restart stops
-everything the app started first (`shutdownChildren`), so no `claude.exe`, `dotnet watch` or
-`flutter run` is left behind working on the old folder.
+## Workspaces, projects and trust
+
+**Workspaces** are kept in `%APPDATA%\JARVIS\config.json`, schema v2 (`src/workspaces.mjs`):
+`workspaces: [{ id, name, path, addedAt, lastOpened, trusted, projects }]` and
+`activeWorkspaceId`, with `cwd` mirrored from the active one for the code that reads it. A
+1.x config, which had only `cwd`, is migrated on the first start: that folder becomes a
+workspace with an id derived from its path, marked trusted (1.x already ran there with all
+its settings), and the file as it was is kept beside it as `config.before-v2.json`. Every
+write goes through a temp file and a rename (`src/config-file.mjs`). A config that is there
+but cannot be read - invalid JSON from a hand edit, or a file held open by something else -
+is never overwritten: JARVIS runs on its defaults, saves nothing until it reads again, and
+Health shows a **Settings file** problem with the file to look at. A byte-order mark at the
+start (Notepad and Windows PowerShell 5.1 write one) is fine.
+
+**Settings → Workspaces** adds, renames, removes and switches. A folder is refused if it is
+relative, missing, a file, a drive root or the Windows folder, and the same folder twice (by
+its real path) is refused too. Removing one only takes it off the list; the folder is never
+touched. With no workspace at all, JARVIS says so on every page that needs one and offers to
+choose a folder.
+
+Switching restarts JARVIS rather than half-switching: the session, the file index, the
+project index, the memory path and every git read are tied to the folder they started in.
+`restartJarvis()` stops everything the app started first (`shutdownChildren`: the Telegram
+listener, routines, every chat session, web apps, Dart analysis, project tasks, in-flight git
+remotes, the project index and the phone mirrors), so no `claude.exe`, `dotnet watch` or
+`flutter run` is left behind working on the old folder. Before a switch the window asks
+`workspaces:busy`, and the confirmation says what would stop.
+
+**Trust** mirrors Claude Code's own folder trust, and VS Code's Restricted Mode. In a
+workspace JARVIS has not been told to trust, every chat and routine runs with
+`settingSources: ['user']`: the folder's `CLAUDE.md`, `.claude` settings and permission
+rules, hooks, MCP servers and agents are not loaded, and its permission `defaultMode` is
+ignored. JARVIS itself reads the folder and runs nothing from it: no script (the Knowledge
+Base's `scan-status.py` included), no Build, Test or package script, no phone or web run,
+no `dart analyze` (it can load the project's analyzer plugins) and no Git at all - a
+repository's own `.git/config` can name programs Git starts by itself (an `fsmonitor` hook
+on every status, filter and diff drivers, a signing program), and a folder that arrives with
+its `.git` brings that config along. `run()` in `workspace.mjs` refuses every git call while
+restricted, the handlers in `main.mjs` refuse the rest, and the Projects page, Source
+Control, `/diff` and the brief say so instead of showing an error or "all clean". A trusted
+workspace gets `['user', 'project', 'local']` and everything else, exactly like the
+terminal. A workspace you add starts restricted and JARVIS asks; **Trust this folder** in
+Settings, Health or the Projects page changes it, and because the session's settings are
+fixed when it starts, a change restarts JARVIS.
+
+**Discovery** (`src/project-discovery.mjs`) finds the workspace's projects by looking: folder
+listings and a few small marker files, read asynchronously with at most 8 folders open at
+once, up to 6 levels deep and 20,000 folders. It never runs project code, installs anything,
+writes a file or even runs `git` - a `.git` entry is a marker like any other. Markers:
+`.git`; `pubspec.yaml` (Dart, and Flutter when it uses Flutter; an app when it has
+`lib/main.dart`); `*.csproj` / `*.sln`; `package.json`; `pyproject.toml`, `requirements.txt`,
+`setup.py`; `pom.xml`; the Gradle build, settings and wrapper files. Dependency, build and
+tool folders are skipped (`node_modules`, `.git`, `build`, `dist`, `bin`, `obj`,
+`.dart_tool`, `.gradle`, virtual environments, `target`, `.idea`, `.vs`…). A link or junction
+is followed only while its real path stays inside the workspace, and a folder reached twice
+is listed once. Each project gets an id, a display name from its own files (a Flutter app's
+Android label, a project file's name, `package.json` / `pyproject` name), and a place in a
+tree: a Flutter app's `android/`, `ios/`… are its **platforms**, and a project inside
+another is its **package**, **module** or **tests**. `src/project-index.mjs` keeps the result
+for a minute, shared by every view, and runs one scan at a time.
+
+**Machine capabilities** (`src/capabilities.mjs`) are a separate fact: which of Claude Code,
+Git, the GitHub CLI, Node, npm, Flutter, Dart, the .NET SDK, adb, VS Code, Python, Java,
+Gradle and Maven this PC has, with versions and full paths, cached for five minutes.
+`src/project-providers.mjs` joins the two: what each project needs (a Gradle project with a
+wrapper needs only a JDK; a Dart package is happy with Dart or Flutter) and what can be done
+with it. **Health** (`src/health.mjs`) judges every tool against those needs, so a missing
+Flutter is a warning only when the workspace has a Flutter project, and "off" otherwise.
+
+**Projects** (the sidebar, `renderer/projects-view.js`) shows that tree with each project's
+types, platforms, needs, Git state, what is running, open issues and the knowledge status,
+and its **actions**. An action is either a jump to an existing part of JARVIS (Source
+Control, Run on a phone, the Web apps panel, Dart analysis) or a task with a fixed command:
+
+| Project | Tasks |
+|---|---|
+| Flutter / Dart with a `test` folder | `flutter test` / `dart test` |
+| .NET | `dotnet build <project>`, and `dotnet test` for a test project or a solution |
+| Node | `npm run <script>` (or pnpm, yarn or bun, from its lock file) for the scripts it defines among `dev`, `start`, `serve`, `test`, `build`, `lint`, `typecheck`, `check` |
+| Python | `python -m pytest`, only with pytest already in its own `.venv`, `venv` or `env` |
+| Gradle | `assemble` and `test`, through `.\gradlew.bat` when it has one |
+| Maven | `-B compile` and `-B test`, through `.\mvnw.cmd` when it has one |
+
+`src/task-runner.mjs` runs them: started by project and action id (the window never sends a
+command), one at a time per action, arguments checked against a safe pattern before
+anything reaches `cmd.exe`, a 30-minute limit, Stop that ends the whole process tree, and a
+log kept for the window. An action this PC cannot run is still listed, with the reason.
+Builds never publish, install or deploy. In a restricted workspace every action is
+unavailable and the page says so once, with **Trust this folder**. A repository deeper than
+Source Control lists (two folders down) keeps its Git state off the page and its Source
+Control button disabled, with the reason, rather than opening an empty view.
+
+**Your own project settings**, per workspace in `config.json` (`projects`): a display name, a
+**warning** (asked about before a task or a phone run starts, and shown on a web app's card
+beside its Run button), and the **case-code prefix** Git AI keeps in suggested commit
+messages. JARVIS has none built in.
 
 ## Design
 
@@ -24,15 +114,16 @@ so the window follows the operating system's light/dark setting. Settings → Ap
 **System**, **Light** or **Dark**; pinning sets `data-theme` on `<html>`, which the
 stylesheet gives priority over `prefers-color-scheme`.
 
-The window opens on **Chat**, because that is what the app is for. Six views sit in the
-sidebar; the six you reach for less often are folded under **More**, which remembers
-whether you left it open (`localStorage`, `jarvis.navMore`) and opens itself whenever you
-navigate to something inside it. **Ctrl+K** still reaches any view by name, so nothing is
-more than one keystroke away.
+The window opens on **Chat**, because that is what the app is for. Chat, Overview, Projects,
+GitHub Desktop, Devices, AI Core, Notes and Files sit in the sidebar; ClickUp, Agents and
+Tools & Skills are folded under **More**, which remembers whether you left it open
+(`localStorage`, `jarvis.navMore`) and opens itself whenever you navigate to something
+inside it. **Ctrl+K** still reaches any view by name - Memory and the Knowledge Base
+included - so nothing is more than one keystroke away.
 
 | Keys | Does |
 |---|---|
-| **Ctrl+1** … **Ctrl+6** | Chat, Overview, Tasks, Source Control, Files, Memory - the sidebar's order |
+| **Ctrl+1** … **Ctrl+6** | Chat, Overview, GitHub Desktop, Notes, Files, Projects |
 | **Ctrl+N** | New session (asks first if JARVIS is mid-turn) |
 | **Ctrl+K** | Search |
 | **Ctrl+,** | Settings (again to close) |
@@ -62,13 +153,13 @@ location, calendar) there is no panel.
 |---|---|---|
 | **Overview** | The session's state in a line, the activity feed, this machine's CPU / RAM / disk, the specialists, the session's turns and tasks, models and connected systems | session events, `os`, git, knowledge files |
 | **AI Core** | Model, effort, thinking, mode, Claude Code version, account, the context window by category, memory files in context | `getContextUsage`, `initializationResult` |
-| **Agents** | The specialists, lit while working; click for the brief, or hand one a task | `supportedAgents`, `.claude/agents/*.md` |
-| **Tasks** | Your ClickUp board (every sprint, every status), the workspace draft of work not logged yet, this session's task list and turns, the handoff's CURRENT FOCUS | ClickUp MCP (cached), `clickup-task-draft.md`, TodoWrite / TaskCreate / TaskUpdate, `JARVIS_HANDOFF.md` |
+| **Agents** | The specialists, lit while working, grouped by where they come from (this workspace, your own `~/.claude/agents`, built in); click for the brief, or hand one a task. None of your own is a normal state, with a note on how to add one | `supportedAgents`, `.claude/agents/*.md` |
+| **ClickUp** | Your ClickUp board (every sprint, every status) for the member you name, the workspace draft of work not logged yet, this session's task list and turns, the handoff's CURRENT FOCUS | ClickUp MCP (cached), `clickup-task-draft.md`, TodoWrite / TaskCreate / TaskUpdate, `JARVIS_HANDOFF.md` |
 | **Memory** | Memories as a star map (lines are `[[links]]`) and a reader | `~\.claude\projects\...\memory` |
 | **Chat** (the default) | The chat and recent sessions (terminal and VS Code sessions too); hover a session to rename or delete it, hover your message to undo its file changes | Claude Agent SDK |
-| **Knowledge Base** | Knowledge, rules, agents, skills and commands; stale warning + `/relearn` | `.claude\*`, `scan-status.py --json` |
+| **Knowledge Base** | Knowledge, rules, agents, skills and commands; stale warning + `/relearn` | `.claude\*`, `scan-status.py --json` (only in a trusted workspace) |
 | **Tools & Skills** | Slash commands and skills, MCP servers with their tools, built-in tools | `supportedCommands`, `mcpServerStatus` |
-| **Workspace** | The nine repos (branch, ahead/behind, modified/staged/untracked, last commit, open in VS Code), open issues, knowledge freshness | `git --no-optional-locks status`, `open-issues.md` |
+| **Projects** | Every project discovery found, as a tree: types, platforms, what it needs and whether this PC has it, Git state (branch, ahead/behind, changes, last commit), what is running, actions and their logs, open in VS Code; open issues and knowledge freshness | `project-discovery.mjs`, `project-providers.mjs`, `task-runner.mjs`, `git --no-optional-locks status`, `open-issues.md` |
 | **Files** | Every text file in the workspace, read-only, with a preview and one click into VS Code | the workspace folder |
 | **Source Control** | One repository at a time: changes and diffs, staging and commits, branches, fetch / pull / push, history, stashes, conflicts - and, for a GitHub repository, its pull requests and workflow runs (read-only) | `git`, the GitHub API on request |
 
@@ -131,37 +222,48 @@ JARVIS is not an editor and should not become one: VS Code is one click away and
 it in every respect. What this view adds is the short path - find the file, read it without
 leaving the app, then open it where you will actually change it. Nothing here writes.
 
-- A folder tree, the way the editor shows it: a folder per repo, closed until you open one,
-  each with the number of files in it. The root's own `.sql` scripts sit under the folders.
-  About 3,000 files - build output, `node_modules` and `.git` are skipped - indexed in about
-  half a second, and only what is open gets built.
-- A repo with uncommitted work is marked amber with a dot, from the same git read the
-  Workspace page uses.
+- A folder tree, the way the editor shows it: a folder per top-level folder of the
+  workspace, closed until you open one, each with the number of files in it. Files at the
+  workspace's root sit under the folders. Build output, `node_modules` and `.git` are
+  skipped, at most 12,000 files are indexed (a few thousand take about half a second), and
+  only what is open gets built.
+- A repository with uncommitted work is marked amber with a dot, from the same git read the
+  Projects page uses.
 - Filter by kind - **SQL**, Notes, C#, Dart, Web, Config - or search by name or folder: the
   folders holding matches open themselves. Sort A-Z or by what changed most recently, and
   close everything again with one button.
 - Click to read it here with line numbers; **double-click to open it straight in VS Code**.
 - **Copy** takes the whole file (a .sql script goes straight into Workbench), **Copy path**
   takes the relative path, **Show in folder** opens Explorer.
-- Elsewhere: each repo card on **Workspace** has a VS Code button, and the Knowledge Base
-  reader opens the real file in VS Code rather than whatever Windows picks for `.md`.
-- Only paths inside the workspace are ever read or opened - both are refused otherwise.
+- Elsewhere: each project on **Projects** has an Open in VS Code button, and the Knowledge
+  Base reader opens the real file in VS Code rather than whatever Windows picks for `.md`.
+- Only paths inside the workspace are ever read or opened - both are refused otherwise -
+  checked through the real path, so a link or junction inside the workspace cannot lead
+  out of it. Without VS Code, a folder opens in Explorer and a plain document or picture
+  (`.txt`, `.md`, `.json`, `.yaml`, `.csv`, `.log`, `.sql`, `.png`, `.pdf`…, the `OPENABLE`
+  list in `files.mjs`) in Windows' own app for it. Everything else is only shown in Explorer:
+  an allowlist rather than a list of dangers, because a `.sh` opens in Git Bash and runs, a
+  `.py` in Python, and no blocklist keeps up with every handler a PC has.
   VS Code is found from its usual install path; if it is missing, Windows' default opens.
   It is launched as `Code.exe <path>`, which hands the file to the window you already have
   open. The `code.cmd` wrapper is not used: cmd mangles the spaces in "Microsoft VS Code"
   and fails silently, and neither `-g` nor the bundled `cli.js` opened anything when
   measured against a running VS Code. There is no jump-to-line through this route.
 
-## Tasks - the ClickUp board
+## ClickUp - the task board
 
-- **Sync** reads every task assigned to **Jayvian** across every sprint and every status.
+- **Whose tasks** is asked once - your name exactly as your ClickUp profile shows it - and
+  kept in `config.json` (`clickup.member`); JARVIS never picks a person by itself, and the
+  name can be changed beside the board. A cached board fetched for someone else is not
+  shown.
+- **Sync** reads every task assigned to that member across every sprint and every status.
   There is no API key to set up: ClickUp is a remote OAuth MCP server, so the sync borrows
   the connection Claude Code already has. It runs ONE short Claude Code query of its own -
   outside your conversation, on Haiku, with only the read-only `clickup_get/search/filter/
   find/resolve/list` tools allowed. Nothing is ever written back.
 - The model only makes the calls. The tasks are read from the `filter_tasks` results
   themselves, and the query is stopped the moment the last page (`has_more: false`) is in -
-  248 tasks take 20-55 s. The cache in `%APPDATA%\JARVIS\clickup-tasks.json` is replaced
+  a few hundred tasks take under a minute. The cache in `%APPDATA%\JARVIS\clickup-tasks.json` is replaced
   only by a list proven complete: every page from 0 with no gap, closed tasks included, every
   space covered. Anything less fails with a message and leaves the board as it was. A
   5-minute limit bounds a remote that never answers. The page opens from the cache instantly.
@@ -169,18 +271,39 @@ leaving the app, then open it where you will actually change it. Nothing here wr
   work starts expanded. Search by code or title, pick one sprint, or show only unfinished.
   The summary tiles are clickable filters, and the few unfinished tasks are listed in full
   at the top so they are never buried. Each row opens in ClickUp in your browser.
-- **Not in ClickUp yet** reads `.claude/jarvis/clickup-task-draft.md` from the workspace and
-  lists what is waiting to be logged, above what has already gone.
-- The code is split out of the task name (`BE331 - Fix ...`) into its own chip, including the
-  `QA-` variants.
+- **Not in ClickUp yet** reads `.claude/jarvis/clickup-task-draft.md` from the workspace, when
+  it has one, and lists what is waiting to be logged, above what has already gone.
+- A ticket code at the start of a task's name (`AB123 - Fix ...`, or `QA-AB123 - ...`) is
+  split out into its own chip.
 
 ## Source Control - git first, GitHub read-only
 
-GitHub Desktop's everyday workflow for the nine repositories and the app's own: Changes,
-History and Stashes tabs beside a diff, the commit box beneath, and one remote button whose
-label comes from refs already on disk. Remote git runs only when you press it. The full
-design, its safety rules and every verification are in the workspace's
-`.claude/jarvis/proposals.md`, P-009.
+GitHub Desktop's everyday workflow for every Git repository in the workspace - the folder
+itself, the folders in it, and one level below a folder that only groups repositories:
+Changes, History and Stashes tabs beside a diff, the commit box beneath, and one remote
+button whose label comes from refs already on disk. Remote git runs only when you press it.
+
+**The safety rules** (`src/git-policy.mjs`) classify every operation before it runs: read,
+mutate, or destructive - and a destructive one is confirmed (always, or only when the
+repository has uncommitted changes, as the rule says) or refused. The rules come from the
+workspace's own `.claude/jarvis/git-risk-policy.json`, the same file a workspace's
+`.claude/hooks/git-guard.py` can read to guard Claude Code's own git commands. A workspace
+without one gets JARVIS's built-in default (`src/defaults/git-risk-policy.json`, same
+schema): staging, committing, branching, switching, fetch, pull and an ordinary push run;
+discarding, a hard reset, `clean`, a forced push or a push that deletes, deleting a branch
+with `-D`, deleting or moving a tag, `stash push` / `drop` / `clear`, `commit --amend`,
+`rebase` and anything not listed are destructive. A workspace file that exists but cannot
+be read fails closed - everything but reading is treated as destructive - and Health says
+so; it is never silently swapped for the default. **Discard** copies the changes to the Recycle Bin
+before restoring anything, and **Undo** (`git reset --soft HEAD~1`) is offered only for a
+commit that has not been pushed.
+
+**Git AI** (the assistance buttons: commit message, explain a diff, a commit or a conflict,
+review changes, suggest or review a conflict resolution, check for suspicious changes,
+suggest a case) runs only when pressed: one short query with every tool denied, so the model
+sees only the diff it is handed, with anything that looks like a secret masked first, and a
+question before anything large is sent. Its answers are text; nothing it says touches git. A
+project's case-code prefix (Projects → Settings) is the only ticket convention it knows.
 
 **GitHub** is a fourth tab, shown only when the repository's `origin` is on github.com
 (HTTPS or SSH; any other host shows no GitHub UI). It is read-only - JARVIS creates,
@@ -196,9 +319,9 @@ comments on, merges or re-runs nothing on GitHub.
   page - you create it there.
 - **Checks:** "Check workflow runs" asks GitHub about the latest commit GitHub has from this
   branch (or a commit from History, or a pull request's head): each workflow run with its
-  status, times and a link, and the commit's checks. Four repositories deploy to dev on a
-  push to `development`, so this answers "did my push deploy?". After a push the window
-  offers the button; it never presses it.
+  status, times and a link, and the commit's checks. For a repository that deploys on a
+  push, this answers "did my push deploy?". After a push the window offers the button; it
+  never presses it.
 - **When GitHub is asked:** only when you open the tab, press Refresh, Load more, Check or
   Try again, or choose a pull request or a file. Never at startup, on choosing a repository
   or branch, on a timer, or after a commit, fetch, pull or push. The last answer stays,
@@ -209,18 +332,20 @@ comments on, merges or re-runs nothing on GitHub.
   removed, even if GitHub rejects it (fetch or push once in git to renew it).
 - **If GitHub fails** (offline, rate-limited, signed out, slow), the tab says so and offers
   Try again; everything else in Source Control is unaffected. Requests are logged as
-  operation, repository and status, e.g. `github pulls myInsurAPI 200 (graphql 4998/5000)`.
+  operation, repository and status, e.g. `github pulls my-api 200 (graphql 4998/5000)`.
 
 ## Devices - the phones and the web apps, side by side
 
-Every phone on adb appears as a live, touchable screen with its own `flutter run`, and every
-ASP.NET project in the workspace as a card running `dotnet watch run` with the site itself in
-the window. So a referral can be driven on a phone and checked in the Admin Web beside it,
+Every Android phone on adb appears as a live, touchable screen with its own `flutter run`,
+and every ASP.NET site or API discovery found in the workspace as a card running
+`dotnet watch run`. So a flow can be driven on a phone and checked in the web app beside it,
 without leaving JARVIS.
 
-- **Per phone:** a label you choose (Referrer / Referee, remembered), the app picker, Run /
+- **Per phone:** a label you choose (Buyer / Seller, say - remembered), the app picker (the
+  workspace's Flutter apps: a `pubspec.yaml` that uses Flutter and a `lib/main.dart`), Run /
   Stop, hot reload, hot restart, and that run's log. Back / Home / Recents under the screen.
-- **Run on every phone** starts the same app on all of them at once.
+  An app with a warning of your own (Projects → Settings) asks before it runs.
+- **Run on every phone** starts the same app on all of them at once (asking once).
 - **Fullscreen:** the ⤢ button under a screen, or double-click the phone's title row. **Esc**
   leaves it. The log hides so the screen is as tall as the window allows; Back / Home /
   Recents stay, so Esc is free to mean "leave fullscreen".
@@ -503,10 +628,12 @@ stays.
 - Settings live in `%APPDATA%\JARVIS\config.json` under `phone`, not in the window, because the
   watcher runs in the main process and must work whatever view is open.
 
-### The web apps (Admin Web, Panel Web, API Gateway, Insurance API)
+### The web apps (the workspace's ASP.NET sites and APIs)
 
 A compact column beside the phones - a web app belongs in a browser with its dev tools, so
-nothing is embedded here.
+nothing is embedded here. The list comes from discovery: a .NET project on the Web SDK,
+not a test project, is a **site** when it has `Views/`, `Pages/` or `wwwroot/` and an
+**API** otherwise. `dotnet` is started by the full path the capability check found.
 
 - **Run** starts `dotnet watch run -lp http` and, as soon as the app reports its address,
   **opens it in your normal browser**. The address is read from the app's own
@@ -516,8 +643,9 @@ nothing is embedded here.
   plain `dotnet run`. **Log** shows more of the output. The address can be clicked to open
   again, or copied.
 - **Stop** ends the whole process tree; everything started here also stops when JARVIS closes.
-- The Admin Web and Panel Web cards carry a standing **"Talks to production data."** warning,
-  because on localhost they do. Nothing starts on its own - every run is a click.
+- A project with a warning of your own (Projects → Settings - "Uses the live database",
+  say) shows it on its card, beside Run. JARVIS has none built in. Nothing starts on its own -
+  every run is a click.
 - Only an address on this machine can be handed to the browser (`jarvis:openUrl` checks it).
   The window itself embeds nothing: there is no `webviewTag`.
 
@@ -538,18 +666,24 @@ nothing is embedded here.
 ## How it works
 
 ```
-renderer (src/renderer: core, chat, dashboard, pages, devices, webapps, app)
+renderer (src/renderer: core, chat, dashboard, pages, projects-view, devices, webapps, app)
       --preload IPC-->  main (src/main.mjs)
+      main --> workspaces.mjs     (config v2: the workspaces, trust, project settings)
       main --> JarvisSession (src/session.mjs) --> Claude Agent SDK --> claude.exe
-      main --> workspace.mjs (read-only: os, git, knowledge, memory, documents)
-      main --> devices.mjs  (adb + scrcpy, flutter run)
-      main --> webapps.mjs  (dotnet watch run)
+      main --> project-index.mjs --> project-discovery.mjs (read-only scan)
+      main --> project-providers.mjs (needs, actions) + capabilities.mjs (this PC's tools)
+      main --> task-runner.mjs    (Build / Test / script actions)
+      main --> workspace.mjs      (read-only: os, git, knowledge, memory, documents)
+      main --> git.mjs + git-policy.mjs (Source Control), gitai.mjs, github.mjs
+      main --> devices.mjs        (adb + scrcpy, flutter run)   analysis.mjs (dart analyze)
+      main --> webapps.mjs        (dotnet watch run)
 ```
 
 - `session.mjs` drives Claude Code through the official **Claude Agent SDK** in
-  streaming-input mode: `settingSources` user+project+local and the `claude_code`
-  system-prompt preset (that is what loads CLAUDE.md). `canUseTool` turns permission
-  requests into prompts in the window.
+  streaming-input mode, with the `claude_code` system-prompt preset and `settingSources`
+  user+project+local in a trusted workspace (that is what loads its CLAUDE.md, hooks and
+  MCP servers), or user only in one that is not. `canUseTool` turns permission requests
+  into prompts in the window.
 - Working / ready comes from Claude Code's own `session_state_changed` events (enabled with
   `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`), so queued messages keep the Stop button until
   the last one is answered. Older Claude Code without them falls back to `result`.
@@ -558,9 +692,27 @@ renderer (src/renderer: core, chat, dashboard, pages, devices, webapps, app)
   the app). The transcript keeps the latest 400 messages.
 - Nothing is polled while the window is hidden; stats refresh only on the Overview.
 - `workspace.mjs` only reads. Git runs with `--no-optional-locks` (and `GIT_OPTIONAL_LOCKS=0`
-  for the scripts it runs, such as `scan-status.py`); documents are read
-  only from `.claude\{knowledge,jarvis,agents,skills,commands}` and the memory folder, and
-  only `.md` files (paths are checked to stay inside those folders).
+  for the scripts it runs, such as `scan-status.py`, which runs only in a trusted
+  workspace); documents are read only from `.claude\{knowledge,jarvis,agents,skills,commands}`,
+  your own `~\.claude\agents` and the memory folder, and only `.md` files (paths are checked
+  through their real path to stay inside those folders).
+- Windows looks for a program in the working folder before PATH - and Node's own lookup
+  decides that from the parent process's environment, not the child's. So `main.mjs` sets
+  `NoDefaultCurrentDirectoryInExePath=1` for itself before anything starts (every process
+  JARVIS starts inherits it, and `cmd.exe` honours it for the tool it looks up), `cmd.exe`
+  is started by its System32 path for tasks, `flutter run` and `dart analyze`, and `dotnet`
+  by the full path the capability check found. A repository holding its own `cmd.exe`,
+  `git.exe` or `npm.cmd` therefore never stands in for the real one; a project's own wrapper
+  is the only thing run from its folder, and always by name (`.\gradlew.bat`, `.\mvnw.cmd`).
+  `scripts/project-actions-test.mjs` plants both kinds and checks the real ones run.
+- The patterns that read a project's files during a scan stay linear on any input: line
+  patterns use `[ \t]*`, never `\s*` (which crosses line breaks), and an XML attribute is read
+  one tag at a time, each cut at its own `>` (`tagAttribute`). A crafted megabyte of blank
+  lines or open tags had taken minutes on the main process; it now takes milliseconds.
+- Every window and pop-out - created by JARVIS or by a page - gets the same guard
+  (`web-contents-created`): it may not navigate or redirect away from JARVIS's own two pages,
+  `window.open` is refused (a web link opens in your browser instead, and only `http(s)`),
+  and `<webview>` is refused.
 - The window has no Node access: `contextIsolation`, `sandbox`, a strict CSP, and only the
   functions in `preload.cjs`. Model and tool text is inserted as text or as Markdown
   sanitized by DOMPurify - with `style`, `class`, `id` and form controls removed, so text
@@ -589,6 +741,12 @@ renderer (src/renderer: core, chat, dashboard, pages, devices, webapps, app)
   activator, and the shortcut carries it, so Electron finds what it looks for and writes
   nothing. Start's name for an id is cached; rewriting the shortcut is what refreshes it.
   A running JARVIS keeps the identity it started with - restart it after `npm run shortcuts`.
+- **The ids still carry the original `bantuapps` name** (`com.bantuapps.jarvis`, and
+  `"author": "BantuApps"` in `package.json`, which Windows shows as the publisher). They are
+  kept on purpose: the installer's uninstall entry, the Start Menu shortcut, notifications
+  and in-place updates are all keyed on the app id, and changing it would leave existing
+  installs with a second, separate JARVIS. Renaming them is a deliberate migration (new id
+  and toast activator, a shortcut rewrite, an uninstall of the old entry), not a text edit.
 - **Screenshot runs never notify** - the window's notification permission is refused and
   `JV.notify` checks again - and never listen to Telegram. They used to put real toasts on the
   screen, as Electron's.
@@ -608,7 +766,7 @@ it - these belong to the bot.
 ## Rebuild after a change
 
 ```powershell
-cd C:\Users\bantu\Downloads\JarvisApp
+cd <your clone of this repository>
 npm install          # first time / after a package change
 npm run pack         # -> dist\win-unpacked\JARVIS.exe  (the shortcut points here)
 ```
@@ -674,7 +832,9 @@ npm start
 Env:ELECTRON_RUN_AS_NODE`) - VS Code sets it for child processes, and Electron then runs as
 plain Node ("electron does not provide an export named BrowserWindow").
 
-- **`npm test`** runs both unit tests below - no network, no window, a second or two.
+- **`npm test`** runs every suite listed in `package.json` - 23 of them, no network, no
+  window, about half a minute. Each makes its own temporary folders and repositories; none
+  touches your workspace, your config or a real repository.
 - `node scripts/content-test.mjs` - unit test for how text + attachments become a message.
 - `node scripts/remote-test.mjs` - remote control against a fake Telegram: who may speak,
   nothing running late, forged buttons, questions, the audit trail, the log never claiming to
@@ -686,9 +846,10 @@ plain Node ("electron does not provide an export named BrowserWindow").
   on the locked folder (and still exit 0 - see above).
 - `npm run smoke` / `node scripts/smoke.mjs B` - checks the SDK and login without the window.
 - `node scripts/bridge-test.mjs` - one real turn through `JarvisSession`, all prompts allowed.
-- Both run in the same folder as the app (`scripts/workspace.mjs`): `JARVIS_CWD` if set, else
-  `cwd` from `config.json`, else the default - and stop with a clear message if that folder
-  is missing. They used to hardcode the original machine's path and fail anywhere else.
+- Both run in the app's active workspace (`scripts/workspace.mjs`): `JARVIS_CWD` if set, else
+  the active workspace in `config.json`; with neither, or a folder that is missing, they stop
+  with a clear message. The workspace's own `.claude` settings load only when JARVIS trusts
+  it (a `JARVIS_CWD` folder only with `JARVIS_TRUST=1`).
   Each real turn they run leaves a session in that folder's history; delete them from the
   session list afterwards (hover → bin) if you would rather not see them.
 - `JARVIS_DEMO=crew` (capture runs only) plays a scripted set of agent events into the Agents
@@ -698,7 +859,8 @@ plain Node ("electron does not provide an export named BrowserWindow").
   `JARVIS_CLICK=<id or .class, comma-separated to click several in turn>`,
   `JARVIS_SIZE=<w>x<h>`, `JARVIS_AUTOPROMPT=<text>`).
   `JARVIS_CAPTURE_CWD=<folder>` points the run at a throwaway workspace instead of the real
-  one (it needs `.claude\jarvis\git-risk-policy.json` inside), and `JARVIS_CONTEXT=<selector>`
+  one, `JARVIS_USERDATA=<folder>` at a throwaway data folder (config, logs, caches), and
+  `JARVIS_CONTEXT=<selector>`
   right-clicks an element at `JARVIS_CONTEXT_AT` ms. `JARVIS_STORE` puts the previous value
   back before the capture quits.
   By default the click lands 1.5 s before the capture, and the app quits right after it - fine
@@ -730,15 +892,16 @@ plain Node ("electron does not provide an export named BrowserWindow").
   `jarvis.log` (not even "JARVIS starting"). Confirm it with `JARVIS.exe --version` - a Node
   version such as `v24.15.0` means the variable is still set. In bash the one-off fix is
   `env -u ELECTRON_RUN_AS_NODE ./JARVIS.exe`.
-- Settings (gear, or **Ctrl+,**): the workspace folder, appearance (System / Light / Dark),
-  phone alerts, desktop notifications, reduce motion, 24-hour clock. Appearance and the
+- Settings (gear, or **Ctrl+,**): workspaces, appearance (System / Light / Dark), phone
+  alerts, desktop notifications, reduce motion, 24-hour clock, and more. Appearance and the
   window preferences are stored per window in `localStorage` under `jarvis.prefs`; the
-  workspace and phone alerts in `config.json`, because the main process needs them whatever
+  workspaces and phone alerts in `config.json`, because the main process needs them whatever
   view is open.
 
 ## Not in the app
 
-- Voice (deliberately left out).
 - Weather, location and calendar - no data source.
+- iPhones: Devices drives Android phones through adb.
+- Creating, merging or commenting on anything on GitHub: the GitHub tab only reads.
 - The terminal's agent view for background sessions; interactive commands such as
   `/agents` or `/doctor` need the terminal.

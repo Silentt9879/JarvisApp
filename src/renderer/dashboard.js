@@ -5,28 +5,45 @@
   const { $, el, state } = JV;
 
   // ------------------------------------------------------------- agents (shared with the Agents page)
+  // Claude Code's own agents: there in every workspace, with fixed icons.
   const BUILTIN = new Set(['general-purpose', 'Explore', 'Plan', 'statusline-setup', 'claude-code-guide', 'claude']);
-  const AGENT_ICON = {
-    friday: 'phone', roadrunner: 'phone', commander: 'phone', edith: 'phone', sentry: 'globe', control: 'globe',
-    gatekeeper: 'server', underwriter: 'server', diagnostic: 'bug', auditor: 'eye', scout: 'compass',
-    'codebase-learner': 'book', verifier: 'verify', 'general-purpose': 'core', claude: 'core', Explore: 'search',
-    // The three that work a page of this app wear that page's own icon.
-    archivist: 'github', taskmaster: 'clickup', scribe: 'edit',
-    Plan: 'tasks', 'claude-code-guide': 'info', 'statusline-setup': 'settings',
+  const BUILTIN_ICON = {
+    'general-purpose': 'core', claude: 'core', Explore: 'search', Plan: 'tasks',
+    'claude-code-guide': 'info', 'statusline-setup': 'settings',
+  };
+  // Anyone else's agent - a workspace's or the user's own - wears an icon for what its own
+  // description says it does. Never a list of particular agents: JARVIS does not know them.
+  const ICON_HINTS = [
+    [/\b(git|github|commit|branch|pull request)\b/i, 'github'],
+    [/\b(clickup|jira|ticket|backlog|task board)\b/i, 'clickup'],
+    [/\bnotes?\b|\bwrit(e|ing|er)\b|\bdocs?\b(?!.*\bapi\b)/i, 'edit'],
+    [/\b(flutter|dart|android|ios|mobile|phone)\b/i, 'phone'],
+    [/\b(api|backend|server|database|sql|gateway|service)\b/i, 'server'],
+    [/\b(web|website|frontend|front-end|react|vue|angular|asp\.?net|razor|html|css)\b/i, 'globe'],
+    [/\b(debug|diagnos|crash|bug|error)\w*/i, 'bug'],
+    [/\b(review|audit|security|compliance)\w*/i, 'eye'],
+    [/\b(test|verif|qa)\w*/i, 'verify'],
+    [/\b(explor|research|scout|investigat)\w*/i, 'compass'],
+    [/\b(learn|knowledge|codebase|architecture)\w*/i, 'book'],
+  ];
+  const iconFor = (name, description) => {
+    if (BUILTIN_ICON[name]) return BUILTIN_ICON[name];
+    for (const [re, icon] of ICON_HINTS) if (re.test(description || '')) return icon;
+    return 'agents';
   };
   const AGENT_HUE = ['#39c6ff', '#7c8cff', '#b77dff', '#ffb347', '#3ddc97', '#ff7aa8', '#5eead4', '#f5d76e'];
   JV.agentInfo = (a) => {
     const d = a.description || '';
-    // The specialists' convention is "CODENAME — role". Only a short head counts as a
-    // codename: a built-in's description can hold a dash mid-sentence, and splitting there
-    // made half a sentence the agent's title.
+    // A common convention is "CODENAME — role". Only a short head counts as a codename: a
+    // built-in's description can hold a dash mid-sentence, and splitting there made half a
+    // sentence the agent's title.
     const raw = /^([^—–-]+?)\s+[—–-]\s+(.+)$/s.exec(d);
     const m = raw && raw[1].trim().length <= 28 ? raw : null;
     const code = m ? m[1].trim() : a.name;
     const role = JV.clip((m ? m[2] : d).split(/\.\s/)[0].replace(/\.$/, ''), 52);
     let h = 0;
     for (const ch of a.name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-    return { name: a.name, code, role, icon: AGENT_ICON[a.name] || 'agents', builtin: BUILTIN.has(a.name), hue: AGENT_HUE[h % AGENT_HUE.length], description: d };
+    return { name: a.name, code, role, icon: iconFor(a.name, d), builtin: BUILTIN.has(a.name), hue: AGENT_HUE[h % AGENT_HUE.length], description: d };
   };
   JV.customAgents = () => (state.agentList || []).filter((a) => !BUILTIN.has(a.name));
   JV.builtinAgents = () => (state.agentList || []).filter((a) => BUILTIN.has(a.name));
@@ -36,7 +53,7 @@
    * true; after it has reported none, the same sentence is a promise that never comes true.
    */
   JV.noSpecialistsText = () => (state.agentsLoaded
-    ? 'No specialists in this workspace. They are defined in .claude/agents, and this folder has none.'
+    ? 'No specialists yet - JARVIS uses Claude Code\'s built-in agents. Add your own in .claude/agents.'
     : 'Specialists load once the session is connected.');
 
   /** One agent card; `big` adds the description. Clicking runs onClick. */

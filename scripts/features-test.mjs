@@ -203,13 +203,15 @@ await checkAsync('a routine run reads the reply and the cost', async () => {
     yield { type: 'result', subtype: 'success', is_error: false, result: 'All 12 tests pass.', total_cost_usd: 0.04, num_turns: 3 };
   }
   let opts = null;
-  const out = await runRoutine({ prompt: 'Run tests', mode: 'plan', cwd: '' }, { query: (a) => { opts = a.options; return fake(); }, exe: 'claude.exe', defaultCwd: 'C:/work' });
+  const out = await runRoutine({ prompt: 'Run tests', mode: 'plan', cwd: '' }, { query: (a) => { opts = a.options; return fake(); }, exe: 'claude.exe', defaultCwd: 'C:/work', trusted: true });
   assert.equal(out.ok, true);
   assert.equal(out.text, 'All 12 tests pass.');
   assert.equal(out.costUsd, 0.04);
   assert.equal(opts.permissionMode, 'plan', 'read-only unless allowed');
   assert.equal(opts.cwd, 'C:/work');
-  assert.deepEqual(opts.settingSources, ['user', 'project', 'local'], 'same settings as the chat');
+  assert.deepEqual(opts.settingSources, ['user', 'project', 'local'], 'a trusted folder: the same settings as the chat there');
+  await runRoutine({ prompt: 'Run tests', mode: 'plan' }, { query: (a) => { opts = a.options; return fake(); }, exe: 'claude.exe', defaultCwd: 'C:/cloned' });
+  assert.deepEqual(opts.settingSources, ['user'], 'a folder not trusted: the person\'s own settings only - none of its hooks or MCP');
 });
 await checkAsync('a routine that fails says so, never throws', async () => {
   async function* boom() { throw new Error('the agent could not start'); }
@@ -226,10 +228,70 @@ check('the health check flags what is missing, with the fix to offer', () => {
   const by = Object.fromEntries(h.checks.map((c) => [c.id, c]));
   assert.equal(by.signin.state, 'bad');
   assert.equal(by.signin.fix.action, 'signin');
-  assert.equal(by.policy.state, 'warn', 'a missing policy is a warning, not a failure');
+  assert.equal(by.policy.state, 'off', 'a missing policy is the safe confirm-everything default - information, not a problem');
   assert.equal(by.policy.fix.action, 'policyFolder');
   assert.equal(by.telegram.fix.action, 'telegram');
   assert.equal(h.level, 'bad');
+});
+check('optional tools and integrations nobody uses never make JARVIS look unhealthy', () => {
+  const caps = ['flutter', 'dart', 'maven', 'gradle', 'adb', 'python', 'java', 'gh', 'vscode']
+    .map((id) => ({ id, label: id, installed: false, version: null, configured: null, error: 'Not installed on this PC.' }));
+  caps.push({ id: 'git', label: 'Git', installed: true, version: '2.45.1', configured: null });
+  const h = buildHealth({
+    claudeFound: true, signedIn: true, workspaceFound: true, workspace: 'C:/w', policyFound: false,
+    telegramOn: false, telegramWanted: false, githubOn: false, version: '2.0.0',
+    capabilities: caps,
+    projects: [{ id: 'site', name: 'site', types: ['git', 'node'], role: 'root', meta: {} }],
+  });
+  assert.equal(h.level, 'ok', h.checks.filter((c) => c.state !== 'ok' && c.state !== 'off').map((c) => `${c.id}:${c.state}`).join(', '));
+  assert.equal(h.summary, 'Everything is in order');
+  const by = Object.fromEntries(h.checks.map((c) => [c.id, c]));
+  assert.equal(by['cap:flutter'].state, 'off');
+  assert.equal(by['cap:maven'].state, 'off');
+  assert.equal(by.telegram.state, 'off', 'never switched on: optional, not a warning');
+  assert.equal(by.github.state, 'off');
+  assert.equal(by['cap:git'].state, 'ok');
+});
+check('a tool a discovered project needs, but which is missing, becomes an actionable warning', () => {
+  const caps = [
+    { id: 'flutter', label: 'Flutter', installed: false, version: null, configured: null },
+    { id: 'dart', label: 'Dart', installed: false, version: null, configured: null },
+    { id: 'java', label: 'Java', installed: false, version: null, configured: null },
+    { id: 'gradle', label: 'Gradle', installed: false, version: null, configured: null },
+  ];
+  const projects = [
+    { id: 'shop', name: 'shop', displayName: 'Corner Shop', types: ['dart', 'flutter', 'git'], role: 'root', meta: { app: true } },
+    // Flutter's own android/ host project needs nothing of its own: no Gradle/Java warning from it.
+    { id: 'shop/android', name: 'android', types: ['gradle'], role: 'platform', meta: { gradleWrapper: false } },
+  ];
+  const h = buildHealth({ claudeFound: true, signedIn: true, workspaceFound: true, policyFound: true, githubOn: true, capabilities: caps, projects });
+  const by = Object.fromEntries(h.checks.map((c) => [c.id, c]));
+  assert.equal(by['cap:flutter'].state, 'warn');
+  assert.match(by['cap:flutter'].detail, /Flutter project detected \(Corner Shop\), but Flutter is not installed/);
+  assert.match(by['cap:flutter'].detail, /flutter\.dev/, 'it says how to get it');
+  assert.equal(by['cap:gradle'].state, 'off', 'a Flutter app\'s android/ folder does not make Gradle required');
+  assert.equal(by['cap:java'].state, 'off');
+  assert.equal(h.level, 'warn');
+});
+check('a Gradle project with its wrapper needs a JDK, not Gradle itself', () => {
+  const caps = ['gradle', 'java'].map((id) => ({ id, label: id === 'java' ? 'Java' : 'Gradle', installed: false }));
+  const projects = [{ id: 'svc', name: 'svc', types: ['gradle'], role: 'root', meta: { gradleWrapper: true } }];
+  const by = Object.fromEntries(buildHealth({ capabilities: caps, projects }).checks.map((c) => [c.id, c]));
+  assert.equal(by['cap:java'].state, 'warn');
+  assert.equal(by['cap:gradle'].state, 'off');
+});
+check('an integration switched on but not finished is a warning; one never switched on is not', () => {
+  const on = Object.fromEntries(buildHealth({ telegramOn: false, telegramWanted: true }).checks.map((c) => [c.id, c]));
+  assert.equal(on.telegram.state, 'warn');
+  const cu = Object.fromEntries(buildHealth({ clickup: { used: true, error: 'ClickUp is not connected' } }).checks.map((c) => [c.id, c]));
+  assert.equal(cu.clickup.state, 'warn');
+  const never = Object.fromEntries(buildHealth({}).checks.map((c) => [c.id, c]));
+  assert.equal(never.clickup.state, 'off');
+});
+check('no workspace chosen at all is a problem with a fix, not a fake folder', () => {
+  const by = Object.fromEntries(buildHealth({ workspaceConfigured: false }).checks.map((c) => [c.id, c]));
+  assert.equal(by.workspace.state, 'bad');
+  assert.equal(by.workspace.fix.action, 'workspace');
 });
 check('a fully set-up JARVIS reads as in order', () => {
   const h = buildHealth({ claudeFound: true, signedIn: true, account: 'me@example.com', workspaceFound: true, workspace: 'C:/w', policyFound: true, telegramOn: true, githubOn: true, version: '1.7.0' });
@@ -242,6 +304,22 @@ check('an update waiting shows as a warning with an Update button', () => {
   const up = h.checks.find((c) => c.id === 'update');
   assert.equal(up.state, 'warn');
   assert.equal(up.fix.action, 'updates');
+});
+check('a settings file that cannot be read comes first, as a problem, with the file to look at', () => {
+  const h = buildHealth({ configProblem: 'config.json is not valid JSON (Unexpected token o)', claudeFound: true, signedIn: true, workspaceFound: true });
+  assert.equal(h.checks[0].id, 'config');
+  assert.equal(h.checks[0].state, 'bad');
+  assert.match(h.checks[0].detail, /not valid JSON[\s\S]*saving nothing until it is fixed[\s\S]*never overwrites it/);
+  assert.equal(h.checks[0].fix.action, 'configFile');
+  assert.equal(buildHealth({}).checks.some((c) => c.id === 'config'), false, 'a readable one is not mentioned');
+});
+check('a restricted workspace: trust is offered, and Source Control\'s rules are not in use - nothing runs Git there', () => {
+  const by = Object.fromEntries(buildHealth({ workspaceFound: true, workspaceTrusted: false, policySource: 'restricted' }).checks.map((c) => [c.id, c]));
+  assert.equal(by.trust.state, 'off');
+  assert.match(by.trust.detail, /no scripts, builds, tests, apps or Git/);
+  assert.equal(by.trust.fix.action, 'trust');
+  assert.equal(by.policy.state, 'off');
+  assert.match(by.policy.detail, /restricted workspace runs no Git/);
 });
 
 // ------------------------------------------------------------------ phone web app

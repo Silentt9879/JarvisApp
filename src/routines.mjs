@@ -131,7 +131,7 @@ export class RoutineStore {
  * the mode it was given. `query` is the agent SDK's query function, passed in so this file
  * does not load the SDK. Never throws: a failed run comes back as { ok: false, error }.
  */
-export async function runRoutine(r, { query, exe, defaultCwd, timeoutMs = 10 * 60 * 1000 }) {
+export async function runRoutine(r, { query, exe, defaultCwd, trusted = false, timeoutMs = 10 * 60 * 1000 }) {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
   let text = '';
@@ -142,7 +142,9 @@ export async function runRoutine(r, { query, exe, defaultCwd, timeoutMs = 10 * 6
       options: {
         cwd: r.cwd || defaultCwd,
         pathToClaudeCodeExecutable: exe,
-        settingSources: ['user', 'project', 'local'],
+        // A folder the person trusts brings its own settings, hooks and MCP; any other runs
+        // with their user settings only (workspaces.mjs, TRUST).
+        settingSources: trusted ? ['user', 'project', 'local'] : ['user'],
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         permissionMode: r.mode === 'acceptEdits' ? 'acceptEdits' : 'plan',
         maxTurns: 40,

@@ -123,15 +123,15 @@ const rstore = new N.NoteStore(RDIR);
 let ready = true;
 const sends = [];
 const jarvis = {
-  notes: async () => ({ ok: true, notes: rstore.list(), telegram: { ready, name: ready ? 'Bantu' : null } }),
+  notes: async () => ({ ok: true, notes: rstore.list(), telegram: { ready, name: ready ? 'Atlas' : null } }),
   noteSave: async (n, o) => {
     const r = rstore.save({ id: n?.id, text: n?.text });
     if (!r.ok) return r;
-    if (!(o && o.telegram)) return { ...r, telegram: { ready, name: ready ? 'Bantu' : null } };
+    if (!(o && o.telegram)) return { ...r, telegram: { ready, name: ready ? 'Atlas' : null } };
     sends.push(r.note.text);
     const sent = ready ? { ok: true } : { ok: false, error: 'No Telegram chat set yet.' };
     if (sent.ok) rstore.markSent(r.note.id);
-    return { ok: true, note: rstore.list().find((x) => x.id === r.note.id), sent, telegram: { ready, name: ready ? 'Bantu' : null } };
+    return { ok: true, note: rstore.list().find((x) => x.id === r.note.id), sent, telegram: { ready, name: ready ? 'Atlas' : null } };
   },
   noteDelete: async (id) => rstore.remove(id),
 };
@@ -150,7 +150,7 @@ check('an empty page offers a new note, with Save off and Delete hidden',
   JV.$('noteTitle').textContent === 'New note' && JV.$('noteSave').disabled === true && JV.$('noteDelete').hidden === true
   && /No notes yet/.test(JV.$('noteList').textContent));
 check('Telegram being set up is named on the page, and the send switch is usable',
-  /Bantu/.test(JV.$('noteTg').textContent) && JV.$('noteSend').disabled === false);
+  /Atlas/.test(JV.$('noteTg').textContent) && JV.$('noteSend').disabled === false);
 
 txt.value = 'Call the workshop\nabout the gearbox';
 txt.fire('input');

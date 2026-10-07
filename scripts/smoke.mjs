@@ -1,9 +1,10 @@
 // Smoke test for the SDK bridge, without Electron.
 //   node scripts/smoke.mjs A  - one tiny isolated turn (proves the login works through the SDK)
-//   node scripts/smoke.mjs B  - a BantuApps session stopped right after "init"
-//                               (proves CLAUDE.md, agents and MCP servers load; no model turn)
+//   node scripts/smoke.mjs B  - a session in the workspace, stopped right after "init"
+//                               (proves CLAUDE.md, agents and MCP servers load; no model turn).
+//                               A workspace JARVIS does not trust gets your user settings only.
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { requireWorkspace } from './workspace.mjs';
+import { requireWorkspace, workspaceTrusted } from './workspace.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,13 +32,14 @@ try {
       if (m.type === 'result') log('result:', m.subtype, '| is_error', m.is_error, '| turns', m.num_turns);
     }
   } else {
-    log('B) BantuApps settings (init only)');
+    const trusted = workspaceTrusted();
+    log(`B) the workspace's settings (init only)${trusted ? '' : ' - not trusted in JARVIS, so your user settings only'}`);
     async function* never() { await new Promise(() => {}); }
     const q = query({
       prompt: never(),
       options: {
         pathToClaudeCodeExecutable: exe, cwd, abortController: abort,
-        settingSources: ['user', 'project', 'local'],
+        settingSources: trusted ? ['user', 'project', 'local'] : ['user'],
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         stderr: (d) => log('stderr:', String(d).trim()),
       },

@@ -10,25 +10,55 @@
 // block normal development, and Claude Code's own permission prompt still sits behind it.
 // This fails CLOSED: it is the last thing between a button and the work, so an operation
 // it cannot classify is treated as destructive and must be confirmed.
+//
+// A workspace WITHOUT a policy file - which is every workspace a new user opens - uses
+// JARVIS's built-in default (src/defaults/git-risk-policy.json): conservative, the same
+// schema, and only ever a fallback. A workspace file that exists always wins, and one that
+// exists but cannot be read still fails closed - a broken policy is never swapped for the
+// default without a word.
 import fs from 'node:fs';
 import path from 'node:path';
 
 const REL = path.join('.claude', 'jarvis', 'git-risk-policy.json');
 
 let cache = null; // { cwd, mtimeMs, policy } - reloaded when the file changes on disk
+let builtIn;      // the default policy, read once
+
+export function defaultPolicy() {
+  if (builtIn === undefined) {
+    try { builtIn = JSON.parse(fs.readFileSync(new URL('./defaults/git-risk-policy.json', import.meta.url), 'utf8')); } catch { builtIn = null; }
+  }
+  return builtIn;
+}
+
+/** Where a workspace's rules come from: 'workspace', 'default', or 'unreadable' (fails closed). */
+export function policySource(cwd) {
+  if (!cwd) return 'default';
+  const file = path.join(cwd, REL);
+  if (!fs.existsSync(file)) return 'default';
+  return load(cwd) ? 'workspace' : 'unreadable';
+}
 
 /** Load the policy for a workspace. Returns null if it cannot be read. */
 function load(cwd) {
-  const file = path.join(cwd, REL);
+  const file = path.join(cwd || '', REL);
+  let st;
+  try { st = fs.statSync(file); } catch {
+    // No policy of its own: JARVIS's built-in default.
+    cache = null;
+    return defaultPolicy();
+  }
   try {
-    const { mtimeMs } = fs.statSync(file);
-    if (cache && cache.cwd === cwd && cache.mtimeMs === mtimeMs) return cache.policy;
+    if (cache && cache.cwd === cwd && cache.mtimeMs === st.mtimeMs) return cache.policy;
     const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
-    cache = { cwd, mtimeMs, policy };
+    // Any JSON object is a policy (one listing nothing makes everything destructive); anything
+    // else is unreadable.
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)) throw new Error('not a policy');
+    cache = { cwd, mtimeMs: st.mtimeMs, policy };
     return policy;
   } catch {
     cache = null;
-    return null;
+    return null; // there, but unreadable: fail closed
   }
 }
 
