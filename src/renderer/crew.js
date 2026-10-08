@@ -54,21 +54,77 @@
   };
 
   // ------------------------------------------------------------- minion names
-  // Every specialist is a minion with a name of its own (the specialist code stays beside it).
-  // Claude Code's built-in agents have fixed names; any other agent - whatever a workspace or
-  // its user defines - gets one from the pool by its own name, so it keeps it every time.
+  // Every specialist is a minion with a name of its own (the specialist code stays beside it),
+  // and no two on the floor share one. Claude Code's built-in agents have fixed names. Any
+  // other agent - whatever a workspace or its user defines - gets the pool name its own name
+  // works out to, so it keeps it every time. That alone was not enough: sixteen specialists
+  // over 28 names landed on the same name six times (two Tims, two Herbs, two Kevins...). So
+  // where two would share a name, the first in name order keeps it and the other takes the
+  // next free one after its own. The order the agents arrive in never matters, so the same
+  // workspace reads the same on every start.
+  // scripts/crew-test.mjs lifts the block between the two markers and runs it as it stands.
+  /* minion-names:start */
   const MINION_NAMES = {
     'general-purpose': 'Norbert', Explore: 'Lance', Plan: 'Ken', claude: 'Mike',
     'statusline-setup': 'Paul', 'claude-code-guide': 'Donnie',
   };
   const NAME_POOL = ['Kevin', 'Stuart', 'Bob', 'Dave', 'Jerry', 'Carl', 'Phil', 'Tim', 'Mark', 'Jorge', 'Tom', 'Mel', 'Otto', 'Josh', 'Tony', 'Eric',
     'Steve', 'Larry', 'Chris', 'Jon', 'Henry', 'Walter', 'Herb', 'Bernard', 'Pete', 'Frank', 'Gus', 'Ned'];
-  JV.minionName = (agent) => {
-    if (MINION_NAMES[agent]) return MINION_NAMES[agent];
+  const nameSlot = (agent) => {
     let h = 0;
     for (const ch of String(agent || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-    return NAME_POOL[h % NAME_POOL.length];
+    return h % NAME_POOL.length;
   };
+  /** The first name nobody has, starting from the agent's own. Past the pool, names are numbered. */
+  function freeName(agent, taken) {
+    const own = nameSlot(agent);
+    for (let k = 0; k < NAME_POOL.length; k += 1) {
+      const name = NAME_POOL[(own + k) % NAME_POOL.length];
+      if (!taken.has(name)) return name;
+    }
+    for (let n = 2; ; n += 1) {
+      const name = `${NAME_POOL[own]} ${n}`;
+      if (!taken.has(name)) return name;
+    }
+  }
+  /** A name for each of these agents, no two alike: { names: agent -> name, taken: every name in use }. */
+  function minionNames(agents) {
+    const names = new Map();
+    const taken = new Set(Object.values(MINION_NAMES));
+    const mine = [...new Set(agents.map((a) => String(a || '')))].sort();
+    for (const a of mine) if (MINION_NAMES[a]) names.set(a, MINION_NAMES[a]);
+    const rest = mine.filter((a) => !names.has(a));
+    // Whoever is first to a name keeps it...
+    for (const a of rest) {
+      const own = NAME_POOL[nameSlot(a)];
+      if (!taken.has(own)) { taken.add(own); names.set(a, own); }
+    }
+    // ...and only the ones who met a namesake move on.
+    for (const a of rest) {
+      if (names.has(a)) continue;
+      const name = freeName(a, taken);
+      taken.add(name);
+      names.set(a, name);
+    }
+    return { names, taken };
+  }
+  let namedFor = null; // the agent list the names below were worked out for
+  let named = minionNames([]);
+  JV.minionName = (agent) => {
+    const key = String(agent || '');
+    const list = (state.agentList || []).map((a) => a.name);
+    const sig = list.join('\n');
+    if (sig !== namedFor) { namedFor = sig; named = minionNames(list); }
+    // An agent the session never listed (a plugin's, or one at work before the list arrived)
+    // still gets a name nobody on the floor has.
+    if (!named.names.has(key)) {
+      const name = MINION_NAMES[key] || freeName(key, named.taken);
+      named.taken.add(name);
+      named.names.set(key, name);
+    }
+    return named.names.get(key);
+  };
+  /* minion-names:end */
 
   // ------------------------------------------------------------- helpers
   const info = (name) => JV.agentInfo({ name, description: (state.agentList || []).find((a) => a.name === name)?.description || '' });
@@ -105,7 +161,8 @@
 
     const infoBox = el('div', 'desk-info');
     const nameRow = el('div', 'desk-name');
-    nameRow.appendChild(el('b', null, JV.minionName(r.agent)));
+    const who = el('b', null, JV.minionName(r.agent));
+    nameRow.appendChild(who);
     nameRow.appendChild(el('span', 'desk-code', i.code));
     const bg = el('em', 'desk-tag', 'background');
     nameRow.appendChild(bg);
@@ -126,7 +183,7 @@
     root.onclick = toggle;
     root.onkeydown = (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); } };
 
-    const d = { root, bIco, bText, bg, timer, tools, tokens, trail, summary, lastAct: null, stepsShown: -1 };
+    const d = { root, who, bIco, bText, bg, timer, tools, tokens, trail, summary, lastAct: null, stepsShown: -1 };
     desks.set(r.id, d);
     return d;
   }
@@ -148,6 +205,10 @@
     const now = crew.doing(r);
     d.root.dataset.state = r.status;
     d.root.dataset.act = now.kind;
+    // The names are worked out from the whole list of specialists, which can arrive after a
+    // desk was built - so a desk follows its minion's name rather than keeping the first one.
+    const name = JV.minionName(r.agent);
+    if (d.who.textContent !== name) d.who.textContent = name;
     if (d.lastAct !== `${now.kind}|${now.text}`) {
       d.lastAct = `${now.kind}|${now.text}`;
       d.bIco.replaceChildren(JV.icon(ACT_ICON[now.kind] || 'tools'));
@@ -208,7 +269,8 @@
     const bench = $('crewBench');
     const busy = new Set(working.map((r) => r.agent));
     const idle = JV.customAgents().filter((a) => !busy.has(a.name)).sort((a, b) => a.name.localeCompare(b.name));
-    const sig = idle.map((a) => a.name).join(',');
+    // Names are part of it: who is called what follows the whole list of specialists.
+    const sig = idle.map((a) => `${a.name}=${JV.minionName(a.name)}`).join(',');
     if (bench.dataset.sig === sig) return;
     bench.dataset.sig = sig;
     bench.replaceChildren();

@@ -17,7 +17,21 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.1.1
+## 🆕 What's new in v2.1.2
+
+**Fixed**
+
+- 🏷️ **Every agent has a name of its own.** On the Agents floor, several specialists shared a name: two Tims, two Herbs, two Kevins, two Tonys, two Daves and two Jons among sixteen. Now no two share one. An agent that was not sharing keeps the name it had; only the ones that doubled up get a new one, and they keep it from then on.
+- 👥 **The same name everywhere.** An agent is called the same on its desk, on the bench of resting agents, in the agents panel of the chat bar, on the chat's agent badges and in the activity feed.
+
+**Technical**
+
+- Cause: `JV.minionName` in `renderer/crew.js` gave each agent the pool name its own name works out to, and nothing compared it with the others. Sixteen agents over a pool of 28 names repeat more often than not; the workspace the report came from had six repeats.
+- `renderer/crew.js`: `minionNames(agents)` works the names out for the whole list at once. Agents are taken in name order, so the order the session lists them in never matters. Whoever is first to a name keeps it, and an agent that meets a namesake takes the next free name after its own (`freeName`). Past the pool a name is numbered ("Kevin 2") rather than repeated. Claude Code's built-in agents keep their fixed names, and an agent the session never listed still gets a name nobody has. `JV.minionName` keeps the result per agent list. A desk now follows its minion's name when it is painted, because the list can arrive after the desk was built.
+- `scripts/crew-test.mjs`: 18 new checks (45 in all) that lift the naming block out of the real `crew.js`. They reproduce the six repeats under the old rule, then show sixteen different names, that only those six agents were renamed, the same names in any order and on a fresh start, and 70 agents over 28 names with no two alike.
+
+<details>
+<summary><b>Earlier: v2.1.1</b></summary>
 
 **Fixed**
 
@@ -30,6 +44,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 - Cause: progress reaches the window as events (`webContents.send`) and the result as the reply to its own call (`ipcRenderer.invoke`). The two are not delivered in order relative to each other; in a test of this Electron version, events sent before the reply arrived after it in 194 of 300 rounds. A late progress event set `remoteOp` to a busy state after `runRemote` had set it to idle, the `idle` event that followed was ignored, and `stopRemote` waited on an answer that was never coming.
 - `renderer/git.js`: `remoteLive` is true only between starting an operation and receiving its reply, and a busy state is accepted from an event only while it is true. `stopRemote` reads the answer to the cancel request and settles at once when nothing is live; otherwise it calls the new `reconcileRemote` after six seconds, which reads the app's own record through `gitRemoteState` (no remote is contacted). `refresh` reconciles too.
 - `scripts/remote-button-test.mjs`: 18 checks driving the real `git.js` through that order of arrival. The same test fails on the v2.1.0 code.
+
+</details>
 
 <details>
 <summary><b>Earlier: v2.1.0</b></summary>

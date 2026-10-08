@@ -129,5 +129,74 @@ const make = () => createCrew(now);
   ok(act('Skill', 'diagnose').kind === 'skill', 'skills');
 }
 
+// 10. Minion names: no two specialists on the floor share one (2026-10-08).
+// The floor showed two Tims, two Herbs, two Kevins, two Tonys, two Daves and two Jons: sixteen
+// specialists, each given the pool name its own name works out to, over a pool of 28. The naming
+// block is lifted out of the real src/renderer/crew.js and run as it stands - nothing is copied.
+{
+  const crewSrc = readFileSync(new URL('../src/renderer/crew.js', import.meta.url), 'utf8');
+  const from = crewSrc.indexOf('/* minion-names:start */');
+  const to = crewSrc.indexOf('/* minion-names:end */');
+  ok(from > 0 && to > from, 'the naming block is where the test expects it in crew.js');
+  const load = (agentList) => {
+    const box = { state: { agentList }, JV: {} };
+    const out = vm.runInNewContext(`${crewSrc.slice(from, to)}\n;({ MINION_NAMES, NAME_POOL, nameSlot, minionNames })`, box);
+    return { ...out, state: box.state, minionName: box.JV.minionName };
+  };
+  const asList = (names) => names.map((name) => ({ name, description: '' }));
+  // The sixteen specialists of the workspace the report came from.
+  const TEAM = ['archivist', 'auditor', 'codebase-learner', 'commander', 'control', 'diagnostic', 'edith', 'friday',
+    'gatekeeper', 'roadrunner', 'scout', 'scribe', 'sentry', 'taskmaster', 'underwriter', 'verifier'];
+  const { NAME_POOL, MINION_NAMES, nameSlot, minionNames, minionName } = load(asList(TEAM));
+  const old = (a) => NAME_POOL[nameSlot(a)]; // what every agent was called before: its own name only
+
+  const before = TEAM.map(old);
+  ok(new Set(before).size < TEAM.length, `the old rule repeats names for this team (${TEAM.length - new Set(before).size} repeats) - the bug is reproduced`);
+  const after = TEAM.map((a) => minionName(a));
+  ok(new Set(after).size === TEAM.length, `all ${TEAM.length} specialists now have a name of their own`);
+  ok(after.every((n) => NAME_POOL.includes(n)), 'every one of them is still a real name from the pool');
+
+  // Nobody is renamed without a reason: a name only changes for the one who met a namesake.
+  const sharers = new Map();
+  for (const a of [...TEAM].sort()) sharers.set(old(a), [...(sharers.get(old(a)) || []), a]);
+  const keepers = [...sharers.values()].map((group) => group[0]);
+  ok(keepers.every((a) => minionName(a) === old(a)), 'whoever is first to a name (in name order) keeps the name they had');
+  const movers = TEAM.filter((a) => !keepers.includes(a));
+  ok(movers.length > 0 && movers.every((a) => minionName(a) !== old(a)), `only the ${movers.length} who shared a name got a new one`);
+
+  // The same team always reads the same, whatever order the session lists it in.
+  const shuffled = load(asList([...TEAM].reverse()));
+  ok(TEAM.every((a) => shuffled.minionName(a) === minionName(a)), 'the order the agents arrive in does not change who is called what');
+  ok(TEAM.every((a) => load(asList(TEAM)).minionName(a) === minionName(a)), 'and a fresh start gives the same names again');
+
+  // Claude Code's own agents keep their fixed names, and nobody from the pool can take one.
+  const mixed = load(asList([...TEAM, 'general-purpose', 'Explore', 'Plan', 'claude']));
+  ok(mixed.minionName('Explore') === 'Lance' && mixed.minionName('general-purpose') === 'Norbert', 'built-in agents keep their fixed names');
+  ok(!NAME_POOL.some((n) => Object.values(MINION_NAMES).includes(n)), 'no pool name is also a built-in name');
+  ok(TEAM.every((a) => mixed.minionName(a) === minionName(a)), 'listing the built-in agents too renames nobody');
+
+  // An agent the session never listed (a plugin's, or one at work before the list arrived).
+  const stranger = load(asList(TEAM));
+  const taken = new Set(TEAM.map((a) => stranger.minionName(a)));
+  const guest = stranger.minionName('plugin:reviewer');
+  ok(guest && !taken.has(guest), 'an unlisted agent gets a name nobody on the floor has');
+  ok(stranger.minionName('plugin:reviewer') === guest, 'and keeps it while the list stays the same');
+  const early = load([]);
+  const first = early.minionName('archivist');
+  const second = early.minionName('diagnostic'); // the old rule called both of these the same
+  ok(first !== second, 'before the list has arrived, two agents at work still do not share a name');
+  early.state.agentList = asList(TEAM);
+  ok(new Set(TEAM.map((a) => early.minionName(a))).size === TEAM.length && early.minionName('archivist') === minionName('archivist'),
+    'once the list arrives the names settle to the same ones as always');
+
+  // More specialists than names: numbered, never repeated.
+  const crowd = Array.from({ length: 70 }, (_, k) => `agent-${k}`);
+  const big = minionNames(crowd);
+  ok(new Set(big.names.values()).size === 70, '70 specialists over 28 names: still no two alike');
+  ok([...big.names.values()].some((n) => / \d+$/.test(n)), 'past the pool a name is numbered rather than repeated');
+  ok(minionNames(['sentry', 'sentry', 'friday']).names.size === 2, 'an agent listed twice is still one minion');
+  console.log(`      names: ${TEAM.map((a) => `${a}=${minionName(a)}`).join(', ')}`);
+}
+
 console.log(`crew-test: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
