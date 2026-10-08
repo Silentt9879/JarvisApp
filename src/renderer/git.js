@@ -69,6 +69,17 @@
    * "two commits ahead of what we last heard", not "two commits ahead right now".
    */
   let remoteOp = 'idle';
+  /**
+   * True only between this window starting an operation and getting its answer.
+   *
+   * Progress arrives as events; the answer arrives as the reply to the window's own call. The
+   * two travel separately and can cross - a progress line sent just before the answer often
+   * lands just after it. That line used to switch the button back to "Fetching…" with nothing
+   * running; the "idle" event behind it was ignored; and pressing Stop then showed "Stopping…"
+   * for ever, because there was nothing to stop and so no answer left to clear it.
+   * So a busy state is believed only while this is true.
+   */
+  let remoteLive = false;
 
   /** "just now", "3 minutes ago", "2 days ago" - for times read from disk. */
   function ago(ms) {
@@ -151,6 +162,7 @@
     if (!active || remoteOp !== 'idle') return;
     const key = active;                       // captured once; the result is checked against it
     remoteOp = { fetch: 'fetching', pull: 'pulling', push: 'pushing', publish: 'publishing' }[op];
+    remoteLive = true;
     renderRemote(detail);
     remoteSay(`${{ fetch: 'Fetching', pull: 'Pulling', push: 'Pushing', publish: 'Publishing' }[op]}…`, 'live');
 
@@ -164,6 +176,8 @@
       })[op]();
     } catch { r = { ok: false, key, error: 'Git could not be reached.' }; }
 
+    // The answer is in: from here no event can make the button busy again (see remoteLive).
+    remoteLive = false;
     remoteOp = 'idle';
 
     // The operation belongs to the repository it started for. If the window has moved on,
@@ -186,11 +200,42 @@
     if (tab === 'history') loadHistory(active, { reset: true }); else history = [];
   }
 
+  /** Back to rest, whatever the button was showing. */
+  function settleRemote(text, cls) {
+    remoteLive = false;
+    remoteOp = 'idle';
+    renderRemote(detail);
+    if (text) remoteSay(text, cls);
+  }
+
+  /**
+   * Ask the app what is really running for this repository, and stop showing work that is
+   * not there. Local only: it reads the app's own record and contacts no remote.
+   */
+  async function reconcileRemote(key = active) {
+    if (!key || remoteOp === 'idle') return;
+    const was = remoteOp;
+    let s = null;
+    try { s = await window.jarvis.gitRemoteState(key); } catch { return; }
+    if (key !== active || remoteOp === 'idle') return;
+    if (s?.ok && s.state === 'idle') settleRemote(was === 'cancelling' ? 'Stopped.' : 'Nothing is running for this repository.', 'warn');
+  }
+
   async function stopRemote() {
     if (!active || remoteOp === 'idle') return;
+    const key = active;
     remoteOp = 'cancelling';
     renderRemote(detail);
-    try { await window.jarvis.gitRemoteCancel(active); } catch { /* it may have just finished */ }
+    let r = null;
+    try { r = await window.jarvis.gitRemoteCancel(key); } catch { /* it may have just finished */ }
+    if (!remoteLive) {
+      // Nothing of this window's is running, so no answer is on its way to clear "Stopping…".
+      if (remoteOp === 'cancelling') settleRemote(r?.ok ? 'Stopped.' : 'Nothing was running, so there was nothing to stop.', 'warn');
+      return;
+    }
+    // The operation's own answer normally follows at once and clears the button. If it does
+    // not, ask what is really running rather than wait for ever.
+    setTimeout(() => reconcileRemote(key), 6000);
   }
 
   // ------------------------------------------------------------- selection
@@ -1703,6 +1748,8 @@
 
     if (active) select(active);
     else { $('scWork').hidden = true; $('scEmpty').hidden = false; }
+    // Refresh also puts the remote button right if it is showing work that is not running.
+    if (!remoteLive) reconcileRemote();
 
     const dirty = repos.filter((x) => x.ok && !x.clean).length;
     const badge = $('nbSource');
@@ -1796,6 +1843,12 @@
   // stderr; this is how the window can always show that the network is in use.
   JV.on('git_remote', (e) => {
     if (!e || e.key !== active) return;
+    if (!remoteLive) {
+      // The operation was already answered (or was never this window's): a line that arrives
+      // late must not turn the button busy again, and anything it still shows is put right.
+      if (remoteOp !== 'idle') settleRemote();
+      return;
+    }
     if (e.state && e.state !== 'idle') {
       remoteOp = remoteOp === 'cancelling' ? 'cancelling' : e.state;
       renderRemote(detail);

@@ -17,7 +17,22 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.1.0
+## 🆕 What's new in v2.1.1
+
+**Fixed**
+
+- ⏹️ **A "Stopping…" that never ended, in GitHub Desktop.** After a fetch, pull or push had already finished, the button could switch itself back to "Fetching…" with nothing running. Pressing Stop then showed "Stopping…" for ever, because there was nothing to stop. The button now returns to rest as soon as the operation answers, and stays there.
+- 🛑 **Stop can no longer hang.** If there is nothing to stop, it says so at once. If a stop is accepted but no answer comes back, JARVIS checks what is really running after six seconds instead of waiting.
+- 🔄 **Refresh puts it right.** Pressing Refresh on the page also clears a button that is showing work that is not running.
+
+**Technical**
+
+- Cause: progress reaches the window as events (`webContents.send`) and the result as the reply to its own call (`ipcRenderer.invoke`). The two are not delivered in order relative to each other; in a test of this Electron version, events sent before the reply arrived after it in 194 of 300 rounds. A late progress event set `remoteOp` to a busy state after `runRemote` had set it to idle, the `idle` event that followed was ignored, and `stopRemote` waited on an answer that was never coming.
+- `renderer/git.js`: `remoteLive` is true only between starting an operation and receiving its reply, and a busy state is accepted from an event only while it is true. `stopRemote` reads the answer to the cancel request and settles at once when nothing is live; otherwise it calls the new `reconcileRemote` after six seconds, which reads the app's own record through `gitRemoteState` (no remote is contacted). `refresh` reconciles too.
+- `scripts/remote-button-test.mjs`: 18 checks driving the real `git.js` through that order of arrival. The same test fails on the v2.1.0 code.
+
+<details>
+<summary><b>Earlier: v2.1.0</b></summary>
 
 **Simplified**
 
@@ -36,6 +51,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 - `health.mjs`: `connectors` and `knowledge` facts, and a fifth state, `note`, that never counts against the verdict. `features.mjs` keeps the tools from the session's `mcp` events; `main.mjs` passes the knowledge check it already ran and whether the workspace has `/relearn`.
 - `renderer/app.js`: `renderSysStatus` shows the session's own state or Health's `level`, and no longer reads the tool list or the knowledge state. Health is asked again on `mcp`, `account` and `init`, when the workspace's knowledge changes state, and every ten minutes while the window is on screen. "Check again" in Health updates the status too.
 - `scripts/status-width-test.mjs`: 46 checks, running the real Health rules, the real status function lifted from `app.js`, and the real `chat-width.js`. Screenshot runs at 1920 and 1100 wide showed the message box filling the chat area, and Health agreeing with the status.
+
+</details>
 
 <details>
 <summary><b>Earlier: v2.0.0</b></summary>
