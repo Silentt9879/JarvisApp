@@ -373,8 +373,15 @@ export function createGitHub({ cwd, fetch, credential = gcmCredential, online = 
   }
 
   function noteRate(h, kind) {
-    const remaining = Number(h.get('x-ratelimit-remaining'));
-    const limit = Number(h.get('x-ratelimit-limit'));
+    // A missing header reads as null, and Number(null) is 0 - finite, not absent - so a
+    // response with NEITHER rate-limit header at all must be checked for first. Otherwise a
+    // 403 with no rate headers (SSO required, a plain forbidden, Retry-After from some other
+    // limiter) reads as "0 of 0 remaining" and is wrongly reported as the hourly limit used up.
+    const rawRemaining = h.get('x-ratelimit-remaining');
+    const rawLimit = h.get('x-ratelimit-limit');
+    if (rawRemaining == null || rawLimit == null) return null;
+    const remaining = Number(rawRemaining);
+    const limit = Number(rawLimit);
     const reset = Number(h.get('x-ratelimit-reset'));
     if (!Number.isFinite(remaining) || !Number.isFinite(limit)) return null;
     lastRate = { resource: str(h.get('x-ratelimit-resource'), 40) || kind, remaining, limit, reset: Number.isFinite(reset) ? reset : null };

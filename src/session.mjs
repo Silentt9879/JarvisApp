@@ -122,7 +122,7 @@ export class JarvisSession {
   /**
    * @param {{cwd:string, exe:string, emit:(e:object)=>void, log:(...a:any[])=>void}} deps
    */
-  constructor({ cwd, exe, emit, log, trusted = false }) {
+  constructor({ cwd, exe, emit, log, trusted = false, queryFn = query }) {
     this.cwd = cwd;
     // A workspace the person has not trusted runs with their own user settings only: its
     // .claude hooks, MCP servers, agents and permission rules are not loaded (workspaces.mjs).
@@ -130,6 +130,9 @@ export class JarvisSession {
     this.exe = exe;
     this.emit = emit;
     this.log = log;
+    // The real SDK's query() by default; a test substitutes a fake so the test suite never
+    // starts a real Claude Code process or spends a real API token.
+    this.queryFn = queryFn;
     this.q = null;
     this.input = null;
     this.abort = null;
@@ -186,7 +189,7 @@ export class JarvisSession {
 
     let q;
     try {
-      q = query({ prompt: this.input, options });
+      q = this.queryFn({ prompt: this.input, options });
     } catch (e) {
       // Status first: the error card offers a restart only when the session is closed.
       this.emit({ kind: 'status', state: 'closed' });

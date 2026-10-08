@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process';
 import { JarvisSession, listRecent, loadHistory, findSessions, removeSession, renameStoredSession, isSessionId, IMAGE_TYPES, MAX_IMAGE_BYTES } from './session.mjs';
 import { systemStats, gitStatus, knowledgeStatus, openIssues, handoffFocus, listDocs, readDoc, searchDocs, docRoots, savedEffort, setRepoNames, setGitTrust, GIT_RESTRICTED } from './workspace.mjs';
 import { isSerial, listDevices, startMirror, stopMirror, resetVideo, sendInput, flutterRun, flutterCommandFor, flutterLog, shutdownDevices, runningFlutter } from './devices.mjs';
-import { analyzeApp, cancelAnalysis, shutdownAnalysis } from './analysis.mjs';
+import { analyzeApp, cancelAnalysis, shutdownAnalysis, runningAnalysis } from './analysis.mjs';
 import { listWebApps, webRun, webStop, webStopAll, webLog, shutdownWebApps, runningWebApps } from './webapps.mjs';
 import { inSnapZone, dockWidth, dockLayout, followLayout, afterPhoneResize, stillDocked } from './dock.mjs';
 import { readDraft, readClickUp, syncClickUp, cleanMember } from './tasks.mjs';
@@ -32,6 +32,9 @@ import { assist, cancelAssist, parseCommitMessage } from './gitai.mjs';
 import { WINDOW_MODES } from './permission-mode.mjs';
 import { createFeatures } from './features.mjs';
 import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis, readDelivery, newerDelivery, clearDelivery, DELIVERY_FILE, deleteAppCommand, launchUpdater, JARVIS_INSTALL_EXE } from './updates.mjs';
+import { resolveTelegramToken, telegramTokenField, migrateTelegramToken } from './phone-token.mjs';
+import { describeStoppedWork } from './active-work.mjs';
+import { closePanes } from './pane-windows.mjs';
 import { normalizeWorkspaces, addWorkspace, renameWorkspace, selectWorkspace, removeWorkspace, setWorkspaceTrust, setProjectSettings, projectSettings, workspacesForWindow, NO_WORKSPACE } from './workspaces.mjs';
 import { readConfigFile, mergeConfigFile } from './config-file.mjs';
 import { createProjectIndex } from './project-index.mjs';
@@ -39,7 +42,7 @@ import { projectDir, flutterApps, dartProjects, webAppsFrom, projectActions, act
 import { discoverProjects } from './project-discovery.mjs';
 import { startTask, stopTask, taskLog, runningTasks, shutdownTasks } from './task-runner.mjs';
 import { getCapabilities } from './capabilities.mjs';
-import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext, cancelAllRemotes } from './git.mjs';
+import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext, cancelAllRemotes, runningRemotes } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.dirname(SRC);
@@ -176,9 +179,22 @@ let clickupLastError = null;
  * the phone. 'telegram' goes out over the internet instead, so it reaches the phone on
  * mobile data anywhere - at the cost of the text passing through Telegram.
  */
+// The Telegram bot token: encrypted by Windows for this user, the same way the GitHub token
+// already is (saveToken/loadToken/clearToken, imported above from updates.mjs - same file
+// format, same safety guarantee). An install from before this encryption existed kept it in
+// config.json's phone.telegram.token as plain text; migrateTelegramToken() moves it across
+// once, below, and phoneConfig() still falls back to that field for as long as it is there -
+// so a PC where Windows cannot encrypt right now (or ever) never loses phone alerts or
+// remote control over it.
+const TELEGRAM_TOKEN_FILE = path.join(userDir, 'telegram-token.bin');
+
 function phoneConfig() {
   const p = loadConfig().phone || {};
   const t = p.telegram && typeof p.telegram === 'object' ? p.telegram : {};
+  // The encrypted copy wins when there is one; otherwise an older install's plain-text field
+  // still works, until migrateTelegramToken() moves it (or it never can, and this stays the
+  // one place the token lives).
+  const token = resolveTelegramToken(TELEGRAM_TOKEN_FILE, safeStorage, t.token);
   return {
     enabled: !!p.enabled,
     // Remote control: messages from your Telegram chat run here. Telegram route only.
@@ -190,7 +206,7 @@ function phoneConfig() {
     address: typeof p.address === 'string' ? p.address : null,
     minSeconds: Number.isFinite(p.minSeconds) ? p.minSeconds : 30,
     telegram: {
-      token: isToken(t.token) ? t.token : null,
+      token,
       chatId: isChatId(t.chatId) ? String(t.chatId) : null,
       name: typeof t.name === 'string' ? t.name.slice(0, 60) : null,
       // With more than one PC: this PC's name, and the group shared with the others (presence.mjs).
@@ -220,6 +236,36 @@ function phoneConfigForWindow(c) {
     ...c,
     telegram: { hasToken: !!c.telegram.token, chatId: c.telegram.chatId, name: c.telegram.name, pcName: c.telegram.pcName, groupId: c.telegram.groupId, groupName: c.telegram.groupName },
   };
+}
+
+/**
+ * Save phone settings with the Telegram token laundered through telegramTokenField()
+ * (phone-token.mjs), no matter what `next.telegram.token` already holds - every call site
+ * here builds `next` by spreading phoneConfig()'s resolved view (which legitimately carries
+ * the real token along while changing some unrelated field), so this is the one place
+ * responsible for never writing that value back out as plain text. Pass `setToken` only from
+ * the two places that actually mean to change the token.
+ */
+function savePhoneConfig(next, { setToken } = {}) {
+  const t = (next && next.telegram) || {};
+  const legacy = rawConfig().phone?.telegram?.token;
+  const token = telegramTokenField(TELEGRAM_TOKEN_FILE, safeStorage, setToken, legacy, { log });
+  return saveConfig({ phone: { ...next, telegram: { ...t, token } } });
+}
+
+/**
+ * Move an older install's plain-text Telegram token into the encrypted store, once
+ * (phone-token.mjs decides whether there is anything to do and performs the encrypted
+ * write; this just re-saves config.json without the field once that succeeds).
+ */
+function runTelegramTokenMigration() {
+  if (process.env.JARVIS_CAPTURE) return;
+  const cur = rawConfig();
+  const legacy = cur.phone?.telegram?.token;
+  if (migrateTelegramToken(TELEGRAM_TOKEN_FILE, safeStorage, legacy, { log })) {
+    savePhoneConfig(cur.phone || {});
+    log('Telegram token migrated to encrypted storage');
+  }
 }
 
 /** Route one alert. Returns { ok } or { ok: false, error, skip? } - never throws. */
@@ -308,7 +354,7 @@ const remote = createRemote({
   peers: () => presence.peers(),
   groupMoved: (id) => {
     const cur = phoneConfig();
-    saveConfig({ phone: { ...cur, telegram: { ...cur.telegram, groupId: id } } });
+    savePhoneConfig({ ...cur, telegram: { ...cur.telegram, groupId: id } });
     presence.set(asleep ? 'asleep' : 'awake');
   },
   interrupt: () => { toWindow({ kind: 'remote_stop' }); ensureSession().interrupt(); },
@@ -874,6 +920,7 @@ function ensureSession() {
 // Side-by-side chats: each extra chat window (File > New chat window, or the button in the chat)
 // has its own session. The main window keeps `session`, which Telegram and the phone web app use.
 const paneSessions = new Map(); // window id -> that window's session
+const paneWindows = new Map();  // the same window id -> that window's BrowserWindow
 let paneCount = 0;
 /** The chat session for the window that sent an IPC call (the main one when unknown). */
 function sessionFor(e) {
@@ -900,6 +947,14 @@ function sessionFor(e) {
   }
   return s;
 }
+/**
+ * Every secondary chat window stopped: its session closed (so it can never go on spending
+ * API tokens or leave a permission request nobody can answer) and the window itself closed,
+ * not left open showing a conversation that no longer exists. Safe with none open, and safe
+ * to call alongside the window's own close handler - closing an already-closed session, or
+ * destroying an already-destroyed window, is a no-op either way.
+ */
+function closeAllPanes() { closePanes(paneSessions, paneWindows); }
 /** Answer a permission request, whichever session is waiting on it. */
 function respondAny(id, decision) {
   if (session?.pending?.has(id)) return session.respond(id, decision);
@@ -957,6 +1012,8 @@ function openPane() {
   });
   pw.loadFile(path.join(SRC, 'renderer', 'index.html'), { query: { pane: String(paneCount) } });
   pw.once('ready-to-show', () => pw.show());
+  paneWindows.set(pw.webContents.id, pw);
+  pw.webContents.once('destroyed', () => paneWindows.delete(pw.webContents.id));
   return { ok: true };
 }
 ipcMain.handle('window:newChat', () => openPane());
@@ -1132,9 +1189,13 @@ function activeWork() {
   const busyChat = busy(session) || [...paneSessions.values()].some(busy);
   let flutter = 0;
   let web = 0;
+  let analysis = 0;
+  let gitRemote = 0;
   try { flutter = runningFlutter(); } catch { /* none */ }
   try { web = runningWebApps(); } catch { /* none */ }
-  return { chat: busyChat, flutter, web, tasks: runningTasks().length, remote: !!remote.ready };
+  try { analysis = runningAnalysis(); } catch { /* none */ }
+  try { gitRemote = runningRemotes(); } catch { /* none */ }
+  return { chat: busyChat, flutter, web, tasks: runningTasks().length, analysis, gitRemote, remote: !!remote.ready };
 }
 
 ipcMain.handle('jarvis:pickWorkspace', async () => {
@@ -1331,7 +1392,7 @@ async function shutdownChildren() {
   try { remote.stop(); } catch { /* shutting down */ }
   try { await features.stop(); } catch { /* shutting down */ }
   try { session?.close(); } catch { /* shutting down */ }
-  for (const s of paneSessions.values()) { try { s.close(); } catch { /* shutting down */ } }
+  closeAllPanes();
   try { shutdownWebApps(); } catch { /* shutting down */ }
   try { shutdownAnalysis(); } catch { /* shutting down */ }
   try { shutdownTasks(); } catch { /* shutting down */ }
@@ -1407,8 +1468,25 @@ function powerDown(from) {
   log('power down from the', from, '- asleep in the tray');
   if (from === 'desk') remote.announce(sleepNotice(pcLabel()));
   remote.sessionStarted();
+  // Left running with the window gone and nothing watching it, a build/test run, Dart
+  // analysis or a git fetch/pull/push would be invisible and could outlive the sleep
+  // entirely. They are stopped the same as on a restart or a quit (shutdownChildren);
+  // power-down itself still asks nothing first (that is the point of it being instant), so
+  // the phone is told what got stopped instead, never left to find out by surprise later.
+  const stopped = describeStoppedWork(activeWork());
+  try { shutdownTasks(); } catch { /* going to sleep */ }
+  try { shutdownAnalysis(); } catch { /* going to sleep */ }
+  try { cancelAllRemotes(); } catch { /* going to sleep */ }
+  if (stopped.length) {
+    log('power down also stopped:', stopped.join(', '));
+    remote.announce(`⏹️ Also stopped, since power down does not wait for anything to finish: ${stopped.join(', ')}.`);
+  }
   try { session?.close(); } catch { /* going to sleep */ }
   session = null;
+  // Every secondary chat window too - "asleep" means no session of this app's is still
+  // running, not just the one behind the main window. Each one is a real, visible window
+  // closing, same as the main one; nothing more needs to be said about it on the phone.
+  closeAllPanes();
   try { shutdownWebApps(); } catch { /* going to sleep */ }
   shutdownDevices().catch(() => {});
   // destroy, not close: close would only hide it to the tray. window-all-closed sees `asleep`.
@@ -1855,21 +1933,20 @@ ipcMain.handle('jarvis:phoneSet', (_e, patch) => {
     address: p.address === null ? null : (typeof p.address === 'string' ? p.address : cur.address),
     minSeconds: Number.isFinite(p.minSeconds) ? Math.max(0, Math.min(3600, p.minSeconds)) : cur.minSeconds,
     telegram: {
-      // A token is only ever replaced by a valid one, or cleared outright with null. A
-      // half-typed token must not wipe a working one out of the config.
-      token: t.token === null ? null : (isToken(t.token) ? t.token.trim() : cur.telegram.token),
       chatId: t.chatId === null ? null : (isChatId(t.chatId) ? String(t.chatId).trim() : cur.telegram.chatId),
       name: t.name === null ? null : (typeof t.name === 'string' ? t.name.slice(0, 60) : cur.telegram.name),
       pcName: cleanPcName(t.pcName) || cur.telegram.pcName,
       // Only cleared from here (leaving the group); it is set by jarvis:telegramFindGroup.
       groupId: t.groupId === null ? null : cur.telegram.groupId,
       groupName: t.groupId === null ? null : cur.telegram.groupName,
+      // token: handled by savePhoneConfig below - a token is only ever replaced by a valid
+      // one, or cleared outright with null. A half-typed token must not wipe a working one out.
     },
   };
   // Renamed, or leaving the group: take the old line off the board first, while it can still be found.
   const renamed = next.telegram.pcName !== cur.telegram.pcName;
   if (cur.telegram.groupId && (renamed || !next.telegram.groupId)) presence.clear();
-  saveConfig({ phone: next });
+  savePhoneConfig(next, { setToken: t.token === null ? null : (isToken(t.token) ? t.token.trim() : undefined) });
   if (renamed) log('this PC is now called', next.telegram.pcName);
   phone.reset();
   const where = next.route === 'telegram' ? `Telegram ${next.telegram.name || next.telegram.chatId || '(not set up)'}` : (next.serial || 'no phone');
@@ -1896,7 +1973,7 @@ ipcMain.handle('jarvis:telegramVerify', async (_e, token) => {
   const r = await verifyToken(use);
   if (!r.ok) { log('telegram verify failed:', r.error || ''); return r; }
   const cur = phoneConfig();
-  saveConfig({ phone: { ...cur, telegram: { ...cur.telegram, token: use, name: r.name } } });
+  savePhoneConfig({ ...cur, telegram: { ...cur.telegram, name: r.name } }, { setToken: use });
   phone.reset();
   log('telegram bot verified:', r.name);
   return { ok: true, name: r.name };
@@ -1911,7 +1988,7 @@ ipcMain.handle('jarvis:telegramFindChat', async () => {
   let r;
   try { r = await discoverChat(cur.telegram.token); } finally { remote.pause(false); }
   if (!r.ok) return r;
-  saveConfig({ phone: { ...cur, telegram: { ...cur.telegram, chatId: r.chatId } } });
+  savePhoneConfig({ ...cur, telegram: { ...cur.telegram, chatId: r.chatId } });
   phone.reset();
   log('telegram chat found:', r.name);
   return { ok: true, chatId: r.chatId, name: r.name };
@@ -1924,14 +2001,14 @@ ipcMain.handle('jarvis:telegramFindGroup', async () => {
   let r;
   try { r = await discoverGroup(cur.telegram.token, cur.telegram.chatId); } finally { remote.pause(false); }
   if (!r.ok) return r;
-  saveConfig({ phone: { ...cur, telegram: { ...cur.telegram, groupId: r.chatId, groupName: r.name } } });
+  savePhoneConfig({ ...cur, telegram: { ...cur.telegram, groupId: r.chatId, groupName: r.name } });
   log('telegram group found:', r.name, r.admin ? '' : '(the bot is not an admin yet)');
   if (remote.ready) presence.set(asleep ? 'asleep' : 'awake');
   return { ok: true, name: r.name, admin: r.admin };
 });
 ipcMain.handle('jarvis:phoneWifi', async (_e, serial) => {
   const r = await enableWifi(serial);
-  if (r.ok) { saveConfig({ phone: { ...phoneConfig(), serial: r.address, address: r.address } }); phone.reset(); }
+  if (r.ok) { savePhoneConfig({ ...phoneConfig(), serial: r.address, address: r.address }); phone.reset(); }
   else log('phone wifi setup failed:', r.error || '');
   return r;
 });
@@ -2528,6 +2605,7 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
     app.setAppUserModelId(IDENTITY.appId);
     log('JARVIS starting; claude.exe at', claudeExe(), 'exists:', fs.existsSync(claudeExe()));
     if (launchHidden) log('started at login, in the tray');
+    runTelegramTokenMigration();
     createWindow();
     createTray();
     watchDeliveries();

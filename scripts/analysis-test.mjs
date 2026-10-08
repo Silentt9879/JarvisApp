@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseMachine, countProblems, findConflicts, analyzeApp, cancelAnalysis, MAX_PROBLEMS } from '../src/analysis.mjs';
+import { parseMachine, countProblems, findConflicts, analyzeApp, cancelAnalysis, runningAnalysis, MAX_PROBLEMS } from '../src/analysis.mjs';
 
 let pass = 0; const fails = [];
 const check = (n, c, extra) => {
@@ -118,9 +118,11 @@ check('...and both get the same answer', (await first).ok && (await second).coun
 d = fakeDart({ stdout: OUT, code: 3, hold: true });
 const stopped = analyzeApp(SHOP, { spawnFn: d.spawnFn });
 check('Stop is accepted while it runs, and refused when nothing is running', cancelAnalysis('shop_app') === true && cancelAnalysis('another_app') === false);
+check('runningAnalysis() counts it while it runs - this is what power-down warns about', runningAnalysis() === 1);
 d.calls[0].proc.finish(1);
 r = await stopped;
 check('a stopped analysis reports "stopped" - not the half-read list', !r.ok && r.cancelled === true);
+check('...and runningAnalysis() is back to zero once it has', runningAnalysis() === 0);
 
 const many = Array.from({ length: MAX_PROBLEMS + 50 }, (_, i) => `INFO|LINT|X|${abs('lib/main.dart')}|${i + 1}|1|1|hint ${i}`).join('\n');
 r = await analyzeApp(SHOP, { spawnFn: fakeDart({ stdout: `${OUT}\n${many}`, code: 3 }).spawnFn });

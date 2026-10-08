@@ -51,12 +51,13 @@
       $('noteSendWrap').title = 'Also send this note to your Telegram';
     } else {
       note.replaceChildren(document.createTextNode('Telegram is not set up yet — '));
-      const b = el('button', 'link-btn', 'set it up on Devices');
-      b.dataset.goto = 'devices';
+      const b = el('button', 'link-btn', 'set it up in Settings');
+      b.type = 'button';
+      b.onclick = () => JV.openSettings?.('phone');
       note.appendChild(b);
       send.checked = false;
       send.disabled = true;
-      $('noteSendWrap').title = 'Set Telegram up on the Devices page first';
+      $('noteSendWrap').title = 'Set Telegram up in Settings > Phone alerts first';
     }
   }
 

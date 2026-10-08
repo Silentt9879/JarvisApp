@@ -17,7 +17,27 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.1.2
+## 🆕 What's new in v2.1.3
+
+**Fixed**
+
+- 🔒 **Telegram bot token, encrypted.** Stored the same way the GitHub token already is (Windows' own per-user encryption), not in config.json as plain text. An existing plain-text token is moved across automatically, once, the first time this build runs - and kept in place for as long as this PC cannot encrypt it, so nothing about phone alerts or remote control breaks over it.
+- 😴 **Power down actually stops everything.** A Dart analysis run, a build/test task, or a Git fetch/pull/push left running when you say "Power down" is now stopped too - the phone is told what got stopped, since power down still does not wait for anything to finish. Previously these could keep running, invisibly, while JARVIS slept.
+- 🪟 **Every side chat window closes too.** A popped-out chat window (File > New chat window) no longer keeps its own Claude session - and its own API usage - running after JARVIS reports itself asleep; the window itself closes along with the main one.
+- 🐙 **A GitHub check miscounted a blocked request as "rate limited."** A 403 with no rate-limit headers at all - SSO required, a plain forbidden - was being read as "0 of your hourly limit left" and reported the wrong reason. It now reports the real one.
+- 📝 **Notes survive a crash mid-save.** `notes.json` is now written the same crash-safe way `config.json` already is (a temp file, then a rename), so a crash or power loss mid-write can no longer leave it half-written and unreadable.
+
+**Technical**
+
+- New: `src/phone-token.mjs` (the Telegram token's encrypted storage and plain-text migration, reusing `updates.mjs`'s existing `saveToken`/`loadToken`/`clearToken`), `src/active-work.mjs` (the plain-English "what power down also stopped" message), `src/pane-windows.mjs` (closes every side chat's session and window together, shared by power down and the ordinary shutdown path).
+- `src/main.mjs`: every phone-settings save now goes through `savePhoneConfig()`, which launders the token field through `phone-token.mjs` rather than writing it to config.json directly; `powerDown()` now also stops running tasks, Dart analysis and Git remote operations, and closes every side chat window, not only the main session.
+- `src/git.mjs`: a `git pull` cancelled mid-merge or mid-rebase now says so plainly - an unfinished merge or rebase is left for you to resolve; nothing is reset, stashed or discarded automatically.
+- `src/github.mjs`: `noteRate()` no longer misreads a response with no rate-limit headers as "0 of 0 remaining."
+- `src/notes.mjs`: `NoteStore.write()` now writes through a temp file and a rename.
+- Tests: 10 new suites (`phone-token`, `power-down`, `github`, `phone-mjs`, `session`, `pane-windows`, `pull-cancel`, `main-chat-ipc`, `files-docs`, `packaged`); `npm test` runs 35 suites, all passing.
+
+<details>
+<summary><b>Earlier: v2.1.2</b></summary>
 
 **Fixed**
 
@@ -29,6 +49,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 - Cause: `JV.minionName` in `renderer/crew.js` gave each agent the pool name its own name works out to, and nothing compared it with the others. Sixteen agents over a pool of 28 names repeat more often than not; the workspace the report came from had six repeats.
 - `renderer/crew.js`: `minionNames(agents)` works the names out for the whole list at once. Agents are taken in name order, so the order the session lists them in never matters. Whoever is first to a name keeps it, and an agent that meets a namesake takes the next free name after its own (`freeName`). Past the pool a name is numbered ("Kevin 2") rather than repeated. Claude Code's built-in agents keep their fixed names, and an agent the session never listed still gets a name nobody has. `JV.minionName` keeps the result per agent list. A desk now follows its minion's name when it is painted, because the list can arrive after the desk was built.
 - `scripts/crew-test.mjs`: 18 new checks (45 in all) that lift the naming block out of the real `crew.js`. They reproduce the six repeats under the old rule, then show sixteen different names, that only those six agents were renamed, the same names in any order and on a fresh start, and 70 agents over 28 names with no two alike.
+
+</details>
 
 <details>
 <summary><b>Earlier: v2.1.1</b></summary>

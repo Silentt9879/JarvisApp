@@ -455,13 +455,20 @@ check('a node starter writes a runnable server and a CLAUDE.md', () => {
 await checkAsync('creating a project makes the folder, and says what a missing tool means', async () => {
   const parent = fs.mkdtempSync(path.join(T, 'parent-'));
   const calls = [];
-  const run = async (file, args) => { calls.push(file); return { ok: true, output: '' }; };
+  const opts = [];
+  const run = async (file, args, o) => { calls.push(file); opts.push(o); return { ok: true, output: '' }; };
   const hasTool = async (t) => t === 'git';
   const r = await createProject({ parent, name: 'Shop', template: 'flutter', run, hasTool });
   assert.equal(r.ok, true);
   assert.ok(fs.existsSync(path.join(parent, 'Shop', 'CLAUDE.md')));
   assert.ok(r.notes.some((n) => /Flutter is not installed/.test(n)), 'a missing tool is said plainly');
   assert.deepEqual(calls, ['git'], 'only git was run');
+  // `run` here is updates.mjs's runCommand in the real wiring (features.mjs's project:create),
+  // whose options are { timeoutMs, cwd } - not workspace.mjs's run(), which takes `timeout`.
+  // git init gets its own longer budget; passing the wrong key would silently fall back to
+  // runCommand's 2-minute default instead.
+  assert.equal(opts[0].timeoutMs, 60000, 'git init is given 60s, not silently the default');
+  assert.equal(opts[0].cwd, path.join(parent, 'Shop'));
   const again = await createProject({ parent, name: 'Shop', template: 'empty', run, hasTool });
   assert.equal(again.ok, false, 'an existing folder is never overwritten');
 });

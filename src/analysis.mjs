@@ -171,3 +171,8 @@ export function shutdownAnalysis() {
   for (const e of running.values()) { e.cancelled = true; killTree(e.proc); }
   running.clear();
 }
+
+/** How many `dart analyze` runs are in flight right now - for the "what would stop" warnings. */
+export function runningAnalysis() {
+  return running.size;
+}

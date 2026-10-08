@@ -464,7 +464,7 @@ await check('wiring: switching is restart-based, through the one shutdown that s
   assert.match(main, /ipcMain\.handle\('workspaces:remove'[\s\S]{0,500}if \(!r\.switched\) return \{ ok: true \};[\s\S]{0,40}return restartJarvis\(/, 'removing the active one restarts; removing another does not');
   assert.match(main, /function restartJarvis[\s\S]{0,600}await shutdownChildren\(\);[\s\S]{0,500}app\.relaunch/, 'a restart always runs the shutdown first');
   assert.match(main, /filter\(\(a\) => !\['--restarted', '--hidden', '--updated'\]\.includes\(a\)\)/, 'and comes back with a window, without announcing an update again');
-  assert.match(main, /async function shutdownChildren[\s\S]{0,400}for \(const s of paneSessions\.values\(\)\) \{ try \{ s\.close\(\); \}/, 'side chats are closed too, so no claude.exe is left behind');
+  assert.match(main, /async function shutdownChildren[\s\S]{0,400}closeAllPanes\(\);/, 'side chats (sessions and their windows) are closed too, so no claude.exe is left behind');
   assert.equal((main.match(/app\.relaunch\(/g) || []).length, 1, 'exactly one relaunch in the app - no second restart path');
   const configFile = fs.readFileSync(new URL('../src/config-file.mjs', import.meta.url), 'utf8');
   assert.ok(/fs\.renameSync\(tmp, file\)/.test(configFile) && /mergeConfigFile\(configPath, patch\)/.test(main), 'the config is written atomically');

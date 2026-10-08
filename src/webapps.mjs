@@ -1,8 +1,9 @@
 // Web apps - the ASP.NET Core sites and APIs in the workspace, run from the Devices view.
 //
 // One `dotnet watch run` per project (hot reload on save), its console in the window, and
-// the site itself shown in a <webview> beside the phones. The URL is read from the app's
-// own "Now listening on:" line, never assumed.
+// its address opened in your normal browser - a web app belongs in a browser with its own
+// dev tools, so nothing is embedded here (there is no <webview> anywhere in JARVIS). The URL
+// is read from the app's own "Now listening on:" line, never assumed.
 //
 // A project may run against real data - a production database, live push notifications.
 // JARVIS cannot know that, so it never guesses: a person can give any project a warning in

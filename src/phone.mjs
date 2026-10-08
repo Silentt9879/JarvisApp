@@ -31,7 +31,7 @@ function adb(args, timeout = 15000) {
  * Everything we send is text the model or a tool produced, so it is never trusted:
  * control characters go, and a single quote is closed, escaped and reopened.
  */
-function sh(value, max = 220) {
+export function sh(value, max = 220) {
   const clean = String(value == null ? '' : value)
     .replace(/[\u0000-\u001f\u007f]+/g, ' ') // newlines and control codes confuse adb shell
     .replace(/\s+/g, ' ')
@@ -45,10 +45,10 @@ function sh(value, max = 220) {
  * has finished registering it, so the first look is reliably too early - give it a few
  * tries before believing it is absent.
  */
-async function landed(serial, tag) {
+async function landed(serial, tag, run, waitMs) {
   for (let i = 0; i < 4; i += 1) {
-    await new Promise((r) => setTimeout(r, 400));
-    const list = await adb(['-s', serial, 'shell', 'cmd notification list']);
+    await new Promise((r) => setTimeout(r, waitMs));
+    const list = await run(['-s', serial, 'shell', 'cmd notification list']);
     if (!list.ok) return true; // cannot tell; do not cry wolf on a bad read
     if (list.out.split('\n').some((line) => line.split('|')[3] === tag)) return true;
   }
@@ -64,23 +64,23 @@ async function landed(serial, tag) {
  * notifications for "Shell" accepts every one of these in silence. So the tray is checked
  * afterwards, and a buzz that never arrived is reported as the failure it is.
  */
-export async function postNotification(serial, { title, body, tag = TAG, verify = true }) {
+export async function postNotification(serial, { title, body, tag = TAG, verify = true }, { run = adb, landedWaitMs = 400 } = {}) {
   if (!isSerial(serial)) return { ok: false, error: 'Not a device serial.' };
   const cmd = `cmd notification post -S bigtext -t ${sh(title, 60)} ${sh(tag, 40)} ${sh(body, 220)}`;
-  const r = await adb(['-s', serial, 'shell', cmd]);
+  const r = await run(['-s', serial, 'shell', cmd]);
   // The command prints the Notification it built; anything else is a refusal.
   if (!r.ok || !/posting:|Notification\(/i.test(r.out)) {
     return { ok: false, error: r.out ? r.out.split('\n')[0].slice(0, 200) : 'adb did not answer.' };
   }
-  if (verify && !(await landed(serial, tag))) {
+  if (verify && !(await landed(serial, tag, run, landedWaitMs))) {
     return { ok: false, error: 'The phone took the notification but did not show it. Allow notifications from "Shell" on the phone.' };
   }
   return { ok: true, tag };
 }
 
 /** The phones adb can see right now, newest-style `adb devices -l` output. */
-export async function listPhones() {
-  const r = await adb(['devices', '-l']);
+export async function listPhones({ run = adb } = {}) {
+  const r = await run(['devices', '-l']);
   if (!r.ok) return [];
   return r.out.split('\n').slice(1).map((line) => {
     const m = /^(\S+)\s+(device|unauthorized|offline)\b(.*)$/.exec(line.trim());
@@ -117,12 +117,12 @@ export function pickLanAddress(ipOutput) {
   return pick ? pick.ip : null;
 }
 
-async function lanAddress(serial) {
-  const out = await adb(['-s', serial, 'shell', 'ip -o -f inet addr show']);
+async function lanAddress(serial, run) {
+  const out = await run(['-s', serial, 'shell', 'ip -o -f inet addr show']);
   const pick = pickLanAddress(out.out);
   if (pick) return { ok: true, address: pick };
 
-  const wifi = await adb(['-s', serial, 'shell', 'cmd wifi status']);
+  const wifi = await run(['-s', serial, 'shell', 'cmd wifi status']);
   return {
     ok: false,
     error: /wifi is disabled/i.test(wifi.out || '')
@@ -135,27 +135,27 @@ async function lanAddress(serial) {
  * Switch a USB-connected phone to Wi-Fi and connect to it, so the cable can come out.
  * Returns the address to store; it stays valid until the phone reboots or changes network.
  */
-export async function enableWifi(serial) {
+export async function enableWifi(serial, { run = adb, restartWaitMs = 2000 } = {}) {
   if (!isSerial(serial)) return { ok: false, error: 'Not a device serial.' };
   if (serial.includes(':')) return { ok: true, address: serial }; // already a Wi-Fi device
 
-  const ip = await lanAddress(serial);
+  const ip = await lanAddress(serial, run);
   if (!ip.ok) return ip;
 
-  const tcp = await adb(['-s', serial, 'tcpip', '5555'], 20000);
+  const tcp = await run(['-s', serial, 'tcpip', '5555'], 20000);
   if (!tcp.ok) return { ok: false, error: tcp.out || 'adb tcpip failed.' };
-  await new Promise((r) => setTimeout(r, 2000)); // the phone restarts adbd on the new port
+  await new Promise((r) => setTimeout(r, restartWaitMs)); // the phone restarts adbd on the new port
 
   const address = `${ip.address}:5555`;
-  const conn = await connect(address);
+  const conn = await connect(address, { run });
   if (!conn.ok) return { ok: false, error: conn.error };
   return { ok: true, address };
 }
 
 /** Re-attach to a phone over Wi-Fi (after a reboot, or when the app starts). */
-export async function connect(address) {
+export async function connect(address, { run = adb } = {}) {
   if (!CONNECT.test(String(address || ''))) return { ok: false, error: 'Not a host:port address.' };
-  const r = await adb(['connect', address], 20000);
+  const r = await run(['connect', address], 20000);
   if (/^connected to|already connected/i.test(r.out)) return { ok: true, address };
   return { ok: false, error: r.out || 'Could not connect.' };
 }

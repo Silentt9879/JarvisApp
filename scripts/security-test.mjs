@@ -129,7 +129,7 @@ await check('a repository Source Control does not list is not offered as a jump 
 });
 await check('a switch or a quit stops everything this app started, remote git included', async () => {
   const body = /async function shutdownChildren\(\) \{([\s\S]*?)\n\}/.exec(main)?.[1] || '';
-  for (const s of ['remote.stop()', 'features.stop()', 'session?.close()', 'paneSessions.values()', 'shutdownWebApps()', 'shutdownAnalysis()', 'shutdownTasks()', 'cancelAllRemotes()', 'shutdownDevices()']) {
+  for (const s of ['remote.stop()', 'features.stop()', 'session?.close()', 'closeAllPanes()', 'shutdownWebApps()', 'shutdownAnalysis()', 'shutdownTasks()', 'cancelAllRemotes()', 'shutdownDevices()']) {
     assert.ok(body.includes(s), s);
   }
 });

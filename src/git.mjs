@@ -1837,6 +1837,11 @@ export function cancelAllRemotes() {
   return n;
 }
 
+/** How many repositories have a fetch, pull or push in flight right now - for the "what would stop" warnings. */
+export function runningRemotes() {
+  return remoteOps.size;
+}
+
 /** Stop the remote operation running for one repository. Never reported as success. */
 export function cancelRemote(cwd, key) {
   const repo = resolveRepo(cwd, key);
@@ -1944,6 +1949,24 @@ export async function fetchRemote(cwd, key, { remote = 'origin', onProgress } = 
 }
 
 /**
+ * The message for a pull that was stopped after it had already started merging or rebasing -
+ * `conflict` is conflictState()'s result, read right after the cancellation. `git pull` is a
+ * fetch followed by a merge or rebase in the SAME process, so stopping it (power-down, or
+ * Stop pressed by hand) can land between the two, leaving the repository exactly as an
+ * ordinary conflicted pull would: MERGE_HEAD or a rebase in progress, maybe conflict markers.
+ * Pure, so the wording can be checked without racing a real cancellation against a real
+ * merge. Returns null when nothing was left mid-operation - an ordinary cancelled fetch.
+ */
+export function interruptedPullMessage(conflict) {
+  if (!conflict?.ok || !conflict.operation) return null;
+  const VERBING = { merge: 'merging', rebase: 'rebasing', 'cherry-pick': 'cherry-picking', revert: 'reverting' };
+  const verb = VERBING[conflict.operation] || conflict.operation;
+  const files = conflict.count ? ` with ${conflict.count} conflicted file${conflict.count === 1 ? '' : 's'}` : '';
+  return `The pull was stopped, but not before it started ${verb} - this repository now has an unfinished ${conflict.operation}${files}. `
+    + `Resolve it in Source Control's Conflicts tab, or finish or abort the ${conflict.operation} in git yourself. JARVIS will not do either of those on its own.`;
+}
+
+/**
  * Pull. Explicit only.
  *
  * Nothing is stashed, committed, discarded, reset or forced to make it work, and no merge
@@ -1968,6 +1991,18 @@ export async function pullRemote(cwd, key, { onProgress } = {}) {
 
     if (!r.ok) {
       const f = remoteFailure(r, 'The pull');
+      if (r.cancelled) {
+        // `git pull` is a fetch followed by a merge or rebase IN THE SAME PROCESS - stopping
+        // it (power-down, or Stop pressed by hand) can land between the two, after the merge
+        // or rebase has already begun. That leaves the repository exactly as an ordinary
+        // conflicted pull would: MERGE_HEAD or a rebase in progress, maybe conflict markers.
+        // Nothing here resets, aborts or finishes it - that stays the person's call, same as
+        // any other conflict - this only says plainly that it happened.
+        const left = await conflictState(cwd, key);
+        const msg = interruptedPullMessage(left);
+        if (msg) { f.interruptedMerge = left.operation; f.error = msg; }
+        return f;
+      }
       const text = `${r.err}${r.out}`;
       // git asks for a strategy when the branches have diverged and none is configured.
       if (/need to specify how to reconcile|divergent branches|pull\.rebase/i.test(text)) {

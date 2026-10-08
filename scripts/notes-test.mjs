@@ -72,7 +72,7 @@ globalThis.fetch = async (url, opts) => {
 };
 const note = { id: 'n1', text: '# Shopping\nmilk\nbread', updated: 1700000000000 };
 const noTg = await N.sendNote({ token: null, chatId: null }, note);
-check('without Telegram set up, sending is refused with a plain reason and no request', !noTg.ok && /Devices/.test(noTg.error) && sentCalls.length === 0);
+check('without Telegram set up, sending is refused with a plain reason and no request', !noTg.ok && /Phone alerts/.test(noTg.error) && sentCalls.length === 0);
 
 const ok = await N.sendNote({ token: '123456:AAbbCCddEEffGGhhIIjjKKllMMnnOOppQQ', chatId: '42' }, note);
 check('a note is sent to the configured chat as plain text, with the title and the body',
@@ -108,6 +108,7 @@ class El {
 }
 const byId = new Map();
 const handlers = {};
+const settingsOpened = [];
 const JV = {
   $: (id) => { if (!byId.has(id)) byId.set(id, new El('div')); return byId.get(id); },
   el: (tag, cls, text) => { const n = new El(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; },
@@ -116,6 +117,7 @@ const JV = {
   state: { view: 'notes' },
   on: (k, fn) => { (handlers[k] = handlers[k] || []).push(fn); },
   emit() {},
+  openSettings: (tab) => settingsOpened.push(tab),
 };
 // A store of its own, so the renderer run is independent of the checks above.
 const RDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'notes-ui-'));
@@ -178,9 +180,14 @@ await JV.$('noteSave').onclick(); await tick();
 check('when Telegram refuses, the note is still saved and the refusal is said plainly',
   rstore.list().some((n) => n.text === 'This one cannot go out') && /Saved/.test(msg().textContent)
   && /Telegram refused it/.test(msg().textContent) && /\berr\b/.test(msg().className), msg().textContent);
-check('with Telegram not set up, the page points at the Devices page instead of the switch',
-  /not set up/.test(JV.$('noteTg').textContent) && JV.$('noteSend').disabled === true && JV.$('noteSend').checked === false
-  && JV.$('noteTg').children.some((c) => c.dataset.goto === 'devices'), JV.$('noteTg').textContent);
+{
+  const setupBtn = JV.$('noteTg').children.find((c) => c.tagName === 'BUTTON');
+  check('with Telegram not set up, the page offers to set it up, not "on the Devices page"',
+    /not set up/.test(JV.$('noteTg').textContent) && JV.$('noteSend').disabled === true && JV.$('noteSend').checked === false
+    && !!setupBtn && !/devices/i.test(setupBtn.textContent), JV.$('noteTg').textContent);
+  setupBtn.onclick();
+  check('...and it actually opens Settings > Phone alerts, not the Devices page', settingsOpened.at(-1) === 'phone', JSON.stringify(settingsOpened));
+}
 ready = true;
 
 console.log('\n--- switching notes keeps unsaved work ---');

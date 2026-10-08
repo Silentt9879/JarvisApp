@@ -49,7 +49,13 @@ export class NoteStore {
   write(notes) {
     const keep = notes.slice(0, MAX_NOTES);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, `${JSON.stringify(keep, null, 2)}\n`);
+    // Through a temp file and a rename (as config.json is, in config-file.mjs), so a crash
+    // or a power loss mid-write can never leave notes.json half-written and unreadable -
+    // the rename is as atomic as the filesystem gets, and the old file stays intact until
+    // the new one is fully there.
+    const tmp = `${this.file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(keep, null, 2)}\n`);
+    fs.renameSync(tmp, this.file);
     return keep;
   }
 
@@ -95,7 +101,7 @@ export const telegramReady = (tg) => !!(tg && tg.token && isChatId(tg.chatId));
  * {ok} or {ok:false,error} comes back - sendTelegram keeps the token out of errors.
  */
 export async function sendNote(tg, note) {
-  if (!telegramReady(tg)) return { ok: false, error: 'Telegram is not set up yet - do that on the Devices page.' };
+  if (!telegramReady(tg)) return { ok: false, error: 'Telegram is not set up yet - do that in Settings > Phone alerts.' };
   const when = new Date(note?.updated || Date.now()).toLocaleString('en-GB');
   return sendTelegram(tg, { title: `📝 Note · ${titleOf(note?.text)}`, body: `${when}\n\n${clean(note?.text)}` });
 }
