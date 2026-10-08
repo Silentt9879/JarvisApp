@@ -425,6 +425,13 @@ const features = createFeatures({
   workspaceTrusted: () => workspaceTrusted(),
   configProblem: () => configProblem,
   updateInfo: () => lastUpdateInfo,
+  // The knowledge check the window last asked for (jarvis:workspace), and whether this
+  // workspace has a /relearn command to bring it up to date. Null until it has been checked.
+  knowledge: () => {
+    if (!wsCache?.knowledge) return null;
+    const cwd = loadConfig().cwd || '';
+    return { ...wsCache.knowledge, relearn: !!cwd && fs.existsSync(path.join(cwd, '.claude', 'commands', 'relearn.md')) };
+  },
 });
 features.registerIpc();
 

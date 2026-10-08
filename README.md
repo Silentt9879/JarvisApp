@@ -17,7 +17,28 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.0.0
+## 🆕 What's new in v2.1.0
+
+**Simplified**
+
+- ↔️ **The chat fits your window.** The conversation used to sit in a narrow column with empty space either side. It now fills the chat area on any screen, large or small, and follows the window as you resize it.
+- 🎚️ **Set the width yourself.** A new width button in the message box (beside the mode button) offers **Fit**, **Wide** and **Reading** (the old narrow column), plus a slider for your own share of the window. JARVIS remembers your choice.
+
+**Fixed**
+
+- 🟡 **"Needs attention" with nothing wrong.** The status at the top could say "Needs attention" while Health showed every row in order. The two kept separate lists: the status also counted a connected tool that was not signed in, and workspace knowledge that was behind the code, which Health never showed. They are now one verdict, so the status only says "Needs attention" when Health shows what and why.
+- 🧰 **Health now lists those two.** *Connected tools* shows which tools Claude is connected to, and treats one that only needs signing in as optional. *Workspace knowledge* says when it is behind the code as "Good to know", not as a fault.
+- 🔔 A tool that only needs signing in no longer appears as a warning in the activity feed.
+
+**Technical**
+
+- New `renderer/chat-width.js` and a `widthPop` panel: the choice (`fit`, `wide`, `reading`, or a share from 50 to 100) is kept in the window's preferences and set as `data-width` on `.chat-main`. `styles.css` drives the transcript, the message box and its hint from `--chat-w` and `--chat-gut`; Fit is `100%` with margins of `clamp(28px, 4%, 80px)`. Percentages are used rather than container units, because making `.chat-main` a query container would re-anchor the menus that open from the message box.
+- `health.mjs`: `connectors` and `knowledge` facts, and a fifth state, `note`, that never counts against the verdict. `features.mjs` keeps the tools from the session's `mcp` events; `main.mjs` passes the knowledge check it already ran and whether the workspace has `/relearn`.
+- `renderer/app.js`: `renderSysStatus` shows the session's own state or Health's `level`, and no longer reads the tool list or the knowledge state. Health is asked again on `mcp`, `account` and `init`, when the workspace's knowledge changes state, and every ten minutes while the window is on screen. "Check again" in Health updates the status too.
+- `scripts/status-width-test.mjs`: 46 checks, running the real Health rules, the real status function lifted from `app.js`, and the real `chat-width.js`. Screenshot runs at 1920 and 1100 wide showed the message box filling the chat area, and Health agreeing with the status.
+
+<details>
+<summary><b>Earlier: v2.0.0</b></summary>
 
 **Simplified**
 
@@ -38,6 +59,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 - Retired: `FLUTTER_APPS`, `WEB_APPS`, `NICKNAMES` and the default workspace path. Devices, Web apps, Dart analysis, Source Control and Files read the discovered projects.
 - Hardening: every window refuses to navigate away from JARVIS's own pages; `NoDefaultCurrentDirectoryInExePath` is set for JARVIS and everything it starts, and `cmd.exe` and `dotnet` start by full path; file reads are checked through real paths, so a link or junction cannot lead outside the workspace; a crafted project file cannot stall a scan.
 - Tests: six new suites; `npm test` runs 23, all passing.
+
+</details>
 
 <details>
 <summary><b>Earlier: v1.12.0</b></summary>

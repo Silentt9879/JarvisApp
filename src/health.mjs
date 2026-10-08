@@ -10,6 +10,12 @@
 //   off   optional and not in use - not installed, not configured, and nothing needs it.
 //         Never counted as a problem: a missing Flutter on a PC with no Flutter projects is
 //         simply a PC that does not do Flutter.
+//   note  worth knowing, and nothing is wrong: the workspace's knowledge notes are behind the
+//         code, say. Shown with what to do about it, and never counted as a problem either.
+//
+// The status pill at the top of the window shows THIS verdict (bad / warn / ok) and nothing of
+// its own. It used to keep a second list - connected tools, knowledge - that Health did not
+// show, so it could say "Needs attention" over a Health page with every row in order.
 //
 // Health is CONTEXTUAL: a machine capability alone decides nothing. A tool is a warning only
 // when a project in the workspace needs it; an integration only when it was switched on.
@@ -78,6 +84,23 @@ export function buildHealth(f = {}) {
     );
   }
 
+  // The workspace's knowledge notes (only a workspace that keeps them has this row). Behind the
+  // code is a note, not a fault: Claude reads the code itself, and the notes only save it time.
+  const k = f.knowledge;
+  if (k && k.available) {
+    if (k.state === 'current') {
+      add('knowledge', 'core', 'Workspace knowledge', 'ok', 'Up to date with the code.');
+    } else {
+      const n = Array.isArray(k.stale) ? k.stale.length : 0;
+      const what = k.state === 'stale' ? `Behind the code: ${n ? plural(n, 'knowledge file') : 'some knowledge files'} describe${n === 1 ? 's' : ''} code that has changed since the last scan.`
+        : k.state === 'no-baseline' ? 'Not scanned yet, so there is no telling how current it is.'
+          : `Could not be checked${k.error ? `: ${String(k.error).slice(0, 160)}` : '.'}`;
+      add('knowledge', 'core', 'Workspace knowledge', 'note',
+        `${what} Nothing is broken - Claude still reads the code itself.${k.relearn ? ' Run /relearn when it suits you.' : ''}`,
+        k.relearn ? { label: 'Put /relearn in the chat', action: 'relearn' } : { label: 'Open Knowledge', action: 'knowledge' });
+    }
+  }
+
   if (f.updateAvailable) {
     add('update', 'core', 'JARVIS is up to date', 'warn', `Version ${f.updateAvailable} is ready to install.`, { label: 'Update', action: 'updates' });
   } else {
@@ -109,6 +132,25 @@ export function buildHealth(f = {}) {
   if (cu.error) add('clickup', 'integrations', 'ClickUp', 'warn', `The last sync did not work: ${String(cu.error).slice(0, 200)}`, { label: 'Open ClickUp', action: 'clickup' });
   else if (cu.used) add('clickup', 'integrations', 'ClickUp', 'ok', cu.member ? `Syncing tasks for ${cu.member}.` : 'Synced.');
   else add('clickup', 'integrations', 'ClickUp', 'off', 'Not set up. Optional: show your ClickUp tasks beside your work.', null);
+
+  // The tools Claude is connected to in this session (MCP servers). One that FAILED is worth a
+  // look. One that only needs signing in is optional, like any integration nobody set up.
+  const tools = (Array.isArray(f.connectors) ? f.connectors : []).filter((c) => c && c.name);
+  if (tools.length) {
+    const nice = (c) => String(c.name).replace(/^plugin:[^:]+:/, '');
+    const names = (list) => list.map(nice).join(', ');
+    const failed = tools.filter((c) => c.status === 'failed');
+    const unsigned = tools.filter((c) => c.status === 'needs-auth');
+    const on = tools.filter((c) => c.status === 'connected').length;
+    const signIn = unsigned.length ? `${names(unsigned)} ${unsigned.length === 1 ? 'is' : 'are'} installed but not signed in, so Claude does not use ${unsigned.length === 1 ? 'it' : 'them'}. Optional: sign in with /mcp in a Claude Code terminal.` : '';
+    if (failed.length) {
+      add('connectors', 'integrations', 'Connected tools', 'warn', `${names(failed)} could not connect, so Claude cannot use ${failed.length === 1 ? 'it' : 'them'} in this session.${signIn ? ` ${signIn}` : ''}`, { label: 'Show them', action: 'tools' });
+    } else if (unsigned.length) {
+      add('connectors', 'integrations', 'Connected tools', 'off', `${on ? `${on} connected. ` : ''}${signIn}`, { label: 'Show them', action: 'tools' });
+    } else {
+      add('connectors', 'integrations', 'Connected tools', 'ok', `${on} connected.`);
+    }
+  }
 
   // ------------------------------------------------------------ developer tools on this PC
   // Each one judged against what the workspace's projects need (project-providers.mjs).

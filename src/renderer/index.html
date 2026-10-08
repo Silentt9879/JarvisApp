@@ -123,6 +123,7 @@
                   <button class="pill agents-pill" id="agentsBtn" type="button" title="No specialists working right now"><span class="ap-dot"></span><b id="agentsCount">0 agents</b></button>
                   <button class="pill" id="modelBtn" title="Model and effort"><b id="modelName">Model</b><em id="effortName"></em></button>
                   <span class="spacer"></span>
+                  <button class="cbtn toggle" id="widthBtn" type="button" title="Chat width" aria-label="Chat width" aria-haspopup="true"><i data-icon="width"></i></button>
                   <button class="pill mode" id="modeBtn" title="How JARVIS asks before acting"><i data-icon="shield"></i><b id="modeName">Ask</b></button>
                   <button class="send stop" id="stop" hidden title="Stop (Esc)"><i data-icon="stop"></i></button>
                   <button class="send" id="send" title="Send (Enter)"><i data-icon="send"></i></button>
@@ -147,6 +148,17 @@
                 <div class="pop menu prompts-pop" id="promptsPop" hidden>
                   <input id="promptsFilter" class="field" placeholder="Find a saved prompt…" autocomplete="off" aria-label="Find a saved prompt" />
                   <ul id="promptsList" class="prompts-list"></ul>
+                </div>
+                <!-- How wide the conversation is: it fits the window unless another width is chosen. -->
+                <div class="pop menu width-pop" id="widthPop" hidden>
+                  <div class="pop-sec">Chat width</div>
+                  <div class="seg" id="widthSeg" role="radiogroup" aria-label="Chat width">
+                    <button type="button" data-width="fit" role="radio">Fit</button>
+                    <button type="button" data-width="wide" role="radio">Wide</button>
+                    <button type="button" data-width="reading" role="radio">Reading</button>
+                  </div>
+                  <label class="width-own" for="widthOwn"><span>Your own</span><input type="range" id="widthOwn" min="50" max="100" step="5" /><output id="widthOwnOut" for="widthOwn"></output></label>
+                  <div class="pop-note" id="widthNote"></div>
                 </div>
                 <div class="pop menu mode-pop" id="modePop" hidden>
                   <ul id="modeList"></ul>
@@ -946,6 +958,7 @@
 <script src="core.js"></script>
 <script src="paths.js"></script>
 <script src="chat.js"></script>
+<script src="chat-width.js"></script>
 <script src="dashboard.js"></script>
 <script src="pages.js"></script>
 <script src="phone-screen.js"></script>

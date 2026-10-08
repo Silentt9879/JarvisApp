@@ -130,7 +130,7 @@
       }
       case 'mcp':
         for (const s of e.list.filter((x) => x.status === 'failed' || x.status === 'needs-auth')) {
-          JV.feed({ key: `mcp-${s.name}`, level: 'warn', title: `${s.name}: ${s.status === 'failed' ? 'connection failed' : 'needs sign-in'}`, sub: 'Connected systems', action: 'tools' });
+          JV.feed({ key: `mcp-${s.name}`, level: s.status === 'failed' ? 'warn' : 'info', title: `${s.name}: ${s.status === 'failed' ? 'connection failed' : 'needs sign-in'}`, sub: 'Connected systems', action: 'tools' });
         }
         renderSysStatus();
         break;
@@ -193,8 +193,14 @@
   setInterval(tick, 1000);
   tick();
 
-  // ------------------------------------------------------------- header: system status (honest, derived)
+  // ------------------------------------------------------------- header: system status
+  // The pill says what the session itself is doing when that needs saying (choosing a folder,
+  // offline, connecting, waiting for you). Otherwise it shows Health's verdict - the very one
+  // the Health dialog opens on - so the two cannot disagree. It used to keep reasons of its
+  // own (a connected tool not signed in, knowledge behind the code) that Health never listed:
+  // "Needs attention" over a Health page with every row in order.
   function renderSysStatus() {
+    const h = state.health;
     const reasons = [];
     let level = 'ok';
     let word = 'All systems normal';
@@ -204,18 +210,43 @@
     else if (state.status === 'closed' || state.status === 'offline') { level = 'bad'; word = 'Offline'; reasons.push('The Claude Code session is not running.'); }
     else if (state.status === 'starting') { level = 'info'; word = 'Connecting'; }
     else if (state.pendingPrompts > 0 || state.status === 'waiting') { level = 'warn'; word = 'Awaiting you'; reasons.push('JARVIS is waiting for your decision.'); }
-    const bad = state.mcp.filter((m) => m.status === 'failed' || m.status === 'needs-auth');
-    if (bad.length) reasons.push(`${bad.map((m) => m.name).join(', ')}: not connected.`);
-    // Only a workspace that HAS a knowledge index can have a stale one; most have none at all.
-    const k = state.workspace?.knowledge;
-    if (k?.available && k.state && k.state !== 'current') reasons.push(`Knowledge is ${k.state === 'stale' ? 'stale' : k.state}.`);
-    if (level === 'ok' && reasons.length) { level = 'warn'; word = 'Needs attention'; }
+    else if (h && (h.level === 'bad' || h.level === 'warn')) {
+      level = h.level;
+      word = h.level === 'bad' ? 'Needs fixing' : 'Needs attention';
+      const which = (h.checks || []).filter((c) => c.state === h.level).map((c) => c.title);
+      reasons.push(`${h.summary}${which.length ? `: ${which.slice(0, 4).join(', ')}${which.length > 4 ? ', …' : ''}` : ''}.`);
+    }
     if (level === 'ok' && state.status === 'working') word = 'Working';
     const box = $('sysStatus');
     box.className = `sys-status l-${level}`;
     $('sysStatusText').textContent = word;
-    box.title = reasons.length ? reasons.join('\n') : 'Session online, systems connected, knowledge current.';
+    box.title = [...(reasons.length ? reasons : [h ? h.summary : 'Session online.']), 'Click to open Health.'].join('\n');
   }
+  /** Ask Health again, a moment after whatever changed has settled, and redraw the pill. */
+  let healthTimer = null;
+  function refreshHealth(delay = 1500) {
+    clearTimeout(healthTimer);
+    healthTimer = setTimeout(async () => {
+      try { state.health = await window.jarvis.health(false); } catch { return; }
+      renderSysStatus();
+    }, delay);
+  }
+  JV.refreshHealth = refreshHealth;
+  JV.on('health', renderSysStatus);
+  // What Health judges changes with these: the tools Claude connected to, the account signed
+  // in, and a session coming up.
+  for (const kind of ['mcp', 'account', 'init']) JV.on(kind, () => refreshHealth());
+  // The workspace is re-read every 90 seconds, and asking Health starts a sign-in check each
+  // time - so only when its knowledge has actually changed state, not on every reading.
+  let knowledgeSeen = null;
+  JV.on('workspace', (w) => {
+    const k = w?.knowledge;
+    const now = k?.available ? `${k.state}:${Array.isArray(k.stale) ? k.stale.length : 0}` : 'none';
+    if (now !== knowledgeSeen) { knowledgeSeen = now; refreshHealth(); }
+  });
+  // The rest (an update arriving, a sync failing) has no event here: a slow look, while the
+  // window is on screen, keeps the pill honest. Opening Health always asks afresh.
+  setInterval(() => { if (!document.hidden) refreshHealth(0); }, 10 * 60 * 1000);
 
   // ------------------------------------------------------------- header: operator
   function renderOperator() {

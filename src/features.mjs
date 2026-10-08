@@ -44,7 +44,9 @@ export function createFeatures(d) {
 
   const transcript = []; // what the phone shows first: the last few messages, plain text
   const waiting = new Map(); // permission id -> what it is for, until it is answered
-  let lastStatus = 'ready';
+  let lastStatus = 'ready';
+  // The tools Claude last reported being connected to (MCP servers), for Health.
+  let connectors = [];
   let busyRoutine = null;
   let timer = null;
   let companion = null;
@@ -110,6 +112,9 @@ export function createFeatures(d) {
       const e = entryFor(evt);
       if (e) activity.add(e.kind, e.text);
       if (evt.kind === 'status' && !pane) lastStatus = evt.state || lastStatus;
+      // A session that is starting has not said what it is connected to yet.
+      if (evt.kind === 'status' && !pane && evt.state === 'starting') connectors = [];
+      if (evt.kind === 'mcp' && !pane && Array.isArray(evt.list)) connectors = evt.list.map((x) => ({ name: String(x?.name || ''), status: String(x?.status || '') }));
       if (evt.kind === 'text_final' && !pane) pushTranscript('assistant', evt.text);
       if (evt.kind === 'permission') {
         waiting.set(evt.id, { toolName: evt.displayName || evt.toolName || 'A tool', detail: clip(evt.detail || '', 200) });
@@ -282,6 +287,9 @@ export function createFeatures(d) {
       voiceReady: !!d.voice?.ready,
       capabilities,
       projects: scanned?.projects || [],
+      // What the status pill used to judge by itself, and Health never showed.
+      connectors,
+      knowledge: d.knowledge?.() || null,
     };
   }
 

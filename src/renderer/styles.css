@@ -775,11 +775,20 @@ body.still .tl.s-in_progress .tl-bar i { animation: none; width: 60%; }
 
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; background: var(--bg); }
 .transcript { flex: 1; overflow-y: auto; padding: 28px 0 16px; }
-.transcript > * { max-width: 760px; margin-left: auto; margin-right: auto; padding: 0 28px; }
+/* How wide the conversation is (chat-width.js sets data-width; Fit is the default and needs
+   no attribute). The side margins are a share of the chat area, not of the screen, so they
+   follow it when the sidebar folds or the window is resized - and they are plain percentages
+   rather than container units, because making .chat-main a query container would also make
+   it the anchor for the menus that open from the message box. */
+.chat-main { --chat-w: 100%; --chat-gut: clamp(28px, 4%, 80px); }
+.chat-main[data-width="wide"] { --chat-w: 1100px; --chat-gut: 28px; }
+.chat-main[data-width="reading"] { --chat-w: 760px; --chat-gut: 28px; }
+.chat-main[data-width="own"] { --chat-gut: 28px; }   /* --chat-w is set on the element, as a share */
+.transcript > * { max-width: var(--chat-w); margin-left: auto; margin-right: auto; padding: 0 var(--chat-gut); }
 /* Boxed cards bring their own padding and margin, which overrode the centring above and
    pinned them to the left edge. Keep them in the same column as the text. */
 .transcript > .prompt, .transcript > .confirm-card, .transcript > .error-card {
-  max-width: 704px; margin-left: auto; margin-right: auto;
+  max-width: calc(var(--chat-w) - 2 * var(--chat-gut)); margin-left: auto; margin-right: auto;
 }
 
 .welcome { text-align: center; padding-top: 10vh !important; }
@@ -899,9 +908,9 @@ body.still .content.live::after { animation: none; }
 .body > .tool-output + .content, .body > .agent-card + .content, .body > .prompt + .content { margin-top: 12px; }
 
 /* ---------------------------------------------------------------- composer */
-.composer { padding: 10px 28px 18px; }
+.composer { padding: 10px var(--chat-gut) 18px; }
 .composer-box {
-  position: relative; max-width: 760px; margin: 0 auto; background: var(--surface);
+  position: relative; max-width: var(--chat-w); margin: 0 auto; background: var(--surface);
   border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-1);
   transition: border-color .15s, box-shadow .15s;
 }
@@ -947,7 +956,7 @@ body.still .content.live::after { animation: none; }
 .send:hover { background: var(--accent-deep); }
 .send .ic { width: 16px; height: 16px; stroke-width: 2.2; }
 .send.stop { background: var(--err); }
-.composer-hint { max-width: 760px; margin: 6px auto 0; font-size: 11px; color: var(--muted); min-height: 14px; }
+.composer-hint { max-width: var(--chat-w); margin: 6px auto 0; font-size: 11px; color: var(--muted); min-height: 14px; }
 .composer-hint.flash { color: var(--warn); }
 .attach-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 10px 0; }
 .achip {
@@ -982,6 +991,11 @@ body.still .content.live::after { animation: none; }
 .slash-pop .field { margin: 8px 8px 0; width: calc(100% - 16px); }
 .model-pop { left: 120px; bottom: calc(100% + 8px); width: 340px; }
 .mode-pop { right: 42px; bottom: calc(100% + 8px); width: 330px; }
+.width-pop { right: 96px; bottom: calc(100% + 8px); width: 290px; padding-bottom: 2px; }
+.width-pop .seg { padding-top: 4px; }
+.width-own { display: flex; align-items: center; gap: 10px; padding: 2px 14px 8px; font-size: 12px; color: var(--text-2); }
+.width-own input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.width-own output { flex: 0 0 34px; text-align: right; font: 11.5px var(--mono); color: var(--muted); }
 
 /* ================================================================ PAGES */
 .page { max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
@@ -2006,6 +2020,9 @@ body.pane .col { min-width: 0; }
 .hc-row.off .hc-mark { color: var(--text-3, var(--text-2)); }
 .hc-row.off .hc-main b { color: var(--text-2); }
 .hc-chip.off { background: transparent; border: 1px solid var(--rule); }
+/* Worth knowing, nothing wrong: reads as information, not as a warning. */
+.hc-row.note .hc-mark { color: var(--accent); }
+.hc-chip.note { color: var(--accent); background: var(--accent-soft); }
 .hc-group { list-style: none; margin: 10px 0 0; padding: 0 2px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2); }
 .hc-group:first-child { margin-top: 0; }
 .hc-summary { font-weight: 600; color: var(--text); }

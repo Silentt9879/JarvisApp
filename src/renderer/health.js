@@ -6,8 +6,9 @@
   const api = window.jarvis;
 
   // "off" is optional and unused: not installed or not set up, and nothing here needs it.
-  const LABEL = { ok: 'In order', warn: 'To look at', bad: 'Needs fixing', off: 'Optional' };
-  const MARK = { ok: 'check', warn: 'alert', bad: 'alert', off: 'info' };
+  // "note" is worth knowing while nothing is wrong. Neither one counts against the verdict.
+  const LABEL = { ok: 'In order', warn: 'To look at', bad: 'Needs fixing', off: 'Optional', note: 'Good to know' };
+  const MARK = { ok: 'check', warn: 'alert', bad: 'alert', off: 'info', note: 'info' };
   const GROUP = { core: 'JARVIS', integrations: 'Integrations', tools: 'Developer tools on this PC' };
 
   function row(check, onFix) {
@@ -47,7 +48,11 @@
     if (action === 'github') { dlg.close(); JV.openSettings?.('general', 'updSec'); return; }
     if (action === 'updates') { dlg.close(); JV.openSettings?.('general', 'updSec'); setTimeout(() => $('updCheckAll')?.click(), 300); return; }
     if (action === 'clickup') { dlg.close(); JV.show('tasks'); return; }
-    if (action === 'trust') { dlg.close(); JV.trustActiveWorkspace?.(); }
+    if (action === 'trust') { dlg.close(); JV.trustActiveWorkspace?.(); return; }
+    if (action === 'tools') { dlg.close(); JV.show('tools'); return; }
+    if (action === 'knowledge') { dlg.close(); JV.show('knowledge'); return; }
+    // Put in the box, not sent: bringing knowledge up to date is a job to start on purpose.
+    if (action === 'relearn') { dlg.close(); JV.chat?.insert?.('/relearn'); }
   }
 
   async function open() {
@@ -61,6 +66,9 @@
       if (!h) { summary.textContent = 'Could not check just now. Try again in a moment.'; list.replaceChildren(); return; }
       summary.textContent = h.summary;
       summary.dataset.level = h.level;
+      // The pill at the top shows this same verdict, so it changes with what was just checked.
+      JV.state.health = h;
+      JV.emit('health', h);
       const rows = [];
       let group = null;
       for (const c of h.checks) {
