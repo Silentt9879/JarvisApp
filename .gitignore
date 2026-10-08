@@ -3,8 +3,13 @@
 dist/
 dist-next/
 dist-installer/
+dist-rc-*/
 out/
 release/
+
+# GUI regression test output (gui-tests/) - Playwright's own run artifacts, never source.
+gui-tests/test-results/
+gui-tests/report/
 
 # Dependencies. Restored with `npm ci` from package-lock.json, which IS tracked.
 node_modules/
