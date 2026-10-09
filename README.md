@@ -17,7 +17,31 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.3.1
+## 🆕 What's new in v2.4.0
+
+See the [Releases page](https://github.com/Silentt9879/JarvisApp/releases) for every published build; this is the current one.
+
+**Simplified**
+
+- 📓 **Knowledge Notes.** A second, separate Markdown note store alongside the existing Notes page - a two-pane editor (title, tags, favorite, Markdown with live preview), Trash with Restore, and full **Version History**: every meaningfully different save keeps the version it replaces, browsable, comparable against the current one, and restorable. Import your existing Notes in with a preview before anything happens.
+- ☁️ **Google Drive backup & restore for Knowledge Notes.** Connect your own Google account (a one-time OAuth sign-in, in your own browser) and back up Knowledge Notes, Trash and Version History to a folder in your Drive - manually, with a press of **Back Up Now**. Restore shows a read-only preview of exactly what would change before anything happens, and needs an explicit second confirmation. See [Google Drive backup & restore](#google-drive-backup--restore) below.
+- 🧭 **A sidebar that actually collapses.** Resize JARVIS to around half your screen and the navigation sidebar now properly shrinks to a compact icon-only rail with hover tooltips, instead of hiding the labels but leaving the same wide, mostly-empty sidebar behind.
+
+**Fixed**
+
+- 📜 **Version History now covers ordinary edits.** Previously it only kept a version when a save explicitly overrode someone else's newer change, or when restoring an older version - an everyday edit that changed a note's content had nothing to recover from. Every meaningfully different save now preserves what it replaces.
+- 🗂️ A fresh install with no workspace chosen yet no longer throws a raw error when JARVIS looks up workspace documents - it reports "nothing found" cleanly instead.
+
+**Technical**
+
+- New: `src/knowledge.mjs` (the note store: atomic verified writes, byte-for-byte idempotent migration from `notes.json`, optimistic-concurrency saves, Trash, Version History snapshots), `src/renderer/knowledge.js` (the editor, Trash, Version History and Drive panels).
+- New: `src/google-oauth.mjs` (Authorization Code + PKCE against a loopback redirect - Google's only supported flow for a desktop app), `src/drive-token.mjs` (encrypted credential storage via Electron's `safeStorage`, no plaintext fallback), `src/drive-connection.mjs` (connect/disconnect/status, no automatic reconnect or background refresh), `src/google-drive-provider.mjs` (the real Drive client, scoped to `drive.file` only - JARVIS can only ever see files it created itself), `src/drive-backup.mjs` and `src/drive-backup-controller.mjs` (the backup/restore engine: SHA-256-verified uploads, a manifest published only once every file is confirmed, single-use time-limited restore confirmation tokens, and a restore preview that re-verifies the remote backup's integrity before offering it).
+- `src/workspace.mjs`: `docRoots(cwd)` now returns no roots (not a throw) when `cwd` isn't a usable workspace path yet.
+- `src/renderer/styles.css`, `src/renderer/index.html`: the sidebar's narrow-window breakpoint now sets both `width` and `flex-basis` together (a flex item's rendered size follows `flex-basis`, not a standalone `width`), reusing the same compact-rail layout the manual sidebar toggle already had; every nav icon gained a `title` attribute for its hover tooltip.
+- Tests: 13 new suites (`knowledge`, `knowledge-ipc`, `knowledge-trash`, `knowledge-history`, `knowledge-renderer`, `drive-backup`, `google-oauth`, `drive-token`, `drive-connection`, `google-drive-provider`, `drive-ipc-security`, `drive-backup-controller`, `nav-sidebar`); `npm test` runs 51 suites, all passing.
+
+<details>
+<summary><b>Earlier: v2.3.1</b></summary>
 
 **Simplified**
 
@@ -28,6 +52,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 - `src/renderer/index.html`: both panels' body (toolbar, banners, list) now sits in a `.pb-body` wrapper under a clickable `.pb-head`, collapsed by default via a `collapsed` class on the section.
 - `src/renderer/problems.js`, `src/renderer/dotnet-problems.js`: an `open`/`setOpen()` toggle per panel, persisted to `localStorage` (`jarvis.problemsOpen`, `jarvis.dotnetProblemsOpen`), forced open on the existing failed-run/failed-build auto-trigger.
 - Styling only, no new behaviour beyond the toggle itself: the panel's own trust-gating, discovery and build/analyse logic are unchanged.
+
+</details>
 
 <details>
 <summary><b>Earlier: v2.3.0</b></summary>
@@ -463,10 +489,19 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 | 🧑‍🏭 **Agents** | Your Claude Code subagents and the built-in ones, working as minions on the Agent floor; build your own from a blank page or a starter, or let JARVIS suggest a team for this workspace |
 | 📂 **Files** | Read any text file in the workspace, and double-click to open it in VS Code |
 | 📝 **Notes** | Write something down, save it, and send it to your Telegram |
+| 📓 **Knowledge Notes** | A second, separate Markdown note store with tags, favorites, Trash and full Version History |
+| ☁️ **Google Drive backup** | Manual backup and restore of Knowledge Notes to your own Google Drive, with a preview before any restore |
 | ✅ **ClickUp** | Your ClickUp tasks, synced through Claude Code's ClickUp connection and grouped by sprint (optional) |
 | ↩️ **Undo** | Undo every file change made since any message, in one click |
 | 🩺 **Health** | What is in order and what needs setting up, judged against the projects you actually have |
 | ⬆️ **Updates** | One press in the app: from a GitHub release, or straight from a build made on this PC |
+
+---
+
+## 📷 Screenshots
+
+> No screenshots are published in this repository yet. This section is a placeholder for
+> future images of Chat, Projects, Devices, Knowledge Notes and the Google Drive panel.
 
 ---
 
@@ -484,6 +519,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 1. Download `JARVIS-Setup-<version>.exe` from this repository's **Releases** page and run it. It installs for you alone, with no administrator rights. The installer is not code-signed yet, so Windows SmartScreen may warn the first time: **More info → Run anyway**.
 2. The walk-through opens: sign in to Claude, **choose your workspace** (the folder that holds your projects), see what JARVIS found in it and what this PC has, then the optional extras. Every step can be skipped and done later.
 3. Decide whether to **trust** the workspace (below). JARVIS asks when you add one.
+4. Open **Knowledge Notes** in the sidebar to start a Markdown note, or **Import from Notes** to bring in what you already wrote on the plain Notes page.
+5. To back Knowledge Notes up to your own Google Drive, open the Drive panel inside Knowledge Notes and follow [Google Drive backup & restore](#google-drive-backup--restore) below - entirely optional, and off until you connect it yourself.
 
 ---
 
@@ -525,6 +562,40 @@ An agent is a Claude Code subagent - one file, with a name, a description and in
 
 ---
 
+## 📓 Knowledge Notes
+
+A second, separate Markdown note store from the plain Notes page above - one file per note, with tags, favorites, a two-pane editor (write on the left, a live Markdown preview on the right), Trash with Restore, and full **Version History**.
+
+- **Version History.** Every save that meaningfully changes a note's title, body, tags, favorite or folder keeps the version it replaces - browsable, compared side-by-side with the current version, and restorable at any time. A restore is itself reversible: the version it replaces is kept too. Nothing here is ever pruned automatically, so history only grows; there is no retention limit yet.
+- **Conflict-safe saves.** A save names the exact version it started from; if the note changed elsewhere since you opened it, the save is refused rather than silently overwriting - with an explicit "Overwrite anyway" that backs up what it would replace first.
+- **Import from Notes**, with a preview of exactly what would be added before you confirm anything.
+- Entirely separate from the plain Notes page and its `notes.json` file - nothing here touches that store, and nothing in it touches Knowledge Notes.
+
+---
+
+## ☁️ Google Drive backup & restore
+
+Knowledge Notes can be backed up to, and restored from, your own Google Drive - **manually only**. There is no automatic sync, no scheduled backup, and no background upload; a backup happens only when you press **Back Up Now**, and a restore only after you explicitly confirm it.
+
+**What it backs up:** only your Knowledge Notes, their Trash, and their Version History. It does **not** back up the plain Notes page, your JARVIS settings, your workspace, your agents, or anything else JARVIS stores.
+
+**Connecting:**
+1. In Google Cloud Console, create an OAuth 2.0 Client ID of type **Desktop app**, and paste its Client ID (and secret, if given one) into Knowledge Notes' Drive panel.
+2. Press **Connect Google Drive** - your system browser opens to Google's own sign-in and consent screen, requesting only the `drive.file` scope (JARVIS can only ever see files and folders it creates itself through this connection - never your existing Drive content).
+3. Once signed in, the panel shows **Connected**, and the backup/restore controls appear.
+
+**Backing up and restoring:**
+- **Back Up Now** uploads every Knowledge Note, Trash entry and Version History snapshot, verifying each one by hashing it after upload - a backup is only ever marked complete once every file has been confirmed.
+- **Backup History** lists every backup made, distinguishing a complete one from an interrupted or corrupted one; only a complete, re-verified backup can be restored.
+- **Restore** first shows a read-only preview of exactly what would be added, replaced or left unchanged, then requires a second, explicit confirmation before anything is written locally. Whatever a restore would overwrite is itself backed up first, so a restore is never a one-way trip.
+
+**Known limits:**
+- The Google OAuth consent screen for this project is currently in Google's **Testing** publishing status; a test user's refresh token expires after about seven days, after which JARVIS will ask you to reconnect.
+- A restore is verified and protected file-by-file, but is not one single all-or-nothing transaction across the whole backup - if an individual file fails partway through, the files already restored stay restored, and the failure is reported plainly rather than silently.
+- Backups and Version History are both kept indefinitely for now - there is no automatic cleanup of old ones.
+
+---
+
 ## 🛡️ Safety
 
 - **You approve what Claude does.** Every action goes through Claude Code's permission prompt in the mode you pick (Ask, Accept edits, Plan or Auto). There is deliberately no "bypass permissions".
@@ -536,6 +607,7 @@ An agent is a Claude Code subagent - one file, with a name, a description and in
 - **Your settings file is never overwritten.** If `config.json` cannot be read (a hand edit gone wrong), JARVIS runs on its defaults, saves nothing, and Health shows the file to fix.
 - **A locked-down window.** No Node.js in the page, context isolation, a sandbox, a strict content security policy, and every window refuses to navigate anywhere but JARVIS's own pages. Web links open in your browser.
 - **Secrets stay put.** The Telegram bot token and the GitHub sign-in never go back to the window, and secrets are scrubbed from logs, the activity export and error messages. The phone web app's access code is shown only when you press **Show the access code**.
+- **Google Drive credentials are encrypted at rest**, through Windows' own per-user encryption (Electron's `safeStorage`) - the same mechanism already protecting the GitHub and Telegram tokens, with no plaintext fallback for Drive. Your Drive connection is scoped to `drive.file`, so JARVIS can only ever see files and folders it created itself - never your existing Drive content - and nothing is uploaded or restored without you pressing the button for it.
 
 ---
 
@@ -586,10 +658,16 @@ An agent is a Claude Code subagent - one file, with a name, a description and in
 - **Source Control** lists the repositories at the top of the workspace and up to two folders down; the Projects page shows deeper ones too.
 - **ClickUp** works through Claude Code's own ClickUp connection, so connect ClickUp in Claude Code first. JARVIS only reads; nothing is written back.
 - **Voice** runs on this PC; the speech model (about 250 MB) downloads the first time you use it.
+- **Google Drive backup is manual only** - there is no scheduled or automatic backup, and no two-way sync.
+- **Knowledge Notes' Version History, and Drive backups, are both kept indefinitely** - nothing is pruned automatically yet.
+- **A Drive restore is not one atomic transaction** across the whole backup - each file is individually verified and protected, but a failure partway through leaves the files already restored in place rather than rolling everything back.
+- **The Google OAuth consent screen is in Testing status** - a signed-in test account's refresh token expires after about seven days, after which reconnecting is needed.
 
 ---
 
 ## 🔧 Build from source
+
+Prerequisites: [Node.js](https://nodejs.org/) and npm, on Windows (this project targets Windows only - see **What you need** above).
 
 ```powershell
 npm install        # first time
@@ -601,6 +679,20 @@ npm run deliver    # offer that installer to the JARVIS installed on this PC
 ```
 
 > 💡 From a VS Code terminal, first run `Remove-Item Env:ELECTRON_RUN_AS_NODE`.
+
+---
+
+## 📄 License
+
+This repository does not currently include a `LICENSE` file, and no open-source license has
+been published for this project. All rights are reserved by the author unless a license is
+added in the future.
+
+---
+
+## 🔗 Releases
+
+Every published build is on the [**Releases page**](https://github.com/Silentt9879/JarvisApp/releases) - **v2.4.0 is the current release**. See [What's new in v2.4.0](#whats-new-in-v240) above for a summary, or `JARVIS-Setup-2.4.0.exe`'s own release notes for the exact text published with it.
 
 ---
 
