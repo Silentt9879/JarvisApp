@@ -34,6 +34,7 @@
       <div class="nav-group" id="navGroup">
         <button id="navTasks" data-view="tasks"><i data-icon="clickup"></i><span>Clickup</span><em class="nbadge" id="nbTasks"></em></button>
         <button id="navAgents" data-view="agents"><i data-icon="agents"></i><span>Agents</span><em class="nbadge" id="nbAgents"></em></button>
+        <button id="navKne" data-view="kne"><i data-icon="bulb"></i><span>Knowledge Notes</span><em class="nbadge" id="nbKne"></em></button>
         <button id="navTools" data-view="tools"><i data-icon="tools"></i><span>Tools &amp; Skills</span><em class="nbadge" id="nbTools"></em></button>
       </div>
     </nav>
@@ -445,6 +446,121 @@
               </div>
               <div class="note-msg" id="noteMsg" hidden></div>
               <textarea class="note-edit" id="noteText" placeholder="Write your note, sir…" spellcheck="true"></textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================ KNOWLEDGE NOTES (Phase 23C/23D)
+           Markdown notes with tags and favorites, stored one file per note under
+           <userData>/knowledge/notes - a separate store from Notes above (notes.json) and
+           from the Knowledge Base panel (what JARVIS knows about the codebase). Neither
+           store reads, writes or migrates the other; see kneStorageNote below. Named
+           "Knowledge Notes" rather than plain "Knowledge" (Phase 23D, Part 4) for daylight
+           from the Knowledge Base panel - a label-only change; the view id (view-kne) and
+           every element id below it are unchanged. -->
+      <section class="view" id="view-kne">
+        <div class="page">
+          <div class="page-head">
+            <h2>Knowledge Notes</h2>
+            <p>Markdown notes with tags and favorites - a separate store from <b>Notes</b> and from the <b>Knowledge Base</b> panel. <span class="muted" id="kneStorageNote"></span></p>
+          </div>
+          <div class="files-layout">
+            <aside class="files-side">
+              <button class="btn btn-primary btn-block" id="kneNew"><i data-icon="plus"></i><span>New note</span></button>
+              <button class="btn btn-block" id="kneImportOpen" type="button"><i data-icon="import"></i><span>Import from Notes</span></button>
+              <div class="kne-tabs" role="tablist" aria-label="Notes or Trash">
+                <button class="kne-tab on" id="kneTabNotes" type="button" role="tab" aria-selected="true">Notes</button>
+                <button class="kne-tab" id="kneTabTrash" type="button" role="tab" aria-selected="false">Trash <em class="count" id="kneTrashCount" hidden></em></button>
+              </div>
+              <input class="field slim" id="kneSearch" placeholder="Filter by title or tag…" autocomplete="off" spellcheck="false" />
+              <ul class="file-list note-list" id="kneList"></ul>
+            </aside>
+            <div class="file-view">
+              <div class="file-head">
+                <button class="icon-btn kne-fav" id="kneFavorite" type="button" title="Favorite this note" aria-pressed="false"><i data-icon="star"></i></button>
+                <div class="file-title">
+                  <input class="kne-title" id="kneTitle" placeholder="Untitled note" autocomplete="off" spellcheck="true" />
+                  <small id="kneWhen"></small>
+                </div>
+                <div class="file-acts">
+                  <button class="btn file-btn" id="kneRestore" type="button" hidden><i data-icon="undo"></i><span>Restore</span></button>
+                  <button class="btn file-btn" id="kneHistory" type="button" hidden><i data-icon="clock"></i><span>Version History</span></button>
+                  <button class="btn file-btn" id="knePreviewToggle" type="button" aria-pressed="false"><i data-icon="eye"></i><span>Preview</span></button>
+                  <button class="btn btn-danger file-btn" id="kneDelete" type="button" hidden><i data-icon="trash"></i><span>Delete</span></button>
+                  <button class="btn btn-primary file-btn" id="kneSave" type="button"><i data-icon="check"></i><span>Save</span></button>
+                </div>
+              </div>
+              <div class="kne-tags-row">
+                <i data-icon="tag"></i>
+                <input class="field slim" id="kneTags" placeholder="Tags, comma separated…" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="note-msg" id="kneMsg" hidden></div>
+              <div class="kne-body" id="kneBody">
+                <textarea class="note-edit kne-edit" id="kneEdit" placeholder="Write in Markdown…" spellcheck="true"></textarea>
+                <div class="kne-preview" id="knePreview"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Import from Notes: a preview before anything happens, and an explicit confirm.
+             migrateFromLegacy never deletes, renames or edits notes.json - this only ever adds
+             to Knowledge, and never overwrites a note already edited there since the last import. -->
+        <div class="modal-veil" id="kneImportVeil" hidden>
+          <div class="modal hud-panel" role="dialog" aria-modal="true" aria-labelledby="kneImportTitle">
+            <h3 id="kneImportTitle">Import from Notes</h3>
+            <div class="modal-body">
+              <ul class="kne-import-stats" id="kneImportStats"></ul>
+              <p class="kne-import-dest" id="kneImportDest"></p>
+              <div class="note-msg" id="kneImportMsg" hidden></div>
+            </div>
+            <div class="modal-foot">
+              <button class="btn small" id="kneImportCancel" type="button">Cancel</button>
+              <button class="btn btn-primary small" id="kneImportGo" type="button">Import</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Delete: revision-checked (see kneDelete's own confirm handler), and recoverable -
+             the note moves to Trash, never gone for good from here. -->
+        <div class="modal-veil" id="kneDeleteVeil" hidden>
+          <div class="modal hud-panel" role="alertdialog" aria-modal="true" aria-labelledby="kneDeleteTitle">
+            <h3 id="kneDeleteTitle">Delete this note?</h3>
+            <div class="modal-body">
+              <p>"<b id="kneDeleteName"></b>" moves to Trash, where it can be restored. It is not deleted for good.</p>
+            </div>
+            <div class="modal-foot">
+              <button class="btn small" id="kneDeleteCancel" type="button">Cancel</button>
+              <button class="btn btn-danger small" id="kneDeleteGo" type="button">Move to Trash</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Version History: every earlier overwritten version of this one note, read from
+             knowledge/overwritten/ (Phase 23D Part 3 already writes these; this just makes them
+             reachable). Compare before restoring, and restoring is itself revision-checked and
+             itself backs up the current version first - never a one-way trip. -->
+        <div class="modal-veil" id="kneHistoryVeil" hidden>
+          <div class="modal hud-panel kne-history-modal" role="dialog" aria-modal="true" aria-labelledby="kneHistoryTitle">
+            <h3 id="kneHistoryTitle">Version History <span class="muted" id="kneHistoryNote"></span></h3>
+            <div class="modal-body kne-history-body">
+              <ul class="kne-history-list" id="kneHistoryList"></ul>
+              <div class="kne-history-compare">
+                <div class="kne-history-pane">
+                  <h4>Current</h4>
+                  <div class="kne-history-text" id="kneHistoryCurrent"></div>
+                </div>
+                <div class="kne-history-pane">
+                  <h4 id="kneHistoryWhen">Select a version to compare</h4>
+                  <div class="kne-history-text" id="kneHistorySelected"></div>
+                </div>
+              </div>
+              <div class="note-msg" id="kneHistoryMsg" hidden></div>
+            </div>
+            <div class="modal-foot">
+              <button class="btn small" id="kneHistoryClose" type="button">Close</button>
+              <button class="btn btn-danger small" id="kneHistoryRestore" type="button" disabled>Restore this version</button>
             </div>
           </div>
         </div>
@@ -987,6 +1103,7 @@
 <script src="clickup.js"></script>
 <script src="files.js"></script>
 <script src="notes.js"></script>
+<script src="knowledge.js"></script>
 <script src="git.js"></script>
 <script src="github.js"></script>
 <script src="crew-model.js"></script>

@@ -279,7 +279,7 @@
     if (q.length < 2) { sRes.hidden = true; return; }
     const ql = q.toLowerCase();
     const groups = [];
-    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['GitHub Desktop', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Notes', 'notes'], ['Agents', 'agents'], ['Projects', 'workspace'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
+    const views = [['Chat', 'chat'], ['Overview', 'command'], ['Tasks', 'tasks'], ['GitHub Desktop', 'source'], ['Files', 'files'], ['Memory', 'memory'], ['Notes', 'notes'], ['Agents', 'agents'], ['Projects', 'workspace'], ['Knowledge Notes', 'kne'], ['Knowledge Base', 'knowledge'], ['Tools & Skills', 'tools'], ['Devices', 'devices'], ['AI Core', 'core']]
       .filter(([n]) => n.toLowerCase().includes(ql)).map(([n, v]) => ({ title: n, sub: 'Go to view', run: () => JV.show(v) }));
     if (views.length) groups.push(['Views', views]);
     const sessions = state.sessions.filter((s) => s.title.toLowerCase().includes(ql)).slice(0, 6).map((s) => ({ title: s.title, sub: JV.ago(s.lastModified), run: () => JV.chat.resumeSession(s.id, s.title) }));
