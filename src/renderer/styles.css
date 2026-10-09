@@ -2488,6 +2488,13 @@ body.still .cbar .agents-pill.live .ap-dot { animation: none; }
    What is wrong with an app, grouped by file. Errors read first; hints stay quiet. */
 .dev-section.problems { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
 .dev-section.problems > h3 > .ic { width: 17px; height: 17px; color: var(--muted); }
+/* Collapsed by default - click the title to open. Keeps two full diagnostic panels from
+   pushing the rest of the Devices page off screen when neither is in use. */
+.pb-head { cursor: pointer; user-select: none; }
+.pb-body { display: flex; flex-direction: column; gap: 14px; }
+.pb-chevron { margin-left: auto; width: 14px; height: 14px; flex: 0 0 auto; color: var(--muted); transform: rotate(90deg); transition: transform .12s; }
+.dev-section.problems.collapsed .pb-chevron { transform: none; }
+.dev-section.problems.collapsed .pb-body { display: none; }
 .pb-summary { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-2); font: 500 11.5px var(--mono); color: var(--text-2); background: var(--surface-2); }
 .pb-summary.bad { color: var(--err); background: var(--err-soft); border-color: var(--err-line); }
 .pb-summary.warn { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }

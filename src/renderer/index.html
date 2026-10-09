@@ -629,40 +629,50 @@
           </section>
           </div>
 
-          <!-- Dart analysis: why a run failed, as the IDE's own Dart Analysis tab shows it. -->
-          <section class="dev-section problems" id="devProblems">
-            <h3><i data-icon="bug"></i> Dart analysis
+          <!-- Dart analysis: why a run failed, as the IDE's own Dart Analysis tab shows it.
+               Collapsed by default - it's read occasionally, not left open, and two full panels
+               here otherwise push everything below them off screen. -->
+          <section class="dev-section problems collapsed" id="devProblems">
+            <h3 class="pb-head" id="pbHead" role="button" tabindex="0" aria-expanded="false" aria-controls="pbBody">
+              <i data-icon="bug"></i> Dart analysis
               <span class="pb-summary" id="pbSummary" hidden></span>
               <span class="h-note" id="pbNote">Why a run went wrong, file by file. Click a problem to open it at that line in VS Code.</span>
+              <i class="pb-chevron" data-icon="chevron"></i>
             </h3>
-            <div class="pb-bar">
-              <div class="pb-apps" id="pbApps" role="tablist" aria-label="App to analyse"></div>
-              <span class="pb-gap"></span>
-              <div class="pb-filters" id="pbFilters" aria-label="Which problems to show"></div>
-              <input class="field slim pb-search" id="pbSearch" placeholder="Filter by file or message…" autocomplete="off" spellcheck="false" />
-              <button class="btn small" id="pbFix" type="button" title="Put these problems into the chat, ready to send" hidden><i data-icon="chat"></i> Ask JARVIS to fix</button>
-              <button class="btn btn-primary small" id="pbRun" type="button"><i data-icon="refresh"></i> <span>Analyse</span></button>
+            <div class="pb-body" id="pbBody">
+              <div class="pb-bar">
+                <div class="pb-apps" id="pbApps" role="tablist" aria-label="App to analyse"></div>
+                <span class="pb-gap"></span>
+                <div class="pb-filters" id="pbFilters" aria-label="Which problems to show"></div>
+                <input class="field slim pb-search" id="pbSearch" placeholder="Filter by file or message…" autocomplete="off" spellcheck="false" />
+                <button class="btn small" id="pbFix" type="button" title="Put these problems into the chat, ready to send" hidden><i data-icon="chat"></i> Ask JARVIS to fix</button>
+                <button class="btn btn-primary small" id="pbRun" type="button"><i data-icon="refresh"></i> <span>Analyse</span></button>
+              </div>
+              <div class="pb-banners" id="pbBanners"></div>
+              <div class="pb-list" id="pbList"></div>
             </div>
-            <div class="pb-banners" id="pbBanners"></div>
-            <div class="pb-list" id="pbList"></div>
           </section>
 
           <!-- .NET build diagnostics: the same idea, for ASP.NET sites, APIs and libraries. -->
-          <section class="dev-section problems" id="devDotnetProblems">
-            <h3><i data-icon="bug"></i> .NET build diagnostics
+          <section class="dev-section problems collapsed" id="devDotnetProblems">
+            <h3 class="pb-head" id="dnpbHead" role="button" tabindex="0" aria-expanded="false" aria-controls="dnpbBody">
+              <i data-icon="bug"></i> .NET build diagnostics
               <span class="pb-summary" id="dnpbSummary" hidden></span>
               <span class="h-note" id="dnpbNote">Why a build went wrong, file by file. Click a problem to open it at that line in VS Code.</span>
+              <i class="pb-chevron" data-icon="chevron"></i>
             </h3>
-            <div class="pb-bar">
-              <div class="pb-apps" id="dnpbApps" role="tablist" aria-label="Project to build"></div>
-              <span class="pb-gap"></span>
-              <div class="pb-filters" id="dnpbFilters" aria-label="Which problems to show"></div>
-              <input class="field slim pb-search" id="dnpbSearch" placeholder="Filter by file or message…" autocomplete="off" spellcheck="false" />
-              <button class="btn small" id="dnpbFix" type="button" title="Put these problems into the chat, ready to send" hidden><i data-icon="chat"></i> Ask JARVIS to fix</button>
-              <button class="btn btn-primary small" id="dnpbRun" type="button"><i data-icon="refresh"></i> <span>Build</span></button>
+            <div class="pb-body" id="dnpbBody">
+              <div class="pb-bar">
+                <div class="pb-apps" id="dnpbApps" role="tablist" aria-label="Project to build"></div>
+                <span class="pb-gap"></span>
+                <div class="pb-filters" id="dnpbFilters" aria-label="Which problems to show"></div>
+                <input class="field slim pb-search" id="dnpbSearch" placeholder="Filter by file or message…" autocomplete="off" spellcheck="false" />
+                <button class="btn small" id="dnpbFix" type="button" title="Put these problems into the chat, ready to send" hidden><i data-icon="chat"></i> Ask JARVIS to fix</button>
+                <button class="btn btn-primary small" id="dnpbRun" type="button"><i data-icon="refresh"></i> <span>Build</span></button>
+              </div>
+              <div class="pb-banners" id="dnpbBanners"></div>
+              <div class="pb-list" id="dnpbList"></div>
             </div>
-            <div class="pb-banners" id="dnpbBanners"></div>
-            <div class="pb-list" id="dnpbList"></div>
           </section>
         </div>
       </section>

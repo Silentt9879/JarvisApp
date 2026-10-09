@@ -15,6 +15,7 @@
   const { $, el, state } = JV;
 
   const PICK = 'jarvis.dotnetProblemsApp';
+  const OPEN = 'jarvis.dotnetProblemsOpen';
   const MAX_ROWS = 400;
   const SEV = [
     ['error', 'Errors', 'alert'],
@@ -243,6 +244,24 @@
     JV.chat.insert(text);
   }
 
+  // ------------------------------------------------------------- open/collapsed
+  // Closed by default (and remembered) - opened by hand, or by itself when a build fails.
+  let open = false;
+  try { open = localStorage.getItem(OPEN) === '1'; } catch { /* storage off */ }
+  function setOpen(v) {
+    open = v;
+    $('devDotnetProblems').classList.toggle('collapsed', !open);
+    $('dnpbHead').setAttribute('aria-expanded', String(open));
+    try { localStorage.setItem(OPEN, open ? '1' : '0'); } catch { /* storage off */ }
+  }
+  setOpen(open);
+  $('dnpbHead').addEventListener('click', () => setOpen(!open));
+  $('dnpbHead').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    setOpen(!open);
+  });
+
   $('dnpbRun').onclick = () => analyse(app);
   $('dnpbFix').onclick = askToFix;
   let typing = null;
@@ -257,6 +276,7 @@
     app = e.key;
     try { localStorage.setItem(PICK, app); } catch { /* storage off */ }
     analyse(e.key, { quiet: false }).then(() => {
+      setOpen(true);
       if (state.view === 'devices') $('devDotnetProblems').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   });

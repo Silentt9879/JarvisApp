@@ -10,6 +10,7 @@
   const { $, el, state } = JV;
 
   const PICK = 'jarvis.problemsApp';
+  const OPEN = 'jarvis.problemsOpen';
   const MAX_ROWS = 400;
   const SEV = [
     ['error', 'Errors', 'alert'],
@@ -239,6 +240,24 @@
     JV.chat.insert(text);
   }
 
+  // ------------------------------------------------------------- open/collapsed
+  // Closed by default (and remembered) - opened by hand, or by itself when a run fails.
+  let open = false;
+  try { open = localStorage.getItem(OPEN) === '1'; } catch { /* storage off */ }
+  function setOpen(v) {
+    open = v;
+    $('devProblems').classList.toggle('collapsed', !open);
+    $('pbHead').setAttribute('aria-expanded', String(open));
+    try { localStorage.setItem(OPEN, open ? '1' : '0'); } catch { /* storage off */ }
+  }
+  setOpen(open);
+  $('pbHead').addEventListener('click', () => setOpen(!open));
+  $('pbHead').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    setOpen(!open);
+  });
+
   $('pbRun').onclick = () => analyse(app);
   $('pbFix').onclick = askToFix;
   let typing = null;
@@ -252,6 +271,7 @@
     app = e.app;
     try { localStorage.setItem(PICK, app); } catch { /* storage off */ }
     analyse(e.app, { quiet: false }).then(() => {
+      setOpen(true);
       if (state.view === 'devices') $('devProblems').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   });
@@ -282,6 +302,7 @@
     app = key;
     results.set(key, { ok: true, app: key, name: demo.name, dir: demo.dir, at: Date.now() - 40000, ms: 38000, counts: { error: 18, warning: 88, hint: 487 }, conflicts: [{ file: f, line: 212, lines: [212, 214, 216] }], total: 593, truncated: false, problems: [...errs, ...warns] });
     render();
+    setOpen(true);
     $('devProblems').scrollIntoView({ block: 'start' });
   };
 })();
