@@ -17,7 +17,31 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.1.3
+## 🆕 What's new in v2.2.0
+
+**Simplified**
+
+- 🧑‍🏭 **Build your own specialists.** The Agents page can now create, edit, duplicate, switch off and delete Claude Code subagents - the same kind of file that gives JARVIS its built-in specialists. Start from a blank page or one of six ready-made starters (Code Reviewer, Debugger, Test Engineer, Security Reviewer, Performance Analyst, Documentation Specialist), each one ready to use as it stands.
+- ✨ **Build my team.** One button looks at the projects already found in your workspace and suggests a small team - a Flutter app gets a developer, a widget tester and a performance reviewer; a workspace with more than one kind of project gets a few that work across all of it. Nothing is sent to Claude to work this out, so it costs nothing; you choose, customize and preview the exact files before anything is created.
+
+**Fixed**
+
+- 🩹 **"Accept ours/theirs" in a Git conflict no longer corrupts the file.** Resolving a conflict on a binary file, a text file that is not UTF-8, or one larger than about 8 MB, could write it back corrupted - or, for the larger case, delete it outright - while saying it had worked. It now takes the file exactly as Git holds it, whatever it is.
+- 🖼️ **A picture in a reply can no longer reach outside the app.** A Markdown image pointing at another computer (`![x](//host/share/a.png)`), from a reply, a workspace document or a GitHub pull request body, would make Windows try to fetch it - handing that computer your network sign-in. Only a picture carried in the text itself (a `data:` image) is shown now.
+
+**Technical**
+
+- New: `src/agents.mjs` (parsing, validating, creating, editing and deleting agent files, and the rule-based `planTeam()` behind Build My Team), `src/renderer/agents-page.js` (the roster, grouped by where each agent comes from, and its drawer), `src/renderer/agent-builder.js` (the editor and Build My Team dialogs) - no second agent runtime, just the same `.claude/agents` files Claude Code already reads.
+- Every write is checked before it reaches disk: an edit must name the exact version it was opened at (an exclusive write otherwise, so nothing is silently overwritten), a new file's name comes only from the validated agent name, a link or junction is read but never written through, and a change to a restricted workspace, to the user's own Claude folder, or a grant of a tool that edits files or runs commands, needs an explicit approval passed back from the window. An edited or deleted agent's earlier version is always kept.
+- `src/session.mjs`: a session now reports which agents the running Claude Code has and which background agent tasks are still open, and can restart itself in the same conversation (`reloadAgents()`) once nothing is left running - which is how a new or changed agent is picked up, since Claude Code only reads its agent folders when a session starts.
+- `src/git.mjs`: `resolveConflict()` now writes the chosen side's bytes straight from `git cat-file blob` through a temp file and a rename, never through a JavaScript string - the fix behind the conflict-resolution defect above. New regression suite: `scripts/sc-conflict-test.mjs`.
+- `src/renderer/core.js`: the Markdown sanitizer's DOMPurify hook now strips every attribute that fetches something (`src`, `srcset`, `poster`, `background`, and `href` off anything but a link) except a `data:` image - the fix behind the Markdown-image defect above.
+- `scripts/session-test.mjs`: isolated from whoever's machine runs it - it now points `CLAUDE_CONFIG_DIR` at its own empty, throwaway folder for its own lifetime, so a personal `~/.claude/settings.json` can no longer change what the test expects.
+- Verified against the bundled Claude Code itself, not just assumed: `scripts/agents-live-test.mjs` starts a real, isolated, signed-out session and confirms what it reports matches what `agents.mjs` says would load - sub-folders read, the front matter's name as the identity, a workspace agent hiding a personal one of the same name, a restricted workspace loading none of its own.
+- Tests: two new suites (`agents-test`: 27 checks covering creation, editing, deletion, conflicts, trust, invalid drafts, path traversal, linked folders, discovery, templates and teams; `agents-live-test`: 7 checks against the real Claude Code); `npm test` runs 37 suites, all passing.
+
+<details>
+<summary><b>Earlier: v2.1.3</b></summary>
 
 **Fixed**
 
@@ -35,6 +59,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 - `src/github.mjs`: `noteRate()` no longer misreads a response with no rate-limit headers as "0 of 0 remaining."
 - `src/notes.mjs`: `NoteStore.write()` now writes through a temp file and a rename.
 - Tests: 10 new suites (`phone-token`, `power-down`, `github`, `phone-mjs`, `session`, `pane-windows`, `pull-cancel`, `main-chat-ipc`, `files-docs`, `packaged`); `npm test` runs 35 suites, all passing.
+
+</details>
 
 <details>
 <summary><b>Earlier: v2.1.2</b></summary>
@@ -403,7 +429,7 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 | 🧭 **Projects** | Every project JARVIS found in your workspace: type, needs, Git state, and the actions its own files support |
 | 🐙 **GitHub Desktop** | Changes, commits, Undo, stashes, branches, push and pull, plus pull requests and checks from GitHub (read-only) |
 | 📲 **Devices** | Live Android phone screens with `flutter run`, ASP.NET sites and APIs with `dotnet watch`, and Dart analysis |
-| 🧑‍🏭 **Agents** | Your Claude Code subagents and the built-in ones, working as minions on the Agent floor |
+| 🧑‍🏭 **Agents** | Your Claude Code subagents and the built-in ones, working as minions on the Agent floor; build your own from a blank page or a starter, or let JARVIS suggest a team for this workspace |
 | 📂 **Files** | Read any text file in the workspace, and double-click to open it in VS Code |
 | 📝 **Notes** | Write something down, save it, and send it to your Telegram |
 | ✅ **ClickUp** | Your ClickUp tasks, synced through Claude Code's ClickUp connection and grouped by sprint (optional) |
@@ -452,6 +478,19 @@ A **workspace** is a folder: one project, or many side by side. Keep as many as 
 | **Maven** | `pom.xml` | **Build** (`compile`) and **Test**, wrapper first. Never `install` or `deploy` |
 
 An action this PC cannot run yet still shows, with the reason ("The .NET SDK is not installed on this PC"). Builds never publish or deploy. Anything else - a migration, a release, a one-off command - is a message to JARVIS in the chat, where it is approved like any other action.
+
+---
+
+## 🧑‍🏭 Custom agents
+
+An agent is a Claude Code subagent - one file, with a name, a description and instructions - that JARVIS can hand a task to. The Agents page manages the same files Claude Code itself reads; there is no separate agent system of JARVIS's own.
+
+- **Create, edit, duplicate, switch off, delete.** **New agent** opens a form: name, description, the model it uses, which tools it may use, and its instructions, with a **Preview the file** tab showing exactly what would be written before anything is. A card's drawer lets you **Edit** it, **Duplicate** it as a starting point for another, **Switch off** (kept on disk, just not loaded - switch it back on any time) or **Delete** (a copy is kept first, in case it was a mistake).
+- **Six starters.** Code Reviewer, Debugger, Test Engineer, Security Reviewer, Performance Analyst and Documentation Specialist - each a complete, working agent you can use as-is or change. Every one starts able only to read and search; nothing that edits files or runs commands is switched on without you choosing it.
+- **Build my team.** Looks at the projects already found in your workspace and suggests a small team by rule - a Flutter project gets a developer, a widget tester and a performance reviewer; a workspace with more than one kind of project gets a few that work across all of it, with a developer for each one offered unticked. Nothing is sent to Claude and nothing is spent working this out; you tick, rename or customize each suggestion, see the exact files, and only then press **Create**.
+- **Workspace agents vs. your own.** An agent lives in this workspace's `.claude/agents` (used here only) or in your own Claude folder (`~/.claude/agents`, used in every workspace, and by Claude Code in the terminal and VS Code too). If both have an agent of the same name, the workspace's own is what runs here.
+- **Permissions and backups.** Nothing is ever overwritten - an edit has to name the exact version it started from, so a change made elsewhere is never silently lost. Writing to your own Claude folder, or giving an agent a tool that changes files or runs commands, always asks first. A restricted workspace's agents are listed but never loaded or changed. Every edited or deleted agent's earlier version is kept, so nothing made here is a one-way trip.
+- **Reload to use it.** Claude Code reads its agent folders when a chat starts, not while one is already running, so a new or changed agent shows as "reload to use" until you press **Reload session** - which restarts the chat in the same conversation, not a new one.
 
 ---
 
