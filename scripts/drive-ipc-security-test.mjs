@@ -1,9 +1,11 @@
-// JARVIS Knowledge - Phase 24C: the renderer IPC boundary for Google Drive connection
-// management. main.mjs cannot be imported/driven outside Electron (see
+// JARVIS Knowledge - Phase 24C/24D: the renderer IPC boundary for Google Drive connection
+// management AND backup/restore. main.mjs cannot be imported/driven outside Electron (see
 // main-chat-ipc-test.mjs's own header for why this is a source-inspection test, not a
-// behavioral one) - this file checks the one thing that matters most for this phase: no
-// token, refresh token, Client Secret, or authorization code is ever returned to, or
-// accessible from, the renderer, and no backup/restore call is exposed yet.
+// behavioral one) - this file checks the one thing that matters most: no token, refresh
+// token, Client Secret, or authorization code is ever returned to, or accessible from, the
+// renderer, and the restore confirmation workflow cannot be bypassed from the IPC layer.
+// The actual lock/token-enforcement LOGIC is covered behaviorally by
+// drive-backup-controller-test.mjs - this file only checks the thin IPC wiring around it.
 //   node scripts/drive-ipc-security-test.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -34,11 +36,33 @@ function handlerBody(channel) {
 }
 
 // ------------------------------------------------------------------ what main.mjs exposes
-check('exactly four Drive IPC handlers exist: status, configure, connect, disconnect - no backup or restore call yet', () => {
-  for (const h of ['jarvis:driveStatus', 'jarvis:driveConfigureClient', 'jarvis:driveConnect', 'jarvis:driveDisconnect']) {
+check('exactly nine Drive IPC handlers exist - the four Phase 24C connection calls plus Phase 24D\'s backup/history/preview/confirm/status - and no other, wider Drive call', () => {
+  for (const h of ['jarvis:driveStatus', 'jarvis:driveConfigureClient', 'jarvis:driveConnect', 'jarvis:driveDisconnect',
+    'jarvis:driveBackupNow', 'jarvis:driveBackupHistory', 'jarvis:driveRestorePreview', 'jarvis:driveRestoreConfirm', 'jarvis:driveOperationStatus']) {
     assert.match(main, new RegExp(`ipcMain\\.handle\\('${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`), h);
   }
-  assert.doesNotMatch(main, /ipcMain\.handle\('jarvis:drive(Backup|Restore|BackupRun|RestoreApply|RestorePreview|ListBackups)/, 'no backup/restore IPC exists in this phase');
+  assert.doesNotMatch(main, /ipcMain\.handle\('jarvis:drive(Delete|Sync|Upload|Download|ListFiles)/, 'no wider Drive call (delete, sync, raw file access) exists');
+});
+
+check('driveRestoreConfirm requires a token argument from the renderer - there is no handler that calls applyRestore without one', () => {
+  const body = handlerBody('jarvis:driveRestoreConfirm');
+  assert.match(body, /restoreConfirm\(backupId, token\)/);
+  assert.doesNotMatch(main, /\bapplyRestore\(/, 'main.mjs never calls applyRestore directly - only through the controller\'s token-gated restoreConfirm');
+});
+
+check('none of the five backup/restore handlers return an access token, refresh token, or client secret', () => {
+  for (const h of ['jarvis:driveBackupNow', 'jarvis:driveBackupHistory', 'jarvis:driveRestorePreview', 'jarvis:driveRestoreConfirm', 'jarvis:driveOperationStatus']) {
+    assert.doesNotMatch(handlerBody(h), /accessToken|refreshToken|clientSecret/i, h);
+  }
+});
+
+check('the backup-id format is validated before it ever reaches the controller/provider (defense in depth) - controller.mjs itself also validates, proven behaviorally in drive-backup-controller-test.mjs', () => {
+  const controller = fs.readFileSync(new URL('../src/drive-backup-controller.mjs', import.meta.url), 'utf8');
+  assert.match(controller, /BACKUP_ID\.test\(backupId\)/g);
+});
+
+check('the lock, token map and last-backup state all live in drive-backup-controller.mjs, not duplicated in main.mjs - one place to get this right', () => {
+  assert.doesNotMatch(main, /previewTokens|driveOp\s*=\s*\{/, 'main.mjs holds no operation-lock or token state of its own');
 });
 
 check('driveStatus never returns an access token, refresh token, or client secret - only a status word, a reason, and whether a client is configured', () => {

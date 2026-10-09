@@ -749,4 +749,86 @@ Reviewing §13.5's own residual-risk notes against this phase's explicit checkli
    safely - already existed for note checkpoints and now applies uniformly to every kind via
    quarantine.
 
-Stopping here, as asked — no OAuth request, no dependency, no commit.
+## 15. Phase 24D — the Backup & Restore UI
+
+Makes the Phase 24B engine and Phase 24C connection usable directly from Knowledge Notes - a
+polished interface over the existing backend, not a reimplementation of it.
+
+### 15.1 Architecture: a thin IPC layer over a new, pure orchestration module
+
+`src/drive-backup-controller.mjs` holds the actual orchestration - the one in-flight-operation
+lock (shared across backup, restore preview and restore confirm, so none of the three can run
+concurrently with another), preview-token issuance/enforcement, and the small non-sensitive
+"last backup" record (persisted via the existing `saveConfig`/`loadConfig` merge helper, same
+as any other setting). `main.mjs`'s five new `jarvis:drive*` handlers do nothing but validate
+what the renderer supplied and call straight into this module - the same split every other
+IPC-backing piece of this app already uses (`features.mjs`, `task-runner.mjs`, `git.mjs`, ...).
+This made the whole thing directly testable (`drive-backup-controller-test.mjs`, 16 checks)
+without needing Electron or a real IPC round trip.
+
+### 15.2 The restore confirmation workflow - server-side, not just a UI step
+
+`driveRestorePreview(backupId)` re-verifies the whole backup's integrity (via
+`verifyBackupIntegrity`, Phase 24C's own enforcement work) and, only if that passes, returns a
+read-only preview **plus a one-time, server-issued token**. `driveRestoreConfirm(backupId,
+token)` refuses outright without that exact token for that exact backup id - consuming it
+either way (right or wrong), so it can never be replayed, and re-verifying the backup's
+integrity a second time, fresh, before calling `applyRestore`. A renderer literally cannot
+reach a restore without first calling preview and getting back a token that hasn't expired
+(5 minutes) or already been used - proven directly, not by convention
+(`drive-backup-controller-test.mjs`'s "STALE PREVIEW REJECTION" checks).
+
+**Preview freshness** (added on final review): the token also carries a structural fingerprint
+of what the preview actually showed - exactly which paths would be added/replaced/left alone.
+`driveRestoreConfirm` re-runs `previewRestore` fresh (cheap, local-only, no second network
+round trip for this part) and compares; any local Knowledge change since the preview - an
+edit, a new note filling what was "added," a delete - produces a different fingerprint and is
+refused as stale, token consumed either way, with a plain instruction to preview again. This
+is a workflow-integrity guarantee, not a data-safety one: `applyRestore` already re-reads local
+state fresh for its own checkpoint-before-write decisions regardless, so even the narrow
+window between this check and the write itself is never a data-loss risk - only "did the
+person actually approve what's about to happen" is what this closes.
+
+### 15.3 Progress reporting
+
+`runBackup`, `verifyBackupIntegrity` and `applyRestore` each gained an optional `onProgress`
+callback (default a no-op - every existing call site and test is unaffected), reporting
+`{phase, current, total, path}` per file. The controller stores the latest progress on its one
+in-flight-operation record; `jarvis:driveOperationStatus` (polled by the renderer every ~700ms
+while an operation is running) reads it - real progress, never simulated.
+
+### 15.4 UI
+
+A Back Up Now button, a Last Successful Backup line, and live progress, all in the existing
+Drive connection panel in Knowledge Notes. Backup History opens a modal listing every backup
+(date, id, file count, size, complete/incomplete/corrupt) with a Preview button on each
+complete one - never offered on an incomplete or corrupt one, and nothing here ever deletes a
+backup (`listBackups` itself has no delete path at all). Preview opens a second modal: added/
+replaced/unchanged, bucketed into Notes/Trash/Version History, read-only. Pressing its
+"Restore…" button reveals the explicit confirmation text (what changes, that a recovery
+checkpoint is made for everything replaced) before "Yes, restore" becomes available - two
+separate presses, never one.
+
+### 15.5 Draft preservation and refresh after restore
+
+`load()` (the function that already refreshes the sidebar list on every view switch) only ever
+replaces the note **list** - it never touches the open editor's own fields. An unsaved draft
+survives a restore's refresh for the same structural reason it already survives switching to
+Trash and back: nothing about a restore calls anything other than `load()`. Proven directly,
+not assumed, in `knowledge-renderer-test.mjs`'s new "Google Drive backup/restore UI" block -
+the real renderer code, with a real controller and a real (in-memory) Drive behind it, run
+through an actual Back Up Now → edit → Preview → Restore cycle, with an unsaved draft open the
+whole time.
+
+### 15.6 What this phase deliberately did not build
+
+No two-way sync, no automatic/scheduled backups, no change to `notes.json` (the separate,
+legacy store) or to any production AppData. A corrupted/incomplete backup is never silently
+offered for restore - `restorePreview` refuses it outright with `corrupt: true` before a
+preview is even shown.
+
+### 15.7 Known limitations
+
+All testing used `FakeDriveProvider`/synthetic credentials - no real Google account, no real
+network call. Retry/backoff behavior under messier real-world failure patterns remains
+untested, same caveat Phase 24B and 24C already carried forward.

@@ -41,6 +41,8 @@ import { createFeatures } from './features.mjs';
 import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis, readDelivery, newerDelivery, clearDelivery, DELIVERY_FILE, deleteAppCommand, launchUpdater, JARVIS_INSTALL_EXE } from './updates.mjs';
 import { resolveTelegramToken, telegramTokenField, migrateTelegramToken } from './phone-token.mjs';
 import { createDriveConnection } from './drive-connection.mjs';
+import { createGoogleDriveProvider } from './google-drive-provider.mjs';
+import { createDriveBackupController } from './drive-backup-controller.mjs';
 import { describeStoppedWork } from './active-work.mjs';
 import { closePanes } from './pane-windows.mjs';
 import { normalizeWorkspaces, addWorkspace, renameWorkspace, selectWorkspace, removeWorkspace, setWorkspaceTrust, setProjectSettings, projectSettings, workspacesForWindow, NO_WORKSPACE } from './workspaces.mjs';
@@ -2794,6 +2796,32 @@ ipcMain.handle('jarvis:driveDisconnect', async () => {
   log('Drive disconnected');
   return driveStatusForWindow();
 });
+
+// ---------------------------------------------------------------- IPC: Google Drive backup/restore (Phase 24D)
+// Main process owns every Drive operation - but the actual orchestration (the one in-flight-
+// operation lock, preview-token issuance/enforcement, the last-backup record) lives in
+// drive-backup-controller.mjs, a pure DI'd module, the same split every other IPC-backing
+// piece of this app already uses. These handlers only validate what the renderer supplied and
+// wire the result to the window - no path from the renderer ever becomes a local file path:
+// Knowledge's own folder is always `userDir` (fixed, never renderer-supplied), and a backup id
+// is only ever used as a Drive folder NAME, never a filesystem path.
+const driveBackupController = createDriveBackupController({
+  userDir,
+  getProvider: () => createGoogleDriveProvider({ getAccessToken: driveConnection.getAccessToken, log }),
+  loadConfig,
+  saveConfig,
+  log,
+});
+
+ipcMain.handle('jarvis:driveBackupNow', () => driveBackupController.backupNow());
+ipcMain.handle('jarvis:driveBackupHistory', () => driveBackupController.backupHistory());
+ipcMain.handle('jarvis:driveRestorePreview', (_e, backupId) => driveBackupController.restorePreview(backupId));
+ipcMain.handle('jarvis:driveRestoreConfirm', async (_e, backupId, token) => {
+  const r = await driveBackupController.restoreConfirm(backupId, token);
+  if (r.ok) send({ kind: 'drive_restored', backupId });
+  return r;
+});
+ipcMain.handle('jarvis:driveOperationStatus', () => driveBackupController.operationStatus());
 
 // ---------------------------------------------------------------- IPC: files (read-only) + VS Code
 let fileIndex = null;

@@ -40,7 +40,7 @@ const KINDS = Object.keys(KIND_DIR);
 const NOTE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.md$/;
 const SNAPSHOT_FILENAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.\d+\.md$/;
 const KIND_FILENAME = { note: NOTE_FILENAME, trash: NOTE_FILENAME, snapshot: SNAPSHOT_FILENAME };
-const BACKUP_ID = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$/;
+export const BACKUP_ID = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$/;
 
 const within = (child, parent) => {
   const a = path.resolve(child).toLowerCase();
@@ -152,7 +152,7 @@ export function validateManifest(raw) {
  * re-uploaded (saving the upload, never the verification), so a resumed run only spends new
  * upload bandwidth on what is actually still missing or still wrong.
  */
-export async function runBackup(userDir, remote, { backupId, now = () => Date.now(), fsImpl = fs, log = () => {} } = {}) {
+export async function runBackup(userDir, remote, { backupId, now = () => Date.now(), fsImpl = fs, log = () => {}, onProgress = () => {} } = {}) {
   const id = backupId || makeBackupId(now);
   if (!BACKUP_ID.test(id)) return { ok: false, error: `"${id}" is not a usable backup id.` };
 
@@ -172,7 +172,10 @@ export async function runBackup(userDir, remote, { backupId, now = () => Date.no
 
   const manifestFiles = [];
   const failed = [];
+  let done = 0;
   for (const f of files) {
+    onProgress({ phase: 'backup', current: done, total: files.length, path: f.relPath });
+    done += 1;
     let bytes;
     try { bytes = fsImpl.readFileSync(f.full); }
     catch (e) { failed.push({ path: f.relPath, error: `could not read the local file: ${e?.message || e}` }); continue; }
@@ -201,6 +204,7 @@ export async function runBackup(userDir, remote, { backupId, now = () => Date.no
     return { ok: false, backupId: id, total: files.length, verified: manifestFiles.length, failed, error: 'Some files could not be backed up and verified.' };
   }
 
+  onProgress({ phase: 'backup', current: files.length, total: files.length, path: MANIFEST_NAME });
   const manifest = { schema: BACKUP_SCHEMA, backupId: id, createdAt: now(), files: manifestFiles };
   const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2));
   const manifestUpload = await remote.uploadFile(run.id, MANIFEST_NAME, manifestBytes);
@@ -309,12 +313,15 @@ async function downloadAndVerify(remote, entry) {
   return { ok: true, bytes };
 }
 
-export async function verifyBackupIntegrity(remote, backupId) {
+export async function verifyBackupIntegrity(remote, backupId, { onProgress = () => {} } = {}) {
   const found = await findBackup(remote, backupId);
   if (!found.ok) return found;
   const { manifest } = found;
   const failed = [];
+  let done = 0;
   for (const entry of manifest.files) {
+    onProgress({ phase: 'verify', current: done, total: manifest.files.length, path: entry.path });
+    done += 1;
     const r = await downloadAndVerify(remote, entry);
     if (!r.ok) failed.push({ path: entry.path, error: r.error });
   }
@@ -373,7 +380,7 @@ function quarantineBeforeOverwrite(root, backupId, entry, { fsImpl }) {
  * interrupted attempt already wrote it) is left alone, not re-downloaded, re-written, or
  * re-quarantined - there is nothing further to protect it from on a retry.
  */
-export async function applyRestore(userDir, remote, backupId, { fsImpl = fs, now = () => Date.now() } = {}) {
+export async function applyRestore(userDir, remote, backupId, { fsImpl = fs, now = () => Date.now(), onProgress = () => {} } = {}) {
   const found = await findBackup(remote, backupId);
   if (!found.ok) return found;
   const { manifest } = found;
@@ -390,9 +397,12 @@ export async function applyRestore(userDir, remote, backupId, { fsImpl = fs, now
   const replacing = new Set(); // paths of entries that overwrite an existing local file - the only ones needing a recovery copy
   const failed = [];
   const verifiedBytes = new Map(); // entry.path -> downloaded, hash-checked bytes
+  let verifyDone = 0;
   for (const entry of manifest.files) {
     const state = localFileState(userDir, entry, { fsImpl });
     if (state.exists && state.matches) { unchanged.push(entry.path); continue; }
+    onProgress({ phase: 'verify', current: verifyDone, total: manifest.files.length, path: entry.path });
+    verifyDone += 1;
     const v = await downloadAndVerify(remote, entry);
     if (!v.ok) { failed.push({ path: entry.path, error: v.error }); continue; }
     verifiedBytes.set(entry.path, v.bytes);
@@ -417,7 +427,10 @@ export async function applyRestore(userDir, remote, backupId, { fsImpl = fs, now
 
   // Phase 3 - write, from the bytes Phase 1 already downloaded and verified (never re-fetched).
   const written = [];
+  let writeDone = 0;
   for (const entry of toRestore) {
+    onProgress({ phase: 'restore', current: writeDone, total: toRestore.length, path: entry.path });
+    writeDone += 1;
     const bytes = verifiedBytes.get(entry.path);
     const dir = path.join(root, KIND_DIR[entry.kind]);
     const target = path.join(root, entry.path);

@@ -248,6 +248,11 @@ contextBridge.exposeInMainWorld('jarvis', {
   driveConfigureClient: (clientId, clientSecret) => ipcRenderer.invoke('jarvis:driveConfigureClient', clientId, clientSecret),
   driveConnect: () => ipcRenderer.invoke('jarvis:driveConnect'),
   driveDisconnect: () => ipcRenderer.invoke('jarvis:driveDisconnect'),
+  driveBackupNow: () => ipcRenderer.invoke('jarvis:driveBackupNow'),
+  driveBackupHistory: () => ipcRenderer.invoke('jarvis:driveBackupHistory'),
+  driveRestorePreview: (backupId) => ipcRenderer.invoke('jarvis:driveRestorePreview', backupId),
+  driveRestoreConfirm: (backupId, token) => ipcRenderer.invoke('jarvis:driveRestoreConfirm', backupId, token),
+  driveOperationStatus: () => ipcRenderer.invoke('jarvis:driveOperationStatus'),
   // ASP.NET sites and APIs: dotnet watch run, shown in the window.
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),

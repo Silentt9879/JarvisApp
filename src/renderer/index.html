@@ -485,6 +485,13 @@
                   <button class="btn btn-primary btn-block" id="driveConnectBtn" type="button" hidden>Connect Google Drive</button>
                   <button class="btn btn-block" id="driveReconnectBtn" type="button" hidden>Reconnect</button>
                   <button class="btn btn-block" id="driveDisconnectBtn" type="button" hidden>Disconnect</button>
+                  <div class="drive-backup-section" id="driveBackupSection" hidden>
+                    <hr class="drive-sep" />
+                    <p class="muted small" id="driveLastBackup">No backup yet.</p>
+                    <p class="muted small" id="driveOpStatus" hidden></p>
+                    <button class="btn btn-primary btn-block" id="driveBackupNowBtn" type="button">Back Up Now</button>
+                    <button class="btn btn-block" id="driveHistoryOpenBtn" type="button">Backup History</button>
+                  </div>
                 </div>
               </details>
               <div class="kne-tabs" role="tablist" aria-label="Notes or Trash">
@@ -551,6 +558,47 @@
             <div class="modal-foot">
               <button class="btn small" id="kneDeleteCancel" type="button">Cancel</button>
               <button class="btn btn-danger small" id="kneDeleteGo" type="button">Move to Trash</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Google Drive backup history: date, id, file count, size, complete/incomplete/
+             corrupt status (never auto-deleted - see drive-backup.mjs's own listBackups, which
+             never removes anything). "Preview" opens the restore-preview modal below. -->
+        <div class="modal-veil" id="driveHistoryVeil" hidden>
+          <div class="modal hud-panel" role="dialog" aria-modal="true" aria-labelledby="driveHistoryTitle">
+            <h3 id="driveHistoryTitle">Google Drive backups</h3>
+            <div class="modal-body">
+              <div class="note-msg" id="driveHistoryMsg" hidden></div>
+              <ul class="file-list" id="driveHistoryList"></ul>
+            </div>
+            <div class="modal-foot">
+              <button class="btn small" id="driveHistoryCloseBtn" type="button">Close</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Restore: read-only preview first (added/replaced/unchanged, by Notes/Trash/Version
+             History, and any integrity failure), then an explicit confirmation step - the
+             "Restore" button below only reveals the confirmation; the actual restore only runs
+             from driveRestoreConfirmGo, which calls jarvis:driveRestoreConfirm with the
+             server-issued preview token (main.mjs refuses to apply without it). -->
+        <div class="modal-veil" id="drivePreviewVeil" hidden>
+          <div class="modal hud-panel" role="dialog" aria-modal="true" aria-labelledby="drivePreviewTitle">
+            <h3 id="drivePreviewTitle">Restore preview</h3>
+            <div class="modal-body">
+              <p class="muted small">This restores <b>Knowledge</b> notes, Trash and Version History from this backup - it never touches the separate, legacy <b>Notes</b> store.</p>
+              <div class="note-msg" id="drivePreviewMsg" hidden></div>
+              <div id="drivePreviewDetail"></div>
+              <div id="driveConfirmDetail" hidden>
+                <p><b>Recovery checkpoints will be made</b> for every local file this replaces, before anything is overwritten - both a Version History entry (for notes) and a recovery copy (for every kind, including Trash and Version History entries themselves).</p>
+                <p>This cannot be undone as a whole, but nothing is overwritten without that checkpoint existing first.</p>
+              </div>
+            </div>
+            <div class="modal-foot">
+              <button class="btn small" id="drivePreviewCancelBtn" type="button">Cancel</button>
+              <button class="btn btn-primary small" id="drivePreviewRestoreBtn" type="button">Restore…</button>
+              <button class="btn btn-danger small" id="driveConfirmGoBtn" type="button" hidden>Yes, restore</button>
             </div>
           </div>
         </div>

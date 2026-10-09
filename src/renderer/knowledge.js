@@ -617,9 +617,19 @@
   // closed immediately, the same as reopening an in-progress note would.
   renderEditor();
 
-  // -------------------------------------------------------------- Google Drive connection (Phase 24C)
-  // Connection management only - there is no Back Up Now or Restore button here; neither
-  // operation is wired up yet (main.mjs exposes no jarvis:driveBackup/driveRestore call).
+  // -------------------------------------------------------------- Google Drive connection (Phase 24C) + backup/restore (Phase 24D)
+  let driveOpTimer = null; // polls jarvis:driveOperationStatus while a backup/preview/restore is in flight
+  let drivePreview = null; // { backupId, token } - the one currently open in the preview/confirm modal
+
+  function fmtWhen(ms) { return ms ? new Date(ms).toLocaleString() : 'never'; }
+  function fmtSize(n) {
+    if (!n) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0; let v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+  }
+
   async function renderDriveStatus() {
     let r;
     try { r = await window.jarvis.driveStatus(); } catch { r = { status: 'error', reason: 'Could not reach JARVIS.' }; }
@@ -632,6 +642,32 @@
     $('driveConnectBtn').hidden = !(r.clientConfigured && r.status === 'disconnected');
     $('driveReconnectBtn').hidden = !(r.clientConfigured && (r.status === 'expired' || r.status === 'error'));
     $('driveDisconnectBtn').hidden = !(r.status === 'connected' || r.status === 'expired');
+    $('driveBackupSection').hidden = r.status !== 'connected';
+    if (r.status === 'connected') await renderDriveOpStatus();
+  }
+
+  /** Polls main.mjs's one in-flight-operation record - real progress, read, never guessed. */
+  async function renderDriveOpStatus() {
+    let s;
+    try { s = await window.jarvis.driveOperationStatus(); } catch { return; }
+    if (s.lastBackup) {
+      const when = fmtWhen(s.lastBackup.at);
+      $('driveLastBackup').textContent = s.lastBackup.ok
+        ? `Last successful backup: ${when} (${s.lastBackup.fileCount} file${s.lastBackup.fileCount === 1 ? '' : 's'})`
+        : `Last backup attempt failed: ${when} - ${s.lastBackup.error || ''}`;
+    }
+    const op = s.operation;
+    $('driveOpStatus').hidden = !op;
+    $('driveBackupNowBtn').disabled = !!op;
+    $('driveHistoryOpenBtn').disabled = !!op;
+    if (op) {
+      const label = { backup: 'Backing up', preview: 'Checking backup', restore: 'Restoring' }[op.kind] || 'Working';
+      const p = op.progress;
+      $('driveOpStatus').textContent = p && p.total ? `${label}… ${p.current}/${p.total}` : `${label}…`;
+      if (!driveOpTimer) driveOpTimer = setInterval(renderDriveOpStatus, 700);
+    } else if (driveOpTimer) {
+      clearInterval(driveOpTimer); driveOpTimer = null;
+    }
   }
   $('driveConfigureBtn').onclick = () => { $('driveClientFields').hidden = false; $('driveClientId').focus(); };
   $('driveSaveClient').onclick = async () => {
@@ -657,6 +693,125 @@
   $('driveConnectBtn').onclick = doConnect;
   $('driveReconnectBtn').onclick = doConnect;
   $('driveDisconnectBtn').onclick = async () => { await window.jarvis.driveDisconnect(); await renderDriveStatus(); };
+
+  // ---------------------------------------------------------- Part 1: Back Up Now
+  $('driveBackupNowBtn').onclick = async () => {
+    $('driveBackupNowBtn').disabled = true;
+    await renderDriveOpStatus(); // starts the progress poll immediately, before the call below even resolves
+    try {
+      const r = await window.jarvis.driveBackupNow();
+      if (r.ok) JV.notify(`Backup complete - ${r.verified} file${r.verified === 1 ? '' : 's'} verified.`, { level: 'ok' });
+      else JV.notify(r.error || 'Backup did not complete.', { level: 'err' });
+    } catch (e) { JV.notify(String(e?.message || e), { level: 'err' }); }
+    finally { await renderDriveStatus(); }
+  };
+
+  // ---------------------------------------------------------- Part 2: Backup History
+  // "Incomplete" (no manifest at all - an interrupted or still-running backup) and "Corrupt"
+  // (a manifest exists but failed to read or validate) are different problems with different
+  // real-world causes - shown as what the engine actually reported, not folded into one
+  // generic label, wherever that distinction is determinable from its error text.
+  function driveStatusBadge(b) {
+    if (b.complete) return 'Complete';
+    if (b.error && /no manifest/i.test(b.error)) return 'Incomplete (interrupted or still running)';
+    if (b.error) return `Corrupt (${b.error})`;
+    return 'Incomplete';
+  }
+  async function renderDriveHistory() {
+    const list = $('driveHistoryList');
+    list.replaceChildren();
+    $('driveHistoryMsg').hidden = true;
+    let r;
+    try { r = await window.jarvis.driveBackupHistory(); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    if (!r.ok) { $('driveHistoryMsg').hidden = false; $('driveHistoryMsg').textContent = r.error || 'Could not list backups.'; return; }
+    if (!r.backups.length) { list.appendChild(el('li', 'muted empty', 'No backups yet.')); return; }
+    for (const b of r.backups) {
+      const li = el('li', 'row');
+      const t = el('div');
+      t.appendChild(el('b', null, fmtWhen(b.createdAt)));
+      t.appendChild(el('small', null, ` · ${b.backupId} · ${b.fileCount} file${b.fileCount === 1 ? '' : 's'} · ${fmtSize(b.sizeBytes)} · ${driveStatusBadge(b)}`));
+      li.appendChild(t);
+      if (b.complete) {
+        const btn = el('button', 'btn small', 'Preview');
+        btn.type = 'button';
+        btn.onclick = () => openDrivePreview(b.backupId);
+        li.appendChild(btn);
+      }
+      list.appendChild(li);
+    }
+  }
+  $('driveHistoryOpenBtn').onclick = async () => { $('driveHistoryVeil').hidden = false; await renderDriveHistory(); };
+  $('driveHistoryCloseBtn').onclick = () => { $('driveHistoryVeil').hidden = true; };
+
+  // ---------------------------------------------------------- Part 3 + 4: Restore preview and confirmation
+  function driveList(label, paths) {
+    if (!paths.length) return null;
+    const box = el('div');
+    box.appendChild(el('b', null, `${label} (${paths.length})`));
+    const ul = el('ul', 'tagcloud');
+    for (const p of paths.slice(0, 50)) ul.appendChild(el('li', null, p));
+    if (paths.length > 50) ul.appendChild(el('li', 'muted', `…and ${paths.length - 50} more`));
+    box.appendChild(ul);
+    return box;
+  }
+  async function openDrivePreview(backupId) {
+    $('driveHistoryVeil').hidden = true;
+    $('drivePreviewVeil').hidden = false;
+    $('driveConfirmDetail').hidden = true;
+    $('drivePreviewRestoreBtn').hidden = false;
+    $('driveConfirmGoBtn').hidden = true;
+    $('drivePreviewMsg').hidden = true;
+    const detail = $('drivePreviewDetail');
+    detail.replaceChildren(el('p', 'muted', 'Checking this backup…'));
+    drivePreview = null;
+    let r;
+    try { r = await window.jarvis.driveRestorePreview(backupId); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    detail.replaceChildren();
+    if (!r.ok) {
+      $('drivePreviewMsg').hidden = false;
+      $('drivePreviewMsg').textContent = r.error || 'This backup could not be previewed.';
+      $('drivePreviewRestoreBtn').hidden = true;
+      return;
+    }
+    drivePreview = { backupId, token: r.token };
+    detail.appendChild(el('p', null, `Backup from ${fmtWhen(r.createdAt)} - ${r.total} file(s) total.`));
+    for (const [label, bucket] of [['Notes to add', r.added.notes], ['Notes to replace', r.replaced.notes], ['Notes already identical', r.unchanged.notes],
+      ['Trash entries affected', [...r.added.trash, ...r.replaced.trash]], ['Version History entries affected', [...r.added.overwritten, ...r.replaced.overwritten]]]) {
+      const node = driveList(label, bucket);
+      if (node) detail.appendChild(node);
+    }
+    if (!r.added.notes.length && !r.replaced.notes.length && !r.added.trash.length && !r.replaced.trash.length && !r.added.overwritten.length && !r.replaced.overwritten.length) {
+      detail.appendChild(el('p', 'muted', 'Nothing would change - everything already matches this backup.'));
+    }
+  }
+  $('drivePreviewCancelBtn').onclick = () => { $('drivePreviewVeil').hidden = true; drivePreview = null; };
+  $('drivePreviewRestoreBtn').onclick = () => {
+    $('driveConfirmDetail').hidden = false;
+    $('drivePreviewRestoreBtn').hidden = true;
+    $('driveConfirmGoBtn').hidden = false;
+  };
+  $('driveConfirmGoBtn').onclick = async () => {
+    if (!drivePreview) return;
+    const { backupId, token } = drivePreview;
+    $('driveConfirmGoBtn').disabled = true;
+    $('drivePreviewVeil').hidden = true;
+    await renderDriveOpStatus();
+    try {
+      const r = await window.jarvis.driveRestoreConfirm(backupId, token);
+      if (r.ok) {
+        JV.notify(`Restored ${r.written} file${r.written === 1 ? '' : 's'} (${r.unchanged} already matched).`, { level: 'ok' });
+        // Refresh the Knowledge list/reader from disk - load() already preserves an unsaved
+        // draft the same way switching notes or reopening JARVIS does (see this file's own
+        // header comment), so an in-progress edit is never clobbered by this refresh.
+        await load();
+      } else {
+        JV.notify(r.error || 'Restore did not complete.', { level: 'err' });
+      }
+    } catch (e) { JV.notify(String(e?.message || e), { level: 'err' }); }
+    finally { $('driveConfirmGoBtn').disabled = false; drivePreview = null; await renderDriveStatus(); }
+  };
+
+  JV.on('drive_restored', () => { if (JV.state.view === 'kne') load(); });
 
   JV.on('view', (v) => { if (v === 'kne') { load(); renderDriveStatus(); setTimeout(() => (current ? bodyEl() : titleEl()).focus(), 30); } });
   load();

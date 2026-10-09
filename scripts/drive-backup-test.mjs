@@ -567,6 +567,46 @@ await check('ENFORCEMENT: a later file failing verification never un-writes or b
   void ids;
 });
 
+// ================================================================== Phase 24D: progress reporting (for the backup/restore UI)
+
+await check('runBackup: onProgress reports every file, ending at total/total, for real UI progress bars', async () => {
+  const d = dir();
+  seedNotes(d, 3);
+  const remote = new FakeDriveProvider();
+  const events = [];
+  const r = await runBackup(d, remote, { now, onProgress: (e) => events.push(e) });
+  assert.equal(r.ok, true);
+  assert.ok(events.length >= 3);
+  assert.ok(events.every((e) => e.phase === 'backup' && e.total === 3));
+  assert.equal(events.at(-1).current, 3);
+});
+
+await check('applyRestore: onProgress reports a verify phase then a restore phase, each ending at its own total', async () => {
+  const d = dir();
+  seedNotes(d, 2);
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+  for (const f of fs.readdirSync(knowledgePaths(d).notesDir)) fs.unlinkSync(path.join(knowledgePaths(d).notesDir, f));
+  const events = [];
+  const r = await applyRestore(d, remote, backupId, { now, onProgress: (e) => events.push(e) });
+  assert.equal(r.ok, true);
+  assert.ok(events.some((e) => e.phase === 'verify'));
+  assert.ok(events.some((e) => e.phase === 'restore'));
+});
+
+await check('verifyBackupIntegrity: onProgress reports a verify phase for every manifest file', async () => {
+  const d = dir();
+  seedNotes(d, 2);
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+  const events = [];
+  await verifyBackupIntegrity(remote, backupId, { onProgress: (e) => events.push(e) });
+  assert.equal(events.length, 2);
+  assert.ok(events.every((e) => e.phase === 'verify' && e.total === 2));
+});
+
 console.log(`\ndrive-backup-test: ${pass} passed, ${fail} failed`);
 fs.rmSync(TMP, { recursive: true, force: true });
 process.exitCode = fail ? 1 : 0;
