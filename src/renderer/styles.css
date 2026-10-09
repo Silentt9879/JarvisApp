@@ -2266,8 +2266,32 @@ body.nav-collapsed .focus-btn span { display: none; }
 }
 @media (max-width: 1000px) { .sc-work { grid-template-columns: 1fr; height: auto; } }
 @media (max-width: 980px) {
-  .nav span, .nav .nbadge, .nav-sec { display: none; }
-  .nav { width: auto; }
+  /* Below this width the sidebar auto-collapses to the same icon-only rail the manual
+     toggle (body.nav-collapsed) already gives, instead of just hiding the labels and
+     badges and leaving `.nav` at its full 228px: `width: auto` alone (the old rule here)
+     never actually shrank it, because `.nav`'s own `flex: 0 0 228px` pins its flex-basis
+     to 228px regardless of `width` - a flex item's rendered size follows flex-basis, not
+     width, whenever flex-basis isn't `auto`. Reuses the exact collapsed-state values
+     (see body.nav-collapsed above) so there is one compact-rail look, not two slightly
+     different ones; the title="" attributes on each button (see index.html) are what
+     then supply a hover tooltip once only the icon remains. */
+  .nav { width: 56px; flex-basis: 56px; padding: 8px 6px 12px; position: relative; }
+  .brand { justify-content: center; height: 44px; padding: 0; }
+  .brand-text { display: none; }
+  .nav-toggle { position: absolute; top: 54px; left: 50%; transform: translateX(-50%); margin: 0; }
+  .nav-list { margin-top: 28px; }
+  .nav-list button { justify-content: center; padding: 9px 0; gap: 0; position: relative; }
+  .nav-list button > span, .nav-sec { display: none; }
+  .nav-more { justify-content: center; padding: 9px 0; }
+  .nav-more > span { display: none; }
+  .nav-list .nbadge {
+    position: absolute; top: 2px; right: 6px; min-width: 14px; height: 14px; line-height: 14px; font-size: 9px; padding: 0 3px;
+  }
+  .core-mini { justify-content: center; padding: 9px 0; }
+  .core-mini > div:not(.wave) { display: none; }
+  .focus-btn { padding: 9px 0; }
+  .focus-btn span { display: none; }
+
   .cc-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "orb" "feed" "monitor" "timeline" "agents" "llm"; }
   .two-col { grid-template-columns: minmax(0, 1fr); }
   .device-grid { grid-template-columns: minmax(0, 1fr); }
