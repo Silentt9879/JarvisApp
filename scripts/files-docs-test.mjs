@@ -211,6 +211,38 @@ await check('searchDocs(): a body match includes a snippet around the hit, trimm
   assert.ok(hit.snippet.length < 160, 'the snippet is a window around the hit, not the whole document');
 });
 
+// ------------------------------------------------------------------ null/missing workspace (no workspace chosen yet)
+// Confirmed root cause of a real startup defect: docRoots(cwd) built every path from `cwd`
+// unconditionally (`path.join(cwd, '.claude')`), so a fresh install with no workspace yet
+// (cwd === null, as main.mjs's loadConfig() reports it) threw a raw
+// `TypeError: The "path" argument must be of type string. Received null` - logged and caught
+// one layer up in main.mjs's IPC handlers, so it never crashed the app, but it meant every
+// doc-related call failed noisily instead of cleanly reporting "no workspace, no docs."
+await check('docRoots(): no workspace chosen yet (cwd is null, exactly as loadConfig() reports it) is no roots at all - never a throw', () => {
+  assert.deepEqual(docRoots(null), {});
+});
+await check('docRoots(): an empty string or a non-string cwd is treated the same as null, not passed through to path.join', () => {
+  assert.deepEqual(docRoots(''), {});
+  assert.deepEqual(docRoots(undefined), {});
+  assert.deepEqual(docRoots(42), {});
+});
+await check('listDocs(): with no workspace, an empty list - the same "unknown root" result an unrecognized root key already produced, not a new failure shape', async () => {
+  assert.deepEqual(await listDocs(null, 'knowledge'), []);
+  assert.deepEqual(await listDocs(null, 'memory'), []);
+});
+await check('readDoc(): with no workspace, refused as "Unknown document." - a clean message, never the raw TypeError reaching a caller', async () => {
+  await assert.rejects(() => readDoc(null, 'knowledge', 'a.md'), /Unknown document/);
+});
+await check('searchDocs(): with no workspace, no results - not a throw', async () => {
+  assert.deepEqual(await searchDocs(null, 'anything'), []);
+});
+await check('a workspace IS chosen (a real path): docRoots/listDocs/readDoc/searchDocs all work completely normally - this fix only changes the null case', async () => {
+  assert.notDeepEqual(docRoots(WS), {});
+  assert.ok((await listDocs(WS, 'knowledge')).length > 0);
+  assert.equal((await readDoc(WS, 'knowledge', 'a.md')).root, 'knowledge');
+  assert.ok((await searchDocs(WS, 'NEEDLE')).length > 0);
+});
+
 fs.rmSync(LINK_OUTSIDE, { recursive: true, force: true });
 fs.rmSync(WS, { recursive: true, force: true });
 console.log(`files-docs-test: ${pass} passed, ${fail} failed`);

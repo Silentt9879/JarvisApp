@@ -333,7 +333,14 @@ function projectDirFor(cwd) {
  * workspace's own .claude folder, Claude Code's memory for it, and - so the Agents page can
  * say where each specialist comes from - the user's own agents, shared by every workspace.
  */
+/** Every named root, or none at all with no workspace chosen yet - `cwd` is `null` until
+ *  then (main.mjs's loadConfig()), and `path.join(null, ...)` throws rather than producing a
+ *  usable path. `userAgents` lives outside any workspace, but it would be a strange half
+ *  answer to offer just that one root with everything else missing, so this refuses them all
+ *  uniformly - the same "no roots" result every caller (listDocs/readDoc/searchDocs) already
+ *  has to handle for an individual unknown root key, not a second, different failure shape. */
 export function docRoots(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return {};
   const c = path.join(cwd, '.claude');
   const home = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   return {
