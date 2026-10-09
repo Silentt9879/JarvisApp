@@ -139,6 +139,11 @@ contextBridge.exposeInMainWorld('jarvis', {
   // Dart analysis of one app: the problems list on the Devices page. Reading only.
   analyze: (app) => ipcRenderer.invoke('jarvis:analyze', app),
   analyzeCancel: (app) => ipcRenderer.invoke('jarvis:analyzeCancel', app),
+  // .NET build diagnostics - the same idea, for sites, APIs, libraries and test projects.
+  // Reading only: nothing here writes, but a real `dotnet build` does run.
+  dotnetProjects: () => ipcRenderer.invoke('jarvis:dotnetProjects'),
+  dotnetAnalyze: (key) => ipcRenderer.invoke('jarvis:dotnetAnalyze', key),
+  dotnetAnalyzeCancel: (key) => ipcRenderer.invoke('jarvis:dotnetAnalyzeCancel', key),
   mirror: (serial, on) => ipcRenderer.invoke('jarvis:mirror', serial, !!on),
   resetVideo: (serial) => ipcRenderer.invoke('jarvis:resetVideo', serial),
   deviceInput: (serial, ev) => ipcRenderer.send('jarvis:deviceInput', serial, ev),

@@ -110,6 +110,30 @@ export async function webAppsFrom(workspaceRoot, projects = []) {
   return out;
 }
 
+/**
+ * Every .NET project with something to build - sites and APIs, libraries, console apps, test
+ * projects, and a solution where no single project file was found - what the build-diagnostics
+ * panel on the Devices page can analyse. Unlike webAppsFrom, this is not only the ones that
+ * serve pages: dotnet build (and the compiler/analyzer warnings it reports) applies to any of
+ * them, the same way `dart analyze` covers packages as well as apps.
+ */
+export async function dotnetProjectsFrom(workspaceRoot, projects = []) {
+  const out = [];
+  for (const p of projects) {
+    if (!p.types?.includes('dotnet') || p.role === 'platform') continue;
+    const absDir = projectDir(workspaceRoot, p);
+    if (!absDir) continue;
+    const f = await dotnetFacts(absDir, p.markers || []);
+    // The same resolution the Build task action already uses (line ~191): the project's own
+    // file if one was found, else a solution marker in the same folder - never guessed further.
+    const sln = (p.markers || []).find((m) => /\.sln$/i.test(m));
+    const target = f.project ? path.join(absDir, f.project) : sln ? path.join(absDir, sln) : null;
+    if (!target) continue;
+    out.push({ key: p.id, name: p.displayName || p.name, kind: f.kind, dir: p.relativePath, absDir, target, found: true });
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ actions
 //
 // What a person can DO with a project, worked out from its own files and this PC's tools.

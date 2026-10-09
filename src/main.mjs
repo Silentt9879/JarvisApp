@@ -12,6 +12,7 @@ import { JarvisSession, listRecent, loadHistory, findSessions, removeSession, re
 import { systemStats, gitStatus, knowledgeStatus, openIssues, handoffFocus, listDocs, readDoc, searchDocs, docRoots, savedEffort, setRepoNames, setGitTrust, GIT_RESTRICTED } from './workspace.mjs';
 import { isSerial, listDevices, startMirror, stopMirror, resetVideo, sendInput, flutterRun, flutterCommandFor, flutterLog, shutdownDevices, runningFlutter } from './devices.mjs';
 import { analyzeApp, cancelAnalysis, shutdownAnalysis, runningAnalysis } from './analysis.mjs';
+import { analyzeDotnet, cancelDotnetAnalysis, shutdownDotnetAnalysis, runningDotnetAnalysis } from './dotnet-analysis.mjs';
 import { listWebApps, webRun, webStop, webStopAll, webLog, shutdownWebApps, runningWebApps } from './webapps.mjs';
 import { inSnapZone, dockWidth, dockLayout, followLayout, afterPhoneResize, stillDocked } from './dock.mjs';
 import { readDraft, readClickUp, syncClickUp, cleanMember } from './tasks.mjs';
@@ -38,7 +39,7 @@ import { closePanes } from './pane-windows.mjs';
 import { normalizeWorkspaces, addWorkspace, renameWorkspace, selectWorkspace, removeWorkspace, setWorkspaceTrust, setProjectSettings, projectSettings, workspacesForWindow, NO_WORKSPACE } from './workspaces.mjs';
 import { readConfigFile, mergeConfigFile } from './config-file.mjs';
 import { createProjectIndex } from './project-index.mjs';
-import { projectDir, flutterApps, dartProjects, webAppsFrom, projectActions, actionForWindow, TYPE_LABEL, requirementsFor, capabilityRelevance, INSTALL_HINT } from './project-providers.mjs';
+import { projectDir, flutterApps, dartProjects, webAppsFrom, dotnetProjectsFrom, projectActions, actionForWindow, TYPE_LABEL, requirementsFor, capabilityRelevance, INSTALL_HINT } from './project-providers.mjs';
 import { discoverProjects } from './project-discovery.mjs';
 import { startTask, stopTask, taskLog, runningTasks, shutdownTasks } from './task-runner.mjs';
 import { getCapabilities } from './capabilities.mjs';
@@ -1191,12 +1192,14 @@ function activeWork() {
   let flutter = 0;
   let web = 0;
   let analysis = 0;
+  let dotnetAnalysis = 0;
   let gitRemote = 0;
   try { flutter = runningFlutter(); } catch { /* none */ }
   try { web = runningWebApps(); } catch { /* none */ }
   try { analysis = runningAnalysis(); } catch { /* none */ }
+  try { dotnetAnalysis = runningDotnetAnalysis(); } catch { /* none */ }
   try { gitRemote = runningRemotes(); } catch { /* none */ }
-  return { chat: busyChat, flutter, web, tasks: runningTasks().length, analysis, gitRemote, remote: !!remote.ready };
+  return { chat: busyChat, flutter, web, tasks: runningTasks().length, analysis, dotnetAnalysis, gitRemote, remote: !!remote.ready };
 }
 
 ipcMain.handle('jarvis:pickWorkspace', async () => {
@@ -1396,6 +1399,7 @@ async function shutdownChildren() {
   closeAllPanes();
   try { shutdownWebApps(); } catch { /* shutting down */ }
   try { shutdownAnalysis(); } catch { /* shutting down */ }
+  try { shutdownDotnetAnalysis(); } catch { /* shutting down */ }
   try { shutdownTasks(); } catch { /* shutting down */ }
   try { cancelAllRemotes(); } catch { /* shutting down */ }
   try { projectIndex.stop(); } catch { /* shutting down */ }
@@ -1477,6 +1481,7 @@ function powerDown(from) {
   const stopped = describeStoppedWork(activeWork());
   try { shutdownTasks(); } catch { /* going to sleep */ }
   try { shutdownAnalysis(); } catch { /* going to sleep */ }
+  try { shutdownDotnetAnalysis(); } catch { /* going to sleep */ }
   try { cancelAllRemotes(); } catch { /* going to sleep */ }
   if (stopped.length) {
     log('power down also stopped:', stopped.join(', '));
@@ -1858,6 +1863,7 @@ async function resolveProject(key, accept) {
 }
 const isDartProject = (p) => p.types.includes('dart') && p.role !== 'platform';
 const isFlutterApp = (p) => p.types.includes('flutter') && !!p.meta?.app && p.role !== 'platform';
+const isDotnetProject = (p) => p.types.includes('dotnet') && p.role !== 'platform';
 const runTarget = (hit) => ({ key: hit.project.id, name: hit.project.displayName || hit.project.name, dir: hit.dir, rel: hit.project.relativePath });
 
 // Dart analysis (analysis.mjs): what is wrong with a project, for the Devices view. Reading only.
@@ -1871,6 +1877,23 @@ ipcMain.handle('jarvis:analyze', async (_e, key) => {
   return r;
 });
 ipcMain.handle('jarvis:analyzeCancel', (_e, key) => (typeof key === 'string' ? cancelAnalysis(key) : false));
+// .NET build diagnostics (dotnet-analysis.mjs): the same idea, for ASP.NET sites, APIs,
+// libraries and test projects - what Visual Studio's own Error List shows. Reading only: a
+// real `dotnet build` runs (there is no dry-run diagnostic mode), so this is trust-gated
+// exactly as the Dart analyser and the Build/Test task actions already are.
+ipcMain.handle('jarvis:dotnetAnalyze', async (_e, key) => {
+  if (!workspaceTrusted()) return { ok: false, restricted: true, error: RESTRICTED_RUN };
+  const hit = await resolveProject(key, isDotnetProject);
+  if (!hit) return { ok: false, error: 'That project is not in this workspace.' };
+  const list = await dotnetProjectsFrom(hit.ws.path, [hit.project]);
+  const target = list.find((a) => a.key === hit.project.id)?.target || null;
+  if (!target) return { ok: false, error: `${hit.project.displayName || hit.project.name} has no project or solution file dotnet build can target.` };
+  const dotnet = (await getCapabilities()).find((c) => c.id === 'dotnet' && c.installed)?.where || null;
+  const r = await analyzeDotnet({ ...runTarget(hit), target }, { dotnet, log });
+  if (r.ok) log('dotnet build (analysis)', key, `${r.counts.error} errors, ${r.counts.warning} warnings`, `${r.ms} ms`);
+  return r;
+});
+ipcMain.handle('jarvis:dotnetAnalyzeCancel', (_e, key) => (typeof key === 'string' ? cancelDotnetAnalysis(key) : false));
 /** The workspace's Flutter APPS (what a phone can run), discovered - never a fixed list. */
 ipcMain.handle('jarvis:flutterApps', async () => {
   const ws = activeWs();
@@ -1880,6 +1903,15 @@ ipcMain.handle('jarvis:flutterApps', async () => {
 ipcMain.handle('jarvis:dartProjects', async () => {
   const ws = activeWs();
   return ws ? dartProjects((await projectIndex.get(ws)).projects || []) : [];
+});
+/** Every .NET project with something to build - what the build-diagnostics panel can look at. */
+ipcMain.handle('jarvis:dotnetProjects', async () => {
+  const ws = activeWs();
+  if (!ws) return [];
+  const list = await dotnetProjectsFrom(ws.path, (await projectIndex.get(ws)).projects || []);
+  // This PC's absolute paths (absDir, target) stay in the main process - the window is told
+  // only the key it hands back to ask for an analysis, the same as every other project list.
+  return list.map((a) => ({ key: a.key, name: a.name, kind: a.kind, dir: a.dir, found: a.found }));
 });
 ipcMain.handle('jarvis:mirror', async (_e, serial, on) => {
   if (!isSerial(serial)) return { ok: false, error: 'Not a device serial.' };

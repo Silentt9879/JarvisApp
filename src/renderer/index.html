@@ -646,6 +646,24 @@
             <div class="pb-banners" id="pbBanners"></div>
             <div class="pb-list" id="pbList"></div>
           </section>
+
+          <!-- .NET build diagnostics: the same idea, for ASP.NET sites, APIs and libraries. -->
+          <section class="dev-section problems" id="devDotnetProblems">
+            <h3><i data-icon="bug"></i> .NET build diagnostics
+              <span class="pb-summary" id="dnpbSummary" hidden></span>
+              <span class="h-note" id="dnpbNote">Why a build went wrong, file by file. Click a problem to open it at that line in VS Code.</span>
+            </h3>
+            <div class="pb-bar">
+              <div class="pb-apps" id="dnpbApps" role="tablist" aria-label="Project to build"></div>
+              <span class="pb-gap"></span>
+              <div class="pb-filters" id="dnpbFilters" aria-label="Which problems to show"></div>
+              <input class="field slim pb-search" id="dnpbSearch" placeholder="Filter by file or message…" autocomplete="off" spellcheck="false" />
+              <button class="btn small" id="dnpbFix" type="button" title="Put these problems into the chat, ready to send" hidden><i data-icon="chat"></i> Ask JARVIS to fix</button>
+              <button class="btn btn-primary small" id="dnpbRun" type="button"><i data-icon="refresh"></i> <span>Build</span></button>
+            </div>
+            <div class="pb-banners" id="dnpbBanners"></div>
+            <div class="pb-list" id="dnpbList"></div>
+          </section>
         </div>
       </section>
     </main>
@@ -994,6 +1012,7 @@
 <script src="agents-page.js"></script>
 <script src="agent-builder.js"></script>
 <script src="problems.js"></script>
+<script src="dotnet-problems.js"></script>
 <script src="projects-view.js"></script>
 <script src="app.js"></script>
 </body>
