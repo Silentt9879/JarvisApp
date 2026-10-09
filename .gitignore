@@ -4,6 +4,8 @@ dist/
 dist-next/
 dist-installer/
 dist-rc-*/
+dist-24e2/
+dist-smoke-24e/
 out/
 release/
 
