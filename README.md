@@ -17,7 +17,21 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.2.0
+## 🆕 What's new in v2.3.0
+
+**Simplified**
+
+- 🩺 **.NET build diagnostics, on the Devices page.** The same idea as Dart analysis - what is wrong with a project, as Visual Studio's own Error List shows it, without leaving JARVIS. One project at a time from chips, grouped by file, worst first, click a problem to open it at that line in VS Code. Covers every .NET project in the workspace - sites, APIs, libraries, test projects - not only the ones that serve pages.
+
+**Technical**
+
+- New: `src/dotnet-analysis.mjs` (parses MSBuild's own diagnostic line format from a real `dotnet build -v:quiet` - both the file-located form and project-level ones like `NU1903` package warnings; deduplicates repeats and filters a referenced project's own diagnostics out, the same way `dart analyze` only ever reports the package being analysed), `src/renderer/dotnet-problems.js` (the panel, built on the exact structure and CSS `problems.js` already proved, no new styling).
+- `src/project-providers.mjs`: `dotnetProjectsFrom()` resolves every .NET project's build target the same way the existing Build task action already does - the project's own file, or a solution marker, never guessed further.
+- A real build runs (there is no dry-run diagnostic mode for .NET the way `dart analyze` is), so this is trust-gated exactly like Dart analysis and the Build/Test task actions, and wired into the same shutdown and power-down bookkeeping every other long-running tool already has.
+- Tests: `dotnet-analysis-test`, 44 checks; `npm test` runs 38 suites, all passing.
+
+<details>
+<summary><b>Earlier: v2.2.0</b></summary>
 
 **Simplified**
 
@@ -39,6 +53,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 - `scripts/session-test.mjs`: isolated from whoever's machine runs it - it now points `CLAUDE_CONFIG_DIR` at its own empty, throwaway folder for its own lifetime, so a personal `~/.claude/settings.json` can no longer change what the test expects.
 - Verified against the bundled Claude Code itself, not just assumed: `scripts/agents-live-test.mjs` starts a real, isolated, signed-out session and confirms what it reports matches what `agents.mjs` says would load - sub-folders read, the front matter's name as the identity, a workspace agent hiding a personal one of the same name, a restricted workspace loading none of its own.
 - Tests: two new suites (`agents-test`: 27 checks covering creation, editing, deletion, conflicts, trust, invalid drafts, path traversal, linked folders, discovery, templates and teams; `agents-live-test`: 7 checks against the real Claude Code); `npm test` runs 37 suites, all passing.
+
+</details>
 
 <details>
 <summary><b>Earlier: v2.1.3</b></summary>
@@ -428,7 +444,7 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 | 💬 **Chat** | Talk to Claude Code. Attach images and files, pick the model and effort level, and approve each action |
 | 🧭 **Projects** | Every project JARVIS found in your workspace: type, needs, Git state, and the actions its own files support |
 | 🐙 **GitHub Desktop** | Changes, commits, Undo, stashes, branches, push and pull, plus pull requests and checks from GitHub (read-only) |
-| 📲 **Devices** | Live Android phone screens with `flutter run`, ASP.NET sites and APIs with `dotnet watch`, and Dart analysis |
+| 📲 **Devices** | Live Android phone screens with `flutter run`, ASP.NET sites and APIs with `dotnet watch`, and build diagnostics for both - Dart analysis and .NET build errors/warnings |
 | 🧑‍🏭 **Agents** | Your Claude Code subagents and the built-in ones, working as minions on the Agent floor; build your own from a blank page or a starter, or let JARVIS suggest a team for this workspace |
 | 📂 **Files** | Read any text file in the workspace, and double-click to open it in VS Code |
 | 📝 **Notes** | Write something down, save it, and send it to your Telegram |
