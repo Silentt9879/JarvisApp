@@ -10,6 +10,21 @@ import os from 'node:os';
 import path from 'node:path';
 import { JarvisSession } from '../src/session.mjs';
 
+// Isolated from whoever runs this: startingMode() (permission-mode.mjs) falls back to
+// CLAUDE_CONFIG_DIR/settings.json when a test workspace has none of its own, and without this
+// override that is the real ~/.claude/settings.json of whoever's machine runs the suite - its
+// permissions.defaultMode, whatever it happens to be, would then leak into the "restricted
+// workspace" expectations below. Nothing here touches that real file; a session only ever
+// reads it, and only via this redirected, empty, throwaway copy for the life of this script.
+const REAL_CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR;
+const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-session-test-home-'));
+process.env.CLAUDE_CONFIG_DIR = FAKE_HOME;
+process.on('exit', () => {
+  if (REAL_CLAUDE_CONFIG_DIR === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = REAL_CLAUDE_CONFIG_DIR;
+  try { fs.rmSync(FAKE_HOME, { recursive: true, force: true }); } catch { /* best effort */ }
+});
+
 let pass = 0;
 let fail = 0;
 const ok = (cond, name, extra) => { if (cond) pass++; else { fail++; console.log(`FAIL ${name}${extra ? `\n     ${extra}` : ''}`); } };
