@@ -1,5 +1,5 @@
-/* JARVIS window - the detail pages: AI Core, Agents, Tasks, Memory, Knowledge Base,
-   Tools & Skills and Workspace. All read-only views of real data. */
+/* JARVIS window - the detail pages: AI Core, Tasks, Memory, Knowledge Base, Tools & Skills
+   and Workspace. All read-only views of real data. (The Agents page is agents-page.js.) */
 (() => {
   'use strict';
   const { $, el, state } = JV;
@@ -134,100 +134,10 @@
   $('ctxPrecise').onclick = () => { $('ctxPrecise').textContent = 'Counting…'; window.jarvis.context('full'); };
 
   // ------------------------------------------------------------- Agents
-  // Where each specialist comes from, read from the two folders Claude Code takes agents
-  // from: this workspace's .claude/agents, and the user's own ~/.claude/agents (every
-  // workspace). Anything else Claude Code reports is built in, or from a plugin. JARVIS only
-  // reads these folders - it never writes, replaces or removes an agent.
-  let agentDocs = null;
-  let userAgentDocs = null;
-  async function loadAgentSources() {
-    if (!agentDocs) agentDocs = await window.jarvis.docs('agents').catch(() => []);
-    if (!userAgentDocs) userAgentDocs = await window.jarvis.docs('userAgents').catch(() => []);
-  }
-  JV.on('agents', () => { agentDocs = null; userAgentDocs = null; });
-  const sourceOf = (a) => (JV.agentInfo(a).builtin ? 'builtin'
-    : (agentDocs || []).some((d) => d.name === a.name) ? 'workspace'
-      : (userAgentDocs || []).some((d) => d.name === a.name) ? 'user' : 'other');
-  async function agentDoc(a) {
-    const drawer = $('agentDoc');
-    drawer.hidden = false;
-    await loadAgentSources();
-    const own = agentDocs.find((x) => x.name === a.name);
-    const mine = !own && userAgentDocs.find((x) => x.name === a.name);
-    const d = own || mine;
-    const info = JV.agentInfo(a);
-    drawer.replaceChildren();
-    const head = el('div', 'drawer-head');
-    head.appendChild(el('b', null, info.code));
-    head.appendChild(el('small', null, a.name));
-    const task = el('button', 'btn btn-primary small', `Hand a task to ${info.code}`);
-    task.onclick = () => JV.chat.insert(`Use the ${a.name} agent to `);
-    head.appendChild(task);
-    const close = el('button', 'icon-btn');
-    close.appendChild(JV.icon('x'));
-    close.onclick = () => { drawer.hidden = true; };
-    head.appendChild(close);
-    drawer.appendChild(head);
-    const body = el('div', 'reader');
-    drawer.appendChild(body);
-    if (d) openDoc(body, own ? 'agents' : 'userAgents', d.path, `${info.code} brief`);
-    else { const p = el('div', 'content'); JV.renderMarkdown(p, a.description || 'A built-in Claude Code agent.'); body.appendChild(p); }
-    drawer.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-  // The roster: compact cards (name, one-line role, status) grouped by where each specialist
-  // comes from. The full brief is a hover (tooltip) or a click (the drawer) away.
-  const SOURCES = [
-    ['workspace', 'This workspace\'s specialists', 'From .claude/agents in this workspace - here only.'],
-    ['user', 'Your specialists', 'From your own .claude/agents folder - in every workspace.'],
-    ['other', 'From plugins and other sources', 'Reported by Claude Code from its plugins or settings.'],
-  ];
-  let builtinOpen = false; // the roster redraws while agents work; a fold you opened stays open
-  let renderSeq = 0;
-  async function renderAgents() {
-    const seq = ++renderSeq;
-    await loadAgentSources();
-    if (seq !== renderSeq) return; // a newer redraw is on its way
-    const box = $('agentAll');
-    box.replaceChildren();
-    const custom = JV.customAgents().slice().sort((a, b) => a.name.localeCompare(b.name));
-    // No specialists is a normal state, not a broken page: JARVIS works with Claude Code's
-    // built-in agents, and the box says how to add one - or lets JARVIS draft one, through the
-    // chat, so the usual approval comes before any file is written.
-    if (!custom.length) {
-      const empty = el('div', 'agents-empty');
-      empty.appendChild(el('b', null, state.agentsLoaded ? 'No specialists yet - and JARVIS works fine without them' : 'Specialists load once the session is connected.'));
-      if (state.agentsLoaded) {
-        empty.appendChild(el('p', null, 'Claude Code\'s built-in agents (below) explore, plan and do general work. A specialist is a Claude Code subagent you define for work you repeat - a reviewer, a test writer, an expert in one of your projects. Put it in this workspace\'s .claude/agents folder, or in your own ~/.claude/agents to have it everywhere.'));
-        const b = el('button', 'btn small', 'Ask JARVIS to draft a specialist');
-        b.type = 'button';
-        b.onclick = () => JV.chat.insert('Draft a Claude Code subagent for this workspace in .claude/agents/ that ');
-        empty.appendChild(b);
-      }
-      box.appendChild(empty);
-    }
-    for (const [key, label, why] of SOURCES) {
-      const list = custom.filter((a) => sourceOf(a) === key);
-      if (!list.length) continue;
-      const head = el('div', 'roster-head', label);
-      head.title = why;
-      head.appendChild(el('em', null, String(list.length)));
-      const grid = el('div', 'agent-grid roster');
-      for (const a of list) grid.appendChild(JV.agentCard(a, { onClick: agentDoc }));
-      box.append(head, grid);
-    }
-    const bi = JV.builtinAgents();
-    if (bi.length) {
-      const more = el('details', 'roster-more');
-      const sum = el('summary');
-      sum.append(JV.icon('chevron'), el('span', null, `Built-in Claude agents (${bi.length})`));
-      const grid = el('div', 'agent-grid roster');
-      for (const a of bi) grid.appendChild(JV.agentCard(a, { onClick: agentDoc }));
-      more.append(sum, grid);
-      more.open = builtinOpen;
-      more.addEventListener('toggle', () => { builtinOpen = more.open; });
-      box.appendChild(more);
-    }
-  }
+  // The roster, its drawer and the agent builder are agents-page.js and agent-builder.js: the
+  // page lists what is in the two folders Claude Code takes agents from (this workspace's
+  // .claude/agents, and your own), beside what the running session reports.
+  const renderAgents = () => JV.renderAgentsPage?.();
 
   // ------------------------------------------------------------- Tasks
   function renderTasks() {

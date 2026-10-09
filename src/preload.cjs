@@ -229,6 +229,21 @@ contextBridge.exposeInMainWorld('jarvis', {
   webStopAll: () => ipcRenderer.invoke('jarvis:webStopAll'),
   webLog: (key) => ipcRenderer.invoke('jarvis:webLog', key),
   openUrl: (url) => ipcRenderer.invoke('jarvis:openUrl', url),
+  // Custom agents: Claude Code subagent files in this workspace's .claude/agents and in your
+  // own agents folder. An agent is named by its folder ('project' | 'user') and file - never a
+  // path. Nothing is written without the approvals in `opts`, checked again in the main process.
+  agentsList: () => ipcRenderer.invoke('agents:list'),
+  agentRead: (scope, file) => ipcRenderer.invoke('agents:read', scope, file),
+  agentOptions: () => ipcRenderer.invoke('agents:options'),
+  agentPreview: (draft, opts) => ipcRenderer.invoke('agents:preview', draft, opts || {}),
+  agentSave: (draft, opts) => ipcRenderer.invoke('agents:save', draft, opts || {}),
+  agentsCreate: (drafts, opts) => ipcRenderer.invoke('agents:createMany', drafts, opts || {}),
+  agentDelete: (ref, opts) => ipcRenderer.invoke('agents:delete', ref, opts || {}),
+  agentSetEnabled: (ref, enabled, opts) => ipcRenderer.invoke('agents:setEnabled', ref, enabled === true, opts || {}),
+  // Build My Team: proposals from project discovery, by rule - no model is asked, nothing is spent.
+  agentsTeamPlan: (projectKey) => ipcRenderer.invoke('agents:teamPlan', projectKey || null),
+  // Restart the chat in the same conversation so it reads the agents folders again. Idle only.
+  agentsReload: () => ipcRenderer.invoke('agents:reload'),
   // Tasks: the ClickUp board (cached) and the workspace's own draft list.
   clickup: () => ipcRenderer.invoke('jarvis:clickup'),
   clickupSync: () => ipcRenderer.invoke('jarvis:clickupSync'),

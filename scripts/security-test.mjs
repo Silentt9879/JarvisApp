@@ -99,6 +99,29 @@ await check('opening things from the window: folders only, documents only, never
   assert.match(fs.readFileSync(new URL('../src/renderer/git.js', import.meta.url), 'utf8'), /openInCode\(active === '\.' \? d\.path : `\$\{active\}\/\$\{d\.path\}`\)/);
 });
 
+await check('rendered text fetches nothing: a picture only from its own data, never a file path or a network share', async () => {
+  // The page is a file, so its policy's 'self' covers every file path - "//host/share/a.png"
+  // included, which Windows fetches by signing in to that host. Measured on 2026-10-08: the
+  // sanitizer kept such an <img>, and a picture outside the app loaded. So the sanitizer's
+  // hook strips every attribute that fetches, from every element, except a data: picture.
+  const core = src('renderer/core.js');
+  assert.ok(core.includes("const FETCHES = ['src', 'srcset', 'poster', 'background', 'data'];"));
+  assert.ok(core.includes("if (v !== null && !(attr === 'src' && node.tagName === 'IMG' && /^data:image\\/(png|jpeg|gif|webp);/i.test(v.trim()))) node.removeAttribute(attr);"));
+  assert.ok(core.includes("if (node.tagName !== 'A') { node.removeAttribute('href'); node.removeAttribute('xlink:href'); }"));
+  // The rule itself, run on what the hook would be handed.
+  const keeps = (tag, attr, v) => attr === 'src' && tag === 'IMG' && /^data:image\/(png|jpeg|gif|webp);/i.test(v.trim());
+  for (const v of ['//attacker-host/share/a.png', '\\\\attacker-host\\share\\a.png', 'file://attacker-host/share/a.png', '/C:/Users/me/secret.png', 'C:\\Users\\me\\secret.png', '../../build/icon.png', 'https://example.com/a.png', 'data:text/html;base64,PGI+', 'data:image/svg+xml;base64,PHN2Zz4=', ' javascript:alert(1)']) {
+    assert.equal(keeps('IMG', 'src', v), false, v);
+  }
+  assert.equal(keeps('IMG', 'src', 'data:image/png;base64,iVBORw0KGgo='), true);
+  assert.equal(keeps('VIDEO', 'src', 'data:image/png;base64,iVBORw0KGgo='), false, 'only a picture');
+  assert.equal(keeps('IMG', 'srcset', 'data:image/png;base64,iVBORw0KGgo='), false);
+  // And every Markdown path in the window goes through that one sanitizer.
+  for (const f of ['chat.js', 'pages.js', 'github.js', 'welcome.js', 'agents-page.js', 'agent-builder.js']) {
+    assert.doesNotMatch(fs.readFileSync(new URL(`../src/renderer/${f}`, import.meta.url), 'utf8'), /marked\.parse|DOMPurify\.sanitize|\.innerHTML\s*=/, f);
+  }
+});
+
 // ------------------------------------------------------------------ Claude, Git and secrets
 await check('no route to bypassPermissions: the window cannot ask for it, settings cannot start in it', async () => {
   const { WINDOW_MODES, startingMode } = await import('../src/permission-mode.mjs');

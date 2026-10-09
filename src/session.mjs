@@ -144,6 +144,27 @@ export class JarvisSession {
     this.generation = 0;
     this.tasks = new Map();     // task id -> { id, subject, status, activeForm }
     this.taskCalls = new Map(); // tool_use id -> { name, input } for the task tools
+    this.agentList = null;      // the agents this session reported, or null until it has (agents.mjs)
+    this.agentTasks = new Set(); // SDK task ids of agents still running - a background one outlives its turn
+  }
+
+  /**
+   * Is anything still going on that a restart would cut short? A turn in flight, a question
+   * waiting for an answer, or a background agent still at work after its turn ended.
+   */
+  get busy() { return this.running || this.pending.size > 0 || this.agentTasks.size > 0; }
+
+  /**
+   * Start again in the same conversation, so agents added, changed or removed on disk are
+   * picked up - Claude Code reads its agents folders when a session starts and not again
+   * (measured: scripts/agents-live-test.mjs). Refused while anything is running: a restart ends
+   * the process, and every agent inside it.
+   */
+  reloadAgents() {
+    if (!this.q) return { ok: false, notRunning: true, error: 'The session is not running. It reads the agents folders when it next starts.' };
+    if (this.busy) return { ok: false, busy: true, error: 'JARVIS is still working. Reload once it has finished - a reload now would stop it.' };
+    this.start(this.sessionId ? { resume: this.sessionId } : {});
+    return { ok: true, restarted: true };
   }
 
   start({ resume } = {}) {
@@ -156,6 +177,8 @@ export class JarvisSession {
     this.commandNames = new Set();
     this.tasks.clear();
     this.taskCalls.clear();
+    this.agentList = null;
+    this.agentTasks.clear();
     this.emit({ kind: 'status', state: 'starting' });
     this.emit({ kind: 'tasks', list: [] });
 
@@ -340,6 +363,7 @@ export class JarvisSession {
     this.q = null;
     this.input = null;
     this.running = false;
+    this.agentTasks.clear();
   }
 
   // ---------------------------------------------------------------- internals
@@ -414,7 +438,10 @@ export class JarvisSession {
     } catch (e) { if (live()) this.log('initializationResult failed', e?.message || e); }
     try {
       const agents = await q.supportedAgents();
-      if (live()) this.emit({ kind: 'agents', list: agents.map((a) => ({ name: a.name, description: a.description })) });
+      if (live()) {
+        this.agentList = agents.map((a) => ({ name: a.name, description: a.description, model: a.model || null }));
+        this.emit({ kind: 'agents', list: this.agentList });
+      }
     } catch (e) { if (live()) this.log('supportedAgents failed', e?.message || e); }
     try {
       const models = await q.supportedModels();
@@ -507,6 +534,12 @@ export class JarvisSession {
     if (m.ambient || m.skip_transcript) return;
     const phase = { task_started: 'started', task_progress: 'progress', task_notification: 'done', task_updated: 'updated' }[m.subtype];
     const u = m.usage || {};
+    // Which agents are still at work, so a reload is never offered over one (see `busy`).
+    const ended = /^(completed|failed|stopped|killed)$/.test(m.status || m.patch?.status || '');
+    if (m.task_id) {
+      if (phase === 'done' || (phase === 'updated' && ended)) this.agentTasks.delete(m.task_id);
+      else if (phase === 'started' && (m.subagent_type || m.task_type === 'local_agent')) this.agentTasks.add(m.task_id);
+    }
     this.emit({
       kind: 'agent_task',
       phase,

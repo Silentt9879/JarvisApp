@@ -222,8 +222,22 @@
 
   // ------------------------------------------------------------- markdown
   if (window.DOMPurify) {
+    // Rendered text may show a picture only when the picture is in the text itself (data:).
+    // Nothing else may be fetched: this page is a file, so the policy's 'self' covers every file
+    // path there is - and "//host/share/a.png" is one, on someone else's computer. Windows
+    // would sign in to that host to fetch it, handing over the account's network credentials
+    // (measured in a screenshot run: a picture outside the app loaded). Text from the model, a
+    // workspace document or a GitHub pull request could carry such a link.
+    const FETCHES = ['src', 'srcset', 'poster', 'background', 'data'];
     DOMPurify.addHook('afterSanitizeAttributes', (node) => {
       if (node.tagName === 'A') { node.setAttribute('target', '_blank'); node.setAttribute('rel', 'noopener noreferrer'); }
+      if (typeof node.getAttribute !== 'function') return;
+      for (const attr of FETCHES) {
+        const v = node.getAttribute(attr);
+        if (v !== null && !(attr === 'src' && node.tagName === 'IMG' && /^data:image\/(png|jpeg|gif|webp);/i.test(v.trim()))) node.removeAttribute(attr);
+      }
+      // An SVG <image> or <use> loads through href; only a real link keeps one.
+      if (node.tagName !== 'A') { node.removeAttribute('href'); node.removeAttribute('xlink:href'); }
     });
   }
   JV.renderMarkdown = (target, text) => {

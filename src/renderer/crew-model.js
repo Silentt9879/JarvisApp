@@ -115,8 +115,11 @@
         }
         case 'status': {
           let any = false;
-          // The session process ended: whatever was still running ended with it.
-          if (e.state === 'closed') for (const r of runs.values()) any = finish(r, 'stopped') || any;
+          // The session process ended: whatever was still running ended with it. A session that
+          // is starting has replaced the one before it (a reload after an agent was added, a
+          // reconnect), so a run from the old process cannot still be going either - without
+          // this, a background agent cut off by a restart sat at its desk "working" for ever.
+          if (e.state === 'closed' || e.state === 'starting') for (const r of runs.values()) any = finish(r, 'stopped') || any;
           // Idle: every foreground run has answered by now, so one still "working" missed its
           // result. Background runs (and helpers inside one) legitimately outlive the turn.
           if (e.state === 'ready') {

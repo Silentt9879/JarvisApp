@@ -42,6 +42,7 @@ import { projectDir, flutterApps, dartProjects, webAppsFrom, projectActions, act
 import { discoverProjects } from './project-discovery.mjs';
 import { startTask, stopTask, taskLog, runningTasks, shutdownTasks } from './task-runner.mjs';
 import { getCapabilities } from './capabilities.mjs';
+import { listAgents, readAgent, previewForWindow, saveAgent, createAgents, deleteAgent, setAgentEnabled, planTeam, templatesForWindow, configHome, TOOL_CATALOG, MODEL_ALIASES, READ_ONLY_TOOLS } from './agents.mjs';
 import { sourceRepos, repoDetail, allRepoStates, changedFiles, fileDiff, stageFiles, unstageFiles, stageAll, unstageAll, commit as gitCommit, lastCommit, undoLastCommit, discardAll, listBranches, createBranch, switchBranch, renameBranch, deleteBranch, fetchRemote, pullRemote, pushRemote, publishBranch, cancelRemote, remoteState, commitHistory, commitDetail, commitFileDiff, listStashes, createStash, stashDetail, stashFileDiff, applyStash, dropStash, conflictState, conflictDetail, resolveConflict, assistContext, cancelAllRemotes, runningRemotes } from './git.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -2454,6 +2455,119 @@ ipcMain.handle('jarvis:openDoc', async (_e, root, rel) => {
   catch { return false; }
 });
 ipcMain.handle('jarvis:openLogs', () => shell.openPath(userDir));
+
+// ---------------------------------------------------------------- IPC: agents
+// Custom agents (agents.mjs): Claude Code subagent files in this workspace's .claude/agents and
+// in the person's own agents folder. The window names an agent by its folder ('project' or
+// 'user') and its file inside it - never a path - and every rule is applied again here: a
+// restricted workspace is not written to, nothing is overwritten, and a change to the person's
+// own Claude folder or a grant of tools that change things needs the approval passed with it.
+function agentCtx() {
+  const { cwd } = loadConfig();
+  return {
+    cwd: cwd || null,
+    trusted: workspaceTrusted(),
+    home: configHome(),
+    // Old versions of edited and deleted agents, kept beside the config - never in a folder
+    // Claude Code reads, where a copy would load as a second agent.
+    backupDir: path.join(userDir, 'agent-backups'),
+    // A screenshot run works in throwaway folders. The person's own Claude folder is not one,
+    // unless the run was given its own (CLAUDE_CONFIG_DIR).
+    userWritable: !process.env.JARVIS_CAPTURE || !!process.env.CLAUDE_CONFIG_DIR,
+  };
+}
+/** The chat session of the window that asked, if it has one - listing agents never starts a session. */
+const peekSession = (e) => {
+  const wc = e?.sender;
+  return !wc || !win || wc.id === win.webContents.id ? session : paneSessions.get(wc.id) || null;
+};
+const agentOpts = (o) => ({ approveUserScope: o?.approveUserScope === true, allowRisky: o?.allowRisky === true, confirmed: o?.confirmed === true });
+/** A draft as the window sent it, cut down to the fields there are and the sizes they may be. */
+function agentDraft(d) {
+  if (!d || typeof d !== 'object') return {};
+  const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : undefined);
+  return {
+    scope: d.scope === 'user' ? 'user' : d.scope === 'project' ? 'project' : null,
+    file: str(d.file, 300),
+    expect: str(d.expect, 64),
+    name: str(d.name, 100) ?? '',
+    description: str(d.description, 8000) ?? '',
+    body: str(d.body, 200000) ?? '',
+    tools: d.tools === null || d.tools === undefined ? null : Array.isArray(d.tools) ? d.tools.slice(0, 100).filter((t) => typeof t === 'string') : 'not a list',
+    model: str(d.model, 100) ?? null,
+  };
+}
+const agentRef = (r) => ({ scope: r?.scope === 'user' ? 'user' : r?.scope === 'project' ? 'project' : null, file: typeof r?.file === 'string' ? r.file.slice(0, 300) : '', expect: typeof r?.expect === 'string' ? r.expect.slice(0, 64) : undefined });
+/** Run one agents call; a failure nobody expected is logged and said plainly, never thrown at the window. */
+const agentCall = (what, fn) => async (...args) => {
+  try { return await fn(...args); }
+  catch (err) { log(`agents: ${what} failed`, err?.message || err); return { ok: false, error: `The agents could not be ${what}.` }; }
+};
+
+ipcMain.handle('agents:list', agentCall('listed', (e) => listAgents(agentCtx(), { session: peekSession(e)?.agentList || null })));
+ipcMain.handle('agents:read', agentCall('read', (_e, scope, file) => readAgent(agentCtx(), scope === 'user' ? 'user' : scope === 'project' ? 'project' : null, typeof file === 'string' ? file.slice(0, 300) : '')));
+/** What the editor offers: the starters, the tools with what each one allows, and the models. */
+ipcMain.handle('agents:options', () => ({ ok: true, templates: templatesForWindow(), tools: TOOL_CATALOG, readOnly: READ_ONLY_TOOLS, models: MODEL_ALIASES }));
+/** Exactly what saving a draft would write, and where. Writes nothing. */
+ipcMain.handle('agents:preview', agentCall('checked', (_e, draft, opts) => previewForWindow(agentCtx(), agentDraft(draft), agentOpts(opts))));
+ipcMain.handle('agents:save', agentCall('saved', async (_e, draft, opts) => {
+  const r = await saveAgent(agentCtx(), agentDraft(draft), agentOpts(opts));
+  if (r.ok) log(`agents: ${r.created ? 'created' : 'saved'} ${r.name} (${r.scope}: ${r.file})${r.risks.length ? ` - allows ${r.risks.join(', ')}` : ''}`);
+  return r;
+}));
+ipcMain.handle('agents:createMany', agentCall('created', async (_e, drafts, opts) => {
+  const r = await createAgents(agentCtx(), Array.isArray(drafts) ? drafts.slice(0, 20).map(agentDraft) : [], agentOpts(opts));
+  if (r.results && !r.needsApproval) log(`agents: created ${r.results.filter((x) => x.ok).map((x) => x.name).join(', ') || 'none'}${r.ok ? '' : ` - ${r.error}`}`);
+  return r;
+}));
+ipcMain.handle('agents:delete', agentCall('deleted', async (_e, ref, opts) => {
+  const r = await deleteAgent(agentCtx(), agentRef(ref), agentOpts(opts));
+  if (r.ok) log(`agents: deleted ${r.name} (${r.scope}: ${r.file})${r.backup ? ', a copy was kept' : ''}`);
+  return r;
+}));
+ipcMain.handle('agents:setEnabled', agentCall('changed', async (_e, ref, enabled, opts) => {
+  const r = await setAgentEnabled(agentCtx(), agentRef(ref), enabled === true, agentOpts(opts));
+  if (r.ok && !r.unchanged) log(`agents: switched ${r.enabled ? 'on' : 'off'} ${r.file} (${r.scope})`);
+  return r;
+}));
+/**
+ * Build My Team: a short list of specialists for this workspace, or one project in it, from
+ * what project discovery already found. Rules, not a model - pressing it costs nothing, and it
+ * only proposes: nothing is written until the person approves each one (agents:createMany).
+ */
+ipcMain.handle('agents:teamPlan', agentCall('planned', async (e, projectKey) => {
+  const ws = activeWs();
+  if (!ws) return { ok: false, error: NO_WORKSPACE };
+  const [idx, list] = await Promise.all([
+    projectIndex.get(ws),
+    listAgents(agentCtx(), { session: peekSession(e)?.agentList || null }),
+  ]);
+  const projects = idx.projects || [];
+  const plan = planTeam({ projects, target: typeof projectKey === 'string' && projectKey ? projectKey.slice(0, 400) : null, existing: list.agents });
+  if (!plan.ok) return plan;
+  return {
+    ...plan,
+    workspace: { name: ws.name, trusted: workspaceTrusted() },
+    scopes: list.scopes,
+    scanned: { ok: idx.ok !== false, truncated: !!idx.truncated, error: idx.error || null },
+    projects: projects.filter((p) => p.role !== 'platform').slice(0, 80).map((p) => ({ id: p.id, name: p.displayName || p.name, path: p.relativePath, types: p.types })),
+  };
+}));
+/**
+ * Start the chat session again, in the same conversation, so it reads the agents folders
+ * afresh. Only while it is idle: a restart ends every agent still working (session.mjs).
+ */
+ipcMain.handle('agents:reload', (e) => {
+  const s = peekSession(e);
+  if (!s) return { ok: false, notRunning: true, error: 'The session is not running. It reads the agents folders when it next starts.' };
+  if (signedOut) return { ok: false, error: SIGNED_OUT };
+  const r = s.reloadAgents();
+  if (r.ok) {
+    if (s === session) remote.sessionStarted();
+    log('agents: the session was restarted to read the agents folders again');
+  }
+  return r;
+});
 
 // ---------------------------------------------------------------- IPC: notes
 // Written in the window, kept in notes.json beside the config, and optionally sent to the

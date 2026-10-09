@@ -2611,3 +2611,85 @@ body.still .cbar .agents-pill.live .ap-dot { animation: none; }
 .pj-empty p { margin: 0; max-width: 520px; font-size: 12.5px; line-height: 1.55; }
 .web-card.flash { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow .3s; }
 @media (max-width: 760px) { .pj-layout { grid-template-columns: 1fr; } .pj-side { position: static; } .pj-list { max-height: 260px; } }
+
+/* ---------------------------------------------------------------- the team: roster tools, drawer, builder
+   (agents-page.js, agent-builder.js). The floor above it is .crew. */
+.agents-bar { display: flex; align-items: center; gap: 8px; margin: 18px 0 10px; }
+.agents-bar h3 { flex: 1; margin: 0; font: 600 14px var(--hud); color: var(--text); }
+.agents-reload {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; padding: 9px 12px;
+  border: 1px solid var(--accent-line); border-radius: var(--r); background: var(--accent-softer); font-size: 12.5px; color: var(--text-2); line-height: 1.5;
+}
+.agents-reload[hidden], .agents-note[hidden] { display: none; }
+.agents-reload .ic { width: 15px; height: 15px; color: var(--accent); flex: 0 0 15px; }
+.agents-reload span { flex: 1 1 320px; min-width: 0; }
+.agents-note { margin-bottom: 10px; padding: 9px 12px; border: 1px solid var(--warn-line); border-radius: var(--r); background: var(--warn-soft); }
+.agents-note p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+.agents-note p + p { margin-top: 4px; }
+.agents-empty-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.agent-grid.roster .acard.sel { border-color: var(--accent-line); background: var(--sel); }
+.agent-grid.roster .acard.dim .acard-ico, .agent-grid.roster .acard.dim .acard-txt > b { opacity: .6; }
+.acard-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.aflag { font-size: 10.5px; line-height: 1.5; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line-2, var(--line)); color: var(--text-2); white-space: nowrap; }
+.aflag.f-info { border-color: var(--accent-line); color: var(--accent); background: var(--accent-softer); }
+.aflag.f-warn { border-color: var(--warn-line); color: var(--warn); background: var(--warn-soft); }
+.aflag.f-muted { color: var(--muted); }
+
+.drawer-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.drawer-lock { flex: 1 1 260px; min-width: 0; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.drawer-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); font-size: 12.5px; }
+.drawer-facts dt { color: var(--muted); }
+.drawer-facts dd { margin: 0; min-width: 0; color: var(--text-2); overflow-wrap: anywhere; line-height: 1.5; }
+.drawer-problems { color: var(--warn); }
+
+/* the builder's dialogs */
+.dlg.dlg-xl { width: min(860px, 96vw); max-height: 90vh; }
+.dlg-text code { font: 12px var(--mono); color: var(--text); overflow-wrap: anywhere; }
+.ab-error { margin: 10px 0 4px; padding: 8px 12px; border: 1px solid var(--err-line); border-radius: var(--r); background: var(--err-soft); color: var(--err); font-size: 12.5px; line-height: 1.5; }
+.ab-error[hidden], .ab-pane[hidden], .ab-toolwrap[hidden], .ab-toolnote[hidden] { display: none; }
+.ab-tabs { margin: 10px 0 12px; }
+.ab-name, .tm-name { font-family: var(--mono); }
+.ab-body { min-height: 220px; font: 12.5px/1.55 var(--mono); }
+.ab-desc { min-height: 62px; }
+.ab-toolnote { margin: -4px 0 12px; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.ab-toolnote.warn { color: var(--warn); }
+.ab-tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.ab-group { display: flex; flex-direction: column; gap: 5px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); }
+.ab-group > b { font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--muted); }
+.ab-group.warn { border-color: var(--warn-line); }
+.ab-group.warn > b { color: var(--warn); }
+.ab-tool { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: 7px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.ab-tool span { font-family: var(--mono); font-size: 12px; }
+.ab-tool small { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ab-path { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ab-path .ic { width: 14px; height: 14px; color: var(--muted); flex: 0 0 14px; }
+.ab-path code, .tf-head code { font: 12px var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
+.ab-risks { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
+.ab-file { margin: 0; padding: 12px 14px; max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--inset); font: 12px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Build my team */
+.tm-summary { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--text); }
+.team-list, .team-files { display: flex; flex-direction: column; gap: 8px; }
+.team-member { display: flex; flex-direction: column; gap: 6px; padding: 11px 13px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.team-member.on { border-color: var(--accent-line); background: var(--accent-softer); }
+.tm-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tm-pick { display: flex; align-items: center; gap: 8px; flex: 1 1 180px; min-width: 0; cursor: pointer; }
+.tm-pick b { font-size: 13.5px; color: var(--text); }
+.tm-head .tm-name { flex: 0 1 230px; min-width: 120px; }
+.tm-why { display: flex; gap: 7px; align-items: flex-start; font-size: 12.5px; line-height: 1.5; color: var(--text); }
+.tm-why .ic { width: 13px; height: 13px; margin-top: 3px; color: var(--accent); flex: 0 0 13px; }
+.tm-desc { font-size: 12px; line-height: 1.5; color: var(--text-2); }
+.tm-tools { align-items: center; }
+.tm-opt { display: inline-flex; align-items: center; gap: 4px; font: 11.5px var(--mono); padding: 1px 8px 1px 5px; border-radius: var(--r-sm); border: 1px dashed var(--warn-line); color: var(--text-2); cursor: pointer; }
+.tm-note { display: block; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.tm-note.warn { color: var(--warn); }
+.team-file { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.team-file.bad { border-color: var(--err-line); background: var(--err-soft); }
+.tf-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.tf-head .ic { width: 14px; height: 14px; color: var(--muted); flex: 0 0 14px; }
+.team-file.bad .tf-head .ic, .tf-error { color: var(--err); }
+.tf-head b { font-size: 13px; color: var(--text); }
+.tf-error { font-size: 12.5px; line-height: 1.5; }
+.tf-more > summary { cursor: pointer; font-size: 12px; color: var(--accent); }
+.tf-more > .ab-file { margin-top: 8px; max-height: 300px; }

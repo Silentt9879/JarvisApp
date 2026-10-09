@@ -153,7 +153,7 @@ location, calendar) there is no panel.
 |---|---|---|
 | **Overview** | The session's state in a line, the activity feed, this machine's CPU / RAM / disk, the specialists, the session's turns and tasks, models and connected systems | session events, `os`, git, knowledge files |
 | **AI Core** | Model, effort, thinking, mode, Claude Code version, account, the context window by category, memory files in context | `getContextUsage`, `initializationResult` |
-| **Agents** | The specialists, lit while working, grouped by where they come from (this workspace, your own `~/.claude/agents`, built in); click for the brief, or hand one a task. None of your own is a normal state, with a note on how to add one | `supportedAgents`, `.claude/agents/*.md` |
+| **Agents** | The specialists, lit while working, grouped by where they come from (this workspace, your own `~/.claude/agents`, switched off, a plugin, built in); click for the brief, or hand one a task. **New agent** makes one (blank or from six starters), **Build my team** suggests a few for the projects found here; an agent of your own can be edited, duplicated, switched off or deleted. See [Custom agents](#custom-agents) | `supportedAgents`, `agents.mjs` over `.claude/agents/**/*.md` |
 | **ClickUp** | Your ClickUp board (every sprint, every status) for the member you name, the workspace draft of work not logged yet, this session's task list and turns, the handoff's CURRENT FOCUS | ClickUp MCP (cached), `clickup-task-draft.md`, TodoWrite / TaskCreate / TaskUpdate, `JARVIS_HANDOFF.md` |
 | **Memory** | Memories as a star map (lines are `[[links]]`) and a reader | `~\.claude\projects\...\memory` |
 | **Chat** (the default) | The chat and recent sessions (terminal and VS Code sessions too); hover a session to rename or delete it, hover your message to undo its file changes | Claude Agent SDK |
@@ -177,6 +177,61 @@ The identity is kept but quiet: the wordmark, a status dot at the foot of the si
 one line on the Overview. The animated core orb is gone - its canvas is still in the page,
 and `drawOrb` still works if it is ever given a size again, but nothing draws while it has
 none, so there is no animation frame being spent on it.
+
+## Custom agents
+
+An agent is a Claude Code subagent: one Markdown file whose front matter names it and whose
+body is its system prompt. JARVIS has no agent runtime of its own - the Agents page manages
+the same files Claude Code reads, and the floor shows the same events it always did.
+
+| Where | Folder | Used |
+|---|---|---|
+| This workspace | `<workspace>\.claude\agents` | In this workspace, when it is trusted |
+| Your own | `~\.claude\agents` (or `CLAUDE_CONFIG_DIR`) | Everywhere - the terminal and VS Code too |
+
+**What you can do.** *New agent* (blank, or from a starter: Code Reviewer, Debugger, Test
+Engineer, Security Reviewer, Performance Analyst, Documentation Specialist), with a name, a
+description, a model, the tools it may use and its instructions - and a **Preview the file**
+tab that shows the exact Markdown and YAML, and where it would go, before anything is written.
+Click a card for its drawer: *Edit*, *Duplicate*, *Switch off / on*, *Delete*, *Hand a task*.
+Built-in, plugin and linked agents are listed and left alone; the drawer says why.
+
+**Build my team.** Looks at what project discovery already found and suggests a small team by
+fixed rules - a Flutter workspace gets a developer, a widget tester and a performance reviewer;
+a mixed one gets three that work across it, with a developer per technology offered unticked.
+Each member comes with its reason. A role one of your agents already seems to cover is left
+unticked. No model is asked, so it costs nothing; nothing is created until you have picked,
+renamed or customized the members and looked at the files on the last step.
+
+**What JARVIS will not do**, whoever asks (`agents.mjs`, checked again in the main process):
+
+- overwrite a file - a new agent is an exclusive write, and an edit must quote the version it
+  was opened at, so a change made meanwhile in VS Code is never lost;
+- write outside the two folders - a new file's name is built from the validated agent name, an
+  existing one is checked through its real path, and a link or junction is read, never written
+  through;
+- change a restricted workspace, or touch any Claude settings file;
+- write to your own Claude folder, or grant a tool that changes files or runs commands,
+  without a yes to that exact question (starters and teams ask for neither);
+- write `hooks`, `mcpServers` or `permissionMode` into a new file - an existing file's are kept
+  line for line on edit, and not carried into a duplicate;
+- run an agent, or spend anything, because one was created.
+
+An edited or deleted agent's old version is kept in `%APPDATA%\JARVIS\agent-backups`.
+*Switch off* renames the file to `.md.disabled`, which Claude Code does not read; for a
+built-in or plugin agent the supported way is a `permissions.deny` rule (`Agent(name)`), which
+JARVIS leaves to you.
+
+**Reloading.** Claude Code reads the agents folders when a session starts and not again, so a
+card says *New - reload to use* until then, and a bar offers **Reload session**: the chat
+restarts in the same conversation. It is refused while anything is running - a turn, a
+question, or a background agent - because a restart would end it. An agent that merely exists
+is never shown as working: the floor only ever draws what the session reports.
+
+What Claude Code really does with these folders was measured against the bundled build, and
+`npm run test:agents-live` repeats it (isolated folders, no message sent, nothing spent):
+sub-folders are read, the front matter's `name` is the identity, a workspace agent hides one of
+your own with the same name, and a running session does not notice a new file.
 
 ## The composer
 

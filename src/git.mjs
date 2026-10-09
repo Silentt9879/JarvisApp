@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { listRepos, repoStateAt, run, killTree, repoFolderName, repoDisplayName } from './workspace.mjs';
 import { classify } from './git-policy.mjs';
 import { measure, budgetFor } from './gitai.mjs';
@@ -1015,7 +1016,8 @@ export async function assistContext(cwd, key, action, { scope = 'staged', path: 
       meta.push(`${filePath} - ${c.conflict.label} during a ${c.operation || 'merge'}.`);
       meta.push(`Ours = ${c.sides.ours}. Theirs = ${c.sides.theirs}.`);
       if (c.sides.warning) meta.push(c.sides.warning);
-      const section = (name, v) => `===== ${name} =====\n${v === null ? '(this side does not have the file)' : v.text}`;
+      // A binary or oversized side is described, not sent: its bytes are no use as text.
+      const section = (name, v) => `===== ${name} =====\n${v === null ? '(this side does not have the file)' : v.note ? `(${v.note})` : v.text}`;
       parts.push({
         file: filePath,
         text: [section('BASE (common ancestor)', c.base), section('OURS', c.ours), section('THEIRS', c.theirs),
@@ -1442,6 +1444,53 @@ const MARKERS = /^(<{7}|={7}|>{7})/m;
  * A missing stage means that side does not have the file - which is exactly what a
  * delete/modify conflict is, and must not be rendered as an empty file.
  */
+/** The index's entries for a conflicted file: { '1': base sha, '2': ours, '3': theirs }, each only if that side has it. */
+async function conflictStages(repoDir, filePath) {
+  const ls = await run('git', ['--no-optional-locks', '-C', repoDir, 'ls-files', '-u', '-z', '--', filePath], { timeout: 15000 });
+  const stages = {};
+  for (const row of (ls.out || '').split('\0')) {
+    const m = /^(\d+) ([0-9a-f]{40,64}) ([123])\t([\s\S]*)$/.exec(row);
+    if (m) stages[m[3]] = m[2];
+  }
+  return stages;
+}
+
+/**
+ * Write one blob to a file exactly as git holds it: git's output goes straight to a temp file
+ * beside the target, never through a string and never all in memory, and the temp file takes
+ * the target's place only once git has finished cleanly. A failure leaves the file as it was.
+ */
+function writeBlob(repoDir, sha, full) {
+  return new Promise((resolve) => {
+    const tmp = `${full}.jarvis-${process.pid}-${Date.now()}.tmp`;
+    let fd;
+    try {
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fd = fs.openSync(tmp, 'wx');
+    } catch (e) { resolve({ ok: false, error: String(e?.message || e) }); return; }
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
+    delete env.ELECTRON_RUN_AS_NODE;
+    let err = '';
+    let settled = false;
+    const done = (ok, error) => {
+      if (settled) return;
+      settled = true;
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+      if (ok) {
+        try { fs.renameSync(tmp, full); resolve({ ok: true }); return; } catch (e) { error = String(e?.message || e); }
+      }
+      try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to remove */ }
+      resolve({ ok: false, error: error || 'git could not read that version of the file.' });
+    };
+    let child;
+    try { child = spawn('git', ['--no-optional-locks', '-C', repoDir, 'cat-file', 'blob', sha], { stdio: ['ignore', fd, 'pipe'], windowsHide: true, env }); }
+    catch (e) { done(false, String(e?.message || e)); return; }
+    child.stderr.on('data', (d) => { err += String(d); });
+    child.on('error', (e) => done(false, String(e?.message || e)));
+    child.on('close', (code) => done(code === 0, code === 0 ? null : (err.trim().split('\n')[0] || `git ended with code ${code}`)));
+  });
+}
+
 export async function conflictDetail(cwd, key, filePath) {
   const repo = resolveRepo(cwd, key);
   if (!repo) return { ok: false, error: 'That repository is not one of the detected repositories.' };
@@ -1452,19 +1501,18 @@ export async function conflictDetail(cwd, key, filePath) {
   const entry = state.files.find((f) => f.path === filePath);
   if (!entry) return { ok: false, error: 'That file is not conflicted according to git.' };
 
-  const ls = await run('git', ['--no-optional-locks', '-C', repo.dir, 'ls-files', '-u', '-z', '--', filePath], { timeout: 15000 });
-  const stages = {};
-  for (const row of (ls.out || '').split('\0')) {
-    const m = /^(\d+) ([0-9a-f]{40}) ([123])\t([\s\S]*)$/.exec(row);
-    if (m) stages[m[3]] = m[2];
-  }
+  const stages = await conflictStages(repo.dir, filePath);
 
+  // For SHOWING only. null means that side does not have the file - and nothing else: a side
+  // that is there but cannot be shown (larger than one read, or not text) must never be taken
+  // for a deleted one. It once was, and "Accept theirs" then removed a 9 MB file.
   const read = async (sha) => {
     if (!sha) return null;
     const r = await run('git', ['--no-optional-locks', '-C', repo.dir, 'cat-file', 'blob', sha], { timeout: 20000 });
-    if (!r.ok) return null;
+    if (!r.ok) return { text: '', lines: 0, binary: true, note: 'This side has the file, but it is too large to show here. Accepting it still takes the whole file, byte for byte.' };
     const text = r.out;
-    return { text, lines: text.split('\n').length, binary: text.includes('\0') };
+    const binary = text.includes('\0');
+    return { text, lines: text.split('\n').length, binary, ...(binary ? { note: 'A binary file - not shown as text. Accepting it takes the file exactly as that side has it.' } : {}) };
   };
   const [base, ours, theirs] = await Promise.all([read(stages['1']), read(stages['2']), read(stages['3'])]);
 
@@ -1508,14 +1556,19 @@ export async function resolveConflict(cwd, key, filePath, choice) {
 
   const full = path.join(repo.dir, filePath);
   if (choice === 'ours' || choice === 'theirs') {
-    const side = choice === 'ours' ? detail.ours : detail.theirs;
-    if (!side) {
+    // Decided from git's index, not from the text read for display: only a side with no
+    // entry there deleted the file.
+    const sha = (await conflictStages(repo.dir, filePath))[choice === 'ours' ? '2' : '3'];
+    if (!sha) {
       // That side deleted the file; taking it means removing the file.
       const rm = await run('git', ['-C', repo.dir, 'rm', '-q', '--', filePath], { timeout: 20000 });
       if (!rm.ok) return { ok: false, error: firstLine(rm) };
     } else {
-      try { fs.writeFileSync(full, side.text); }
-      catch (e) { return { ok: false, error: `Could not write that file: ${e?.message || e}` }; }
+      // The bytes git holds, straight into the file. They used to pass through a string, which
+      // rewrote every byte that is not UTF-8: an image, or a Latin-1 source file, came out
+      // corrupted and was staged that way.
+      const wrote = await writeBlob(repo.dir, sha, full);
+      if (!wrote.ok) return { ok: false, error: `Could not write that file: ${wrote.error}` };
       const add = await run('git', ['-C', repo.dir, 'add', '--', filePath], { timeout: 20000 });
       if (!add.ok) return { ok: false, error: firstLine(add) };
     }

@@ -1222,7 +1222,8 @@
       h.appendChild(el('span', null, title));
       if (note) h.appendChild(el('em', null, note));
       bx.appendChild(h);
-      bx.appendChild(el('pre', null, content === null ? 'This side does not have the file.' : content.text.slice(0, 20000)));
+      // A side that is binary or too large to show says so, instead of a pane of noise or an empty one.
+      bx.appendChild(el('pre', null, content === null ? 'This side does not have the file.' : content.note || content.text.slice(0, 20000)));
       sides.appendChild(bx);
     };
     sideBox('Base', 'common ancestor', d.base);
