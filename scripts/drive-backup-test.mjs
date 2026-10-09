@@ -9,9 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   BACKUP_ROOT_NAME, MANIFEST_NAME, makeBackupId, collectLocalFiles, validateManifest,
-  runBackup, listBackups, previewRestore, applyRestore,
+  runBackup, listBackups, previewRestore, applyRestore, verifyBackupIntegrity,
 } from '../src/drive-backup.mjs';
-import { knowledgePaths, writeKnowledgeNote, listKnowledgeNotes, listTrash, listSnapshots, deleteKnowledgeNote, noteRevision, saveKnowledgeNote } from '../src/knowledge.mjs';
+import { knowledgePaths, writeKnowledgeNote, listKnowledgeNotes, listTrash, listSnapshots, deleteKnowledgeNote, noteRevision, saveKnowledgeNote, snapshotBeforeOverwrite } from '../src/knowledge.mjs';
 import { FakeDriveProvider } from './fake-drive-provider.mjs';
 
 let pass = 0;
@@ -416,6 +416,155 @@ await check('deleting a note (to Trash) after a backup, then restoring, brings t
   const r = await applyRestore(d, remote, backupId, { now });
   assert.equal(r.ok, true);
   assert.ok(listKnowledgeNotes(d).notes.some((x) => x.id === ids[0]), 'restored back to notes/, not left in Trash');
+});
+
+// ================================================================== Phase 24C Part 6: restore safety review additions
+
+await check('verifyBackupIntegrity: a fully intact backup verifies every file, without touching the local filesystem at all', async () => {
+  const d = dir();
+  seedNotes(d, 3);
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+  const before = fs.readdirSync(knowledgePaths(d).notesDir).sort();
+  const r = await verifyBackupIntegrity(remote, backupId);
+  assert.equal(r.ok, true);
+  assert.equal(r.verified, 3);
+  assert.deepEqual(fs.readdirSync(knowledgePaths(d).notesDir).sort(), before, 'not one local file was touched by a pure integrity check');
+});
+
+await check('verifyBackupIntegrity: a corrupted remote file is caught - reported, never silently passed as intact', async () => {
+  const d = dir();
+  seedNotes(d, 2);
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+  const listed = await listBackups(remote);
+  const victim = listed.backups[0].manifest.files[0];
+  remote.files.set(victim.driveFileId, { ...remote.files.get(victim.driveFileId), bytes: Buffer.from('corrupted') });
+  const r = await verifyBackupIntegrity(remote, backupId);
+  assert.equal(r.ok, false);
+  assert.equal(r.failed.length, 1);
+  assert.equal(r.verified, 1);
+});
+
+await check('verifyBackupIntegrity: an unknown backup id is refused the same way applyRestore refuses one', async () => {
+  const remote = new FakeDriveProvider();
+  const r = await verifyBackupIntegrity(remote, makeBackupId(now));
+  assert.equal(r.ok, false);
+});
+
+await check('restore safety review: restoring over an existing, DIFFERENT Trash file quarantines the pre-restore copy - not just live notes', async () => {
+  const d = dir();
+  const ids = seedNotes(d, 1);
+  deleteKnowledgeNote(d, ids[0], { baseRevision: noteRevision(d, ids[0]) });
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now }); // backs up the Trash file as it is now
+
+  // The local Trash file is changed by hand after the backup - restoring must not silently lose this.
+  const trashFile = path.join(knowledgePaths(d).trashDir, `${ids[0]}.md`);
+  const originalTrashBytes = fs.readFileSync(trashFile);
+  fs.writeFileSync(trashFile, 'a different trash body written after the backup');
+
+  const r = await applyRestore(d, remote, backupId, { now });
+  assert.equal(r.ok, true);
+  assert.ok(r.quarantined >= 1, 'at least the Trash file was quarantined');
+  assert.deepEqual(fs.readFileSync(trashFile), originalTrashBytes, 'restored back to the backed-up Trash content');
+
+  const quarantineFile = path.join(knowledgePaths(d).root, 'restore-recovery', backupId, 'trash', `${ids[0]}.md`);
+  assert.ok(fs.existsSync(quarantineFile), 'a recovery copy exists');
+  assert.equal(fs.readFileSync(quarantineFile, 'utf8'), 'a different trash body written after the backup', 'and it holds exactly the content that was about to be lost');
+});
+
+await check('restore safety review: restoring over an existing, DIFFERENT Version History snapshot quarantines the pre-restore copy too', async () => {
+  const d = dir();
+  const ids = seedNotes(d, 1);
+  const snap = snapshotBeforeOverwrite(d, ids[0], { now });
+  assert.equal(snap.ok, true);
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+
+  const snapFile = path.join(knowledgePaths(d).overwrittenDir, path.basename(snap.file));
+  const originalSnapBytes = fs.readFileSync(snapFile);
+  fs.writeFileSync(snapFile, 'a different snapshot body written after the backup');
+
+  const r = await applyRestore(d, remote, backupId, { now });
+  assert.equal(r.ok, true);
+  assert.deepEqual(fs.readFileSync(snapFile), originalSnapBytes);
+  const quarantineFile = path.join(knowledgePaths(d).root, 'restore-recovery', backupId, 'overwritten', path.basename(snap.file));
+  assert.equal(fs.readFileSync(quarantineFile, 'utf8'), 'a different snapshot body written after the backup');
+});
+
+await check('restore safety review: if even one file cannot be quarantined, the WHOLE restore is refused before anything is written - not just the checkpoint step', async () => {
+  const d = dir();
+  const ids = seedNotes(d, 2);
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+  const rev = noteRevision(d, ids[0]);
+  saveKnowledgeNote(d, ids[0], { title: 'T', body: 'edited locally after backup', tags: [], favorite: false, folder: null }, { baseRevision: rev });
+
+  const flaky = { ...fs, mkdirSync: (p, opts) => { if (String(p).includes('restore-recovery')) throw new Error('disk full'); return fs.mkdirSync(p, opts); } };
+  const r = await applyRestore(d, remote, backupId, { now, fsImpl: flaky });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /protected/);
+  assert.equal(listKnowledgeNotes(d, { fsImpl: flaky }).notes.find((x) => x.id === ids[0]).body, 'edited locally after backup', 'nothing was restored - the whole operation was refused up front');
+});
+
+await check('restore safety review: a file unchanged from the backup is neither checkpointed nor quarantined - nothing at risk, nothing to protect', async () => {
+  const d = dir();
+  const ids = seedNotes(d, 1);
+  deleteKnowledgeNote(d, ids[0], { baseRevision: noteRevision(d, ids[0]) });
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+  const r = await applyRestore(d, remote, backupId, { now }); // nothing changed locally since the backup
+  assert.equal(r.ok, true);
+  assert.equal(r.quarantined, 0);
+  assert.equal(r.checkpointed, 0);
+});
+
+await check('ENFORCEMENT: applyRestore() itself verifies every file it will restore before writing ANY of them - not left to a caller to call verifyBackupIntegrity() first', async () => {
+  const d = dir();
+  const ids = seedNotes(d, 3);
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+  for (const f of fs.readdirSync(knowledgePaths(d).notesDir)) fs.unlinkSync(path.join(knowledgePaths(d).notesDir, f));
+
+  const order = [];
+  const realDownload = remote.downloadFile.bind(remote);
+  remote.downloadFile = async (id) => { order.push(`download:${id}`); return realDownload(id); };
+  const flakyWrite = { ...fs, writeFileSync: (p, data) => { order.push(`write:${path.basename(String(p))}`); return fs.writeFileSync(p, data); } };
+
+  const r = await applyRestore(d, remote, backupId, { now, fsImpl: flakyWrite });
+  assert.equal(r.ok, true);
+  assert.equal(r.written, 3);
+
+  const lastDownloadIdx = order.map((e, i) => [e, i]).filter(([e]) => e.startsWith('download:')).at(-1)[1];
+  const firstWriteIdx = order.findIndex((e) => e.startsWith('write:'));
+  assert.ok(lastDownloadIdx < firstWriteIdx, `every download must finish before the first write starts - order was: ${order.join(', ')}`);
+  void ids;
+});
+
+await check('ENFORCEMENT: a later file failing verification never un-writes or blocks an earlier file that verified fine - partial, resumable restore is preserved', async () => {
+  const d = dir();
+  const ids = seedNotes(d, 3);
+  const remote = new FakeDriveProvider();
+  const backupId = makeBackupId(now);
+  await runBackup(d, remote, { backupId, now });
+  for (const f of fs.readdirSync(knowledgePaths(d).notesDir)) fs.unlinkSync(path.join(knowledgePaths(d).notesDir, f));
+  const listed = await listBackups(remote);
+  const lastEntry = listed.backups[0].manifest.files.at(-1);
+  remote.files.delete(lastEntry.driveFileId); // the last file to be processed is the one that fails
+
+  const r = await applyRestore(d, remote, backupId, { now });
+  assert.equal(r.ok, false);
+  assert.equal(r.written, 2, 'the two files that verified fine were still restored');
+  assert.equal(r.failed.length, 1);
+  void ids;
 });
 
 console.log(`\ndrive-backup-test: ${pass} passed, ${fail} failed`);

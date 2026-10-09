@@ -40,6 +40,7 @@ import { WINDOW_MODES } from './permission-mode.mjs';
 import { createFeatures } from './features.mjs';
 import { jarvisStatus, jarvisUpdate, vscodeStatus, vscodeUpdate, claudeStatus, claudeUpdate, resolveToken, saveToken, clearToken, savedTokenPath, tokenCanSeeJarvis, readDelivery, newerDelivery, clearDelivery, DELIVERY_FILE, deleteAppCommand, launchUpdater, JARVIS_INSTALL_EXE } from './updates.mjs';
 import { resolveTelegramToken, telegramTokenField, migrateTelegramToken } from './phone-token.mjs';
+import { createDriveConnection } from './drive-connection.mjs';
 import { describeStoppedWork } from './active-work.mjs';
 import { closePanes } from './pane-windows.mjs';
 import { normalizeWorkspaces, addWorkspace, renameWorkspace, selectWorkspace, removeWorkspace, setWorkspaceTrust, setProjectSettings, projectSettings, workspacesForWindow, NO_WORKSPACE } from './workspaces.mjs';
@@ -195,6 +196,27 @@ let clickupLastError = null;
 // so a PC where Windows cannot encrypt right now (or ever) never loses phone alerts or
 // remote control over it.
 const TELEGRAM_TOKEN_FILE = path.join(userDir, 'telegram-token.bin');
+
+// Google Drive connection (Phase 24C) - two separate encrypted files (drive-token.mjs), the
+// same fail-closed safeStorage pattern as above, but with no plaintext fallback: a Drive
+// token is never kept anywhere JARVIS cannot encrypt. Connection management only - no
+// backup/restore IPC exists yet (see the handlers below).
+const DRIVE_CLIENT_FILE = path.join(userDir, 'drive-client.bin');
+const DRIVE_TOKEN_FILE = path.join(userDir, 'drive-token.bin');
+const driveConnection = createDriveConnection({
+  tokenFile: DRIVE_TOKEN_FILE,
+  clientFile: DRIVE_CLIENT_FILE,
+  safeStorage,
+  log,
+  openExternal: (url) => shell.openExternal(url),
+});
+/** Never the tokens themselves - only a status word and, for "configured", whether a Client
+ *  ID is set (never its value). The same discipline phoneConfigForWindow() applies. */
+function driveStatusForWindow() {
+  const s = driveConnection.status();
+  const c = driveConnection.getClient();
+  return { status: s.status, reason: s.reason || null, clientConfigured: !!c };
+}
 
 function phoneConfig() {
   const p = loadConfig().phone || {};
@@ -2746,6 +2768,31 @@ ipcMain.handle('jarvis:knowledgeSnapshotRestore', (_e, id, file, baseRevision) =
   const r = restoreSnapshot(userDir, id, file, { baseRevision: rev });
   if (r.ok) log('knowledge note restored from version history', id, file);
   return r;
+});
+
+// ---------------------------------------------------------------- IPC: Google Drive connection (Phase 24C)
+// Connection management ONLY - configure a Client ID, connect, disconnect, read status.
+// No backup or restore operation is reachable from here; driveConnection.getAccessToken is
+// for a future Drive-backed backup/restore IPC call this phase deliberately does not add.
+// Every reply is laundered through driveStatusForWindow() so a token can never reach the
+// renderer by accident, the same discipline phoneConfigForWindow() already applies to the
+// Telegram token.
+ipcMain.handle('jarvis:driveStatus', () => driveStatusForWindow());
+ipcMain.handle('jarvis:driveConfigureClient', (_e, clientId, clientSecret) => {
+  if (typeof clientId !== 'string' || !clientId.trim()) return { ok: false, error: 'A Client ID is required.' };
+  const r = driveConnection.configureClient({ clientId, clientSecret: typeof clientSecret === 'string' ? clientSecret : '' });
+  log('Drive Client ID configured:', r.ok);
+  return r;
+});
+ipcMain.handle('jarvis:driveConnect', async () => {
+  const r = await driveConnection.connect({ timeoutMs: 120000 });
+  log('Drive connect:', r.ok ? 'connected' : `failed (${r.error})`);
+  return { ok: r.ok, error: r.ok ? undefined : r.error, ...driveStatusForWindow() };
+});
+ipcMain.handle('jarvis:driveDisconnect', async () => {
+  await driveConnection.disconnect();
+  log('Drive disconnected');
+  return driveStatusForWindow();
 });
 
 // ---------------------------------------------------------------- IPC: files (read-only) + VS Code

@@ -469,6 +469,24 @@
             <aside class="files-side">
               <button class="btn btn-primary btn-block" id="kneNew"><i data-icon="plus"></i><span>New note</span></button>
               <button class="btn btn-block" id="kneImportOpen" type="button"><i data-icon="import"></i><span>Import from Notes</span></button>
+              <details class="drive-panel" id="driveConn">
+                <summary>
+                  <span class="dot" id="driveDot"></span>
+                  <span id="driveStatusWord">Google Drive</span>
+                </summary>
+                <div class="drive-body">
+                  <p class="muted small" id="driveReason"></p>
+                  <div class="drive-client-fields" id="driveClientFields" hidden>
+                    <input class="field slim" id="driveClientId" placeholder="OAuth Client ID" autocomplete="off" spellcheck="false" />
+                    <input class="field slim" id="driveClientSecret" type="password" placeholder="Client secret (optional for some client types)" autocomplete="off" spellcheck="false" />
+                    <button class="btn btn-block" id="driveSaveClient" type="button">Save Client ID</button>
+                  </div>
+                  <button class="btn btn-block" id="driveConfigureBtn" type="button">Configure OAuth Client ID</button>
+                  <button class="btn btn-primary btn-block" id="driveConnectBtn" type="button" hidden>Connect Google Drive</button>
+                  <button class="btn btn-block" id="driveReconnectBtn" type="button" hidden>Reconnect</button>
+                  <button class="btn btn-block" id="driveDisconnectBtn" type="button" hidden>Disconnect</button>
+                </div>
+              </details>
               <div class="kne-tabs" role="tablist" aria-label="Notes or Trash">
                 <button class="kne-tab on" id="kneTabNotes" type="button" role="tab" aria-selected="true">Notes</button>
                 <button class="kne-tab" id="kneTabTrash" type="button" role="tab" aria-selected="false">Trash <em class="count" id="kneTrashCount" hidden></em></button>

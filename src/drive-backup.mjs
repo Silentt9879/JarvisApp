@@ -289,20 +289,89 @@ async function findBackup(remote, backupId) {
   return { ok: true, manifest: v.manifest };
 }
 
+// ------------------------------------------------------------------ restore safety review (Phase 24C, Part 6)
+
+/**
+ * Download and hash-verify EVERY file a backup's manifest lists, without touching the local
+ * filesystem at all - the "is this backup actually fully intact and restorable" check a
+ * restore UI must run, and must refuse to offer Restore over, before applyRestore() ever
+ * writes a single local file. Complements applyRestore()'s own per-file verification (which
+ * happens immediately before each file's own write) with a whole-backup check a caller can
+ * run first, on its own, as many times as it likes - this makes no local change whatsoever.
+ */
+/** Shared by verifyBackupIntegrity() and applyRestore()'s own internal verification pass -
+ *  one file, downloaded and hash-checked against the manifest. Never writes anything. */
+async function downloadAndVerify(remote, entry) {
+  let bytes;
+  try { bytes = await remote.downloadFile(entry.driveFileId); }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  if (hashBytes(bytes) !== entry.sha256) return { ok: false, error: 'downloaded content does not match the backup\'s recorded hash' };
+  return { ok: true, bytes };
+}
+
+export async function verifyBackupIntegrity(remote, backupId) {
+  const found = await findBackup(remote, backupId);
+  if (!found.ok) return found;
+  const { manifest } = found;
+  const failed = [];
+  for (const entry of manifest.files) {
+    const r = await downloadAndVerify(remote, entry);
+    if (!r.ok) failed.push({ path: entry.path, error: r.error });
+  }
+  return { ok: failed.length === 0, backupId: manifest.backupId, total: manifest.files.length, verified: manifest.files.length - failed.length, failed };
+}
+
+/**
+ * A verbatim copy of whatever is about to be overwritten, for every kind - not only live notes
+ * (which already get a real Version History entry via snapshotBeforeOverwrite). A Trash or
+ * Version History file restore would replace has no "current version" slot of its own to
+ * checkpoint into, so this gives it the same guarantee a different way: the exact pre-restore
+ * bytes, under this one backup's own recovery folder, never touched by anything else JARVIS
+ * does. Written BEFORE any real restore write, same as the note checkpoint loop - if copying
+ * even one of them fails, the whole restore is refused before anything changes.
+ */
+function quarantineDir(root, backupId) { return path.join(root, 'restore-recovery', backupId); }
+
+function quarantineBeforeOverwrite(root, backupId, entry, { fsImpl }) {
+  const dir = quarantineDir(root, backupId);
+  const sub = path.join(dir, KIND_DIR[entry.kind]);
+  const filename = path.basename(entry.path);
+  const target = path.join(sub, filename);
+  if (!within(target, sub)) return { ok: false, error: 'not a usable recovery path' };
+  const source = path.join(root, entry.path);
+  let bytes;
+  try { bytes = fsImpl.readFileSync(source); } catch (e) { return { ok: false, error: `could not read the current file to protect it: ${e?.message || e}` }; }
+  try {
+    fsImpl.mkdirSync(sub, { recursive: true });
+    const tmp = `${target}.tmp`;
+    fsImpl.writeFileSync(tmp, bytes);
+    fsImpl.renameSync(tmp, target);
+  } catch (e) { return { ok: false, error: `could not save a recovery copy: ${e?.message || e}` }; }
+  return { ok: true };
+}
+
 // ------------------------------------------------------------------ restore (apply)
 
 /**
- * Apply a backup: for every file it would replace, a verified local recovery checkpoint
- * (`snapshotBeforeOverwrite` - the exact function an "Overwrite anyway" save already uses) is
- * made FIRST, for every one of them, before a single file is written - if checkpointing any
- * one of them fails, the whole restore is refused before anything changes. Every file is then
- * downloaded and its hash checked against the manifest before it is written, through the same
- * atomic temp-then-rename-then-verify pattern every write in knowledge.mjs already uses, so
- * the previous local file is never even momentarily gone - it is either still fully there, or
- * already fully replaced, never caught in between.
+ * Apply a backup: for every file it would replace, TWO recovery copies are made FIRST, before
+ * a single file is written - a real Version History entry for a live note
+ * (`snapshotBeforeOverwrite`, the exact function an "Overwrite anyway" save already uses), AND
+ * a verbatim quarantine copy for every kind including Trash and Version History entries
+ * themselves (`quarantineBeforeOverwrite` - Phase 24C's own safety review found these had no
+ * recovery path before). If protecting even one of them fails, the whole restore is refused
+ * before anything changes. Every file is then downloaded and its hash checked against the
+ * manifest before it is written, through the same atomic temp-then-rename-then-verify pattern
+ * every write in knowledge.mjs already uses, so the previous local file is never even
+ * momentarily gone - it is either still fully there, or already fully replaced, never caught
+ * in between.
+ *
+ * A caller that wants the WHOLE backup's integrity confirmed before touching anything locally
+ * (not just each file right before its own write) should call verifyBackupIntegrity() first -
+ * a restore UI must do this and refuse to offer Restore over a backup it reports as failing.
  *
  * Resumable: a file whose local content already matches the manifest (because a previous,
- * interrupted attempt already wrote it) is left alone, not re-downloaded or re-written.
+ * interrupted attempt already wrote it) is left alone, not re-downloaded, re-written, or
+ * re-quarantined - there is nothing further to protect it from on a retry.
  */
 export async function applyRestore(userDir, remote, backupId, { fsImpl = fs, now = () => Date.now() } = {}) {
   const found = await findBackup(remote, backupId);
@@ -310,28 +379,46 @@ export async function applyRestore(userDir, remote, backupId, { fsImpl = fs, now
   const { manifest } = found;
   const { root } = knowledgePaths(userDir);
 
-  const toCheckpoint = [];
+  // Phase 1 - verify EVERY file this run would actually need to restore, in full, before a
+  // single local file is touched (not just immediately before that one file's own write).
+  // This is the same check verifyBackupIntegrity() offers standalone, now enforced here
+  // unconditionally rather than left for a caller to remember to run first - a whole-backup
+  // guarantee, not only a per-file one. A file whose local copy already matches is left out
+  // of this pass entirely: nothing is at risk for it, so there is nothing to verify or write.
+  const unchanged = [];
+  const toRestore = [];
+  const replacing = new Set(); // paths of entries that overwrite an existing local file - the only ones needing a recovery copy
+  const failed = [];
+  const verifiedBytes = new Map(); // entry.path -> downloaded, hash-checked bytes
   for (const entry of manifest.files) {
     const state = localFileState(userDir, entry, { fsImpl });
-    if (state.exists && !state.matches && entry.kind === 'note') toCheckpoint.push(entry); // only live notes have Version History to checkpoint into; trash/snapshot entries being replaced have no "current version" worth protecting the same way
+    if (state.exists && state.matches) { unchanged.push(entry.path); continue; }
+    const v = await downloadAndVerify(remote, entry);
+    if (!v.ok) { failed.push({ path: entry.path, error: v.error }); continue; }
+    verifiedBytes.set(entry.path, v.bytes);
+    toRestore.push(entry);
+    if (state.exists) replacing.add(entry.path); // existed locally with different content - "added" (never existed) entries need no recovery copy
   }
+
+  // Phase 2 - recovery copies, only for entries actually replacing an existing local file - a
+  // file that failed verification is never written, so there is nothing to protect it from,
+  // and a brand-new "added" file has no prior local content worth protecting either.
+  const toCheckpoint = toRestore.filter((entry) => entry.kind === 'note' && replacing.has(entry.path)); // a real Version History entry, in addition to the quarantine copy below
+  const toQuarantine = toRestore.filter((entry) => replacing.has(entry.path)); // every kind, including notes - belt and suspenders
   for (const entry of toCheckpoint) {
     const id = path.basename(entry.path, '.md');
     const snap = snapshotBeforeOverwrite(userDir, id, { fsImpl, now });
     if (!snap.ok) return { ok: false, error: `The current version of "${id}" could not be safely checkpointed, so nothing was restored: ${snap.error}` };
   }
+  for (const entry of toQuarantine) {
+    const q = quarantineBeforeOverwrite(root, manifest.backupId, entry, { fsImpl });
+    if (!q.ok) return { ok: false, error: `"${entry.path}" could not be safely protected before restoring over it, so nothing was restored: ${q.error}` };
+  }
 
+  // Phase 3 - write, from the bytes Phase 1 already downloaded and verified (never re-fetched).
   const written = [];
-  const unchanged = [];
-  const failed = [];
-  for (const entry of manifest.files) {
-    const state = localFileState(userDir, entry, { fsImpl });
-    if (state.exists && state.matches) { unchanged.push(entry.path); continue; }
-    let bytes;
-    try { bytes = await remote.downloadFile(entry.driveFileId); }
-    catch (e) { failed.push({ path: entry.path, error: String(e?.message || e) }); continue; }
-    if (hashBytes(bytes) !== entry.sha256) { failed.push({ path: entry.path, error: 'downloaded content does not match the backup\'s recorded hash' }); continue; }
-
+  for (const entry of toRestore) {
+    const bytes = verifiedBytes.get(entry.path);
     const dir = path.join(root, KIND_DIR[entry.kind]);
     const target = path.join(root, entry.path);
     if (!within(target, dir)) { failed.push({ path: entry.path, error: 'not a usable restore path' }); continue; }
@@ -350,5 +437,5 @@ export async function applyRestore(userDir, remote, backupId, { fsImpl = fs, now
     written.push(entry.path);
   }
 
-  return { ok: failed.length === 0, backupId: manifest.backupId, total: manifest.files.length, written: written.length, unchanged: unchanged.length, failed, checkpointed: toCheckpoint.length };
+  return { ok: failed.length === 0, backupId: manifest.backupId, total: manifest.files.length, written: written.length, unchanged: unchanged.length, failed, checkpointed: toCheckpoint.length, quarantined: toQuarantine.length };
 }

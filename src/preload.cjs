@@ -242,6 +242,12 @@ contextBridge.exposeInMainWorld('jarvis', {
   knowledgeSnapshots: (id) => ipcRenderer.invoke('jarvis:knowledgeSnapshots', id),
   knowledgeSnapshotRead: (id, file) => ipcRenderer.invoke('jarvis:knowledgeSnapshotRead', id, file),
   knowledgeSnapshotRestore: (id, file, baseRevision) => ipcRenderer.invoke('jarvis:knowledgeSnapshotRestore', id, file, baseRevision),
+  // Google Drive connection (Phase 24C): status/configure/connect/disconnect only - never a
+  // token, never a backup or restore call (neither exists yet).
+  driveStatus: () => ipcRenderer.invoke('jarvis:driveStatus'),
+  driveConfigureClient: (clientId, clientSecret) => ipcRenderer.invoke('jarvis:driveConfigureClient', clientId, clientSecret),
+  driveConnect: () => ipcRenderer.invoke('jarvis:driveConnect'),
+  driveDisconnect: () => ipcRenderer.invoke('jarvis:driveDisconnect'),
   // ASP.NET sites and APIs: dotnet watch run, shown in the window.
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),

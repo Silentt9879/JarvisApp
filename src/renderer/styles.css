@@ -1091,6 +1091,15 @@ dl.kv dd { margin: 0; word-break: break-word; font-size: 12.5px; }
 .mcp-row.st-pending .dot { background: var(--accent); animation: pulse 1.2s infinite; }
 .mcp-row.st-failed .dot, .mcp-row.st-needs-auth .dot { background: var(--err); }
 .mcp-row .tagcloud { margin: 10px 0 4px; }
+
+.drive-panel { border: 1px solid var(--line); border-radius: var(--r); padding: 8px 11px; margin-bottom: 10px; background: var(--surface-2); }
+.drive-panel summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; font-size: 12.5px; }
+.drive-panel summary::-webkit-details-marker { display: none; }
+.drive-panel .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 7px; }
+.drive-panel .dot.st-connected { background: var(--ok); }
+.drive-panel .dot.st-expired, .drive-panel .dot.st-error { background: var(--err); }
+.drive-panel .drive-body { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.drive-panel .drive-client-fields { display: flex; flex-direction: column; gap: 6px; }
 .mcp-err { color: var(--err); font-size: 12px; margin: 6px 0; }
 body.still .mcp-row.st-pending .dot { animation: none; }
 

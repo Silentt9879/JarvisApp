@@ -623,4 +623,130 @@ five-method contract this phase already finalized and tested against - no change
    Google account, only after 1–3 are independently green - the first and only point in this
    whole feature where a real Google account should be involved at all.
 
+## 14. Phase 24C — OAuth, the real provider, and connection management
+
+Built, per the plan above: items 1 and 2 are done and tested; item 3 is **partially** done
+(connection management only - Connect/Disconnect/status, never Back Up Now/Restore, which
+stay unexposed until a later phase); item 4 (a real account) was not done in this phase,
+deliberately - every test below runs against a fake token endpoint and a fake in-memory Drive,
+never `accounts.google.com` or `googleapis.com`.
+
+### 14.1 OAuth (`src/google-oauth.mjs`)
+
+Reverified against Google's own current documentation, not assumed: the out-of-band
+("copy this code") flow is retired; loopback (`http://127.0.0.1:<port>`) is the only supported
+desktop redirect; PKCE (S256) is fully supported end to end; a Testing-mode OAuth consent
+screen issues a 7-day refresh token unless the only scopes requested are name/email/profile
+(§2, §4.4 already covered this; unchanged). Authorization endpoint
+`https://accounts.google.com/o/oauth2/v2/auth`, token endpoint
+`https://oauth2.googleapis.com/token`, revoke endpoint `https://oauth2.googleapis.com/revoke`,
+scope `drive.file` only (§5.1's minimum, unchanged).
+
+Flow: `generatePkce()` (32-byte random verifier, S256 challenge) + `generateState()` (24-byte
+random) → `startLoopbackListener()` opens a one-shot local HTTP server on a random port, with a
+2-minute default timeout and guaranteed `close()` cleanup → `buildAuthUrl()` → the caller opens
+that URL in the **system** browser (`shell.openExternal`, never an embedded one, per §4.2) →
+the listener's `waitForCallback()` resolves once, with whichever came first: a real callback, a
+timeout, or an explicit cancel → the returned `state` is compared byte-for-byte against the one
+this run generated **before** anything is exchanged - a mismatch is refused outright, proven by
+a dedicated test (`drive-connection-test.mjs`) that confirms `exchangeCode` is never even
+called when it doesn't match.
+
+### 14.2 Token security (`src/drive-token.mjs`, `src/drive-connection.mjs`)
+
+Reuses `updates.mjs`'s `saveToken`/`loadToken`/`clearToken` verbatim - the same encrypted-file
+primitive the GitHub token and the Telegram bot token already use - rather than inventing a
+second one. Unlike the Telegram token, there is **no plaintext fallback**: `saveToken()`
+already throws if `safeStorage.isEncryptionAvailable()` is false, and neither
+`saveDriveClient()` nor `saveDriveTokens()` catches that and writes anywhere in the clear -
+proven directly (`drive-token-test.mjs`: "FAILS CLOSED" cases, asserting the file was never
+created at all). Two separate encrypted files (Client ID/secret vs. the actual tokens), so
+replacing one never touches the other. `drive-connection.mjs`'s `getAccessToken()` refreshes
+transparently inside a 60-second skew window before expiry, and classifies a refresh failure as
+`revoked` (Google's `invalid_grant`) vs. an ordinary `error` (network/5xx) - distinctly,
+so the UI can say "reconnect" rather than "try again" when that's actually what's needed.
+Disconnect revokes at Google's end on a best-effort basis but **always** clears the local
+token regardless of whether the revoke call itself succeeds - a network failure during
+disconnect must never leave a token this app still believes is usable.
+
+Never logged: the authorization code, any token, or the full callback URL - checked directly
+by a test that scans every `log()` call in both new files for those terms.
+
+### 14.3 The real provider (`src/google-drive-provider.mjs`)
+
+Implements Phase 24B's five-method contract exactly - `drive-backup.mjs` was not changed to
+accommodate it. Every call goes through one `call()` helper: a bounded timeout (30s default),
+one retry on 401 (in case the access token was due for a refresh `getAccessToken()` hadn't
+yet noticed) before classifying a persistent 401 as `DriveAuthError`, and bounded exponential
+backoff with jitter (default 4 retries) on a 429/`rateLimitExceeded`/`userRateLimitExceeded`
+403 or a 5xx - classified as `DriveNetworkError`. An ordinary 4xx (not found, bad request) is
+never retried - that's the caller's own mistake, not a flake. Uploads use Drive's multipart
+endpoint (every file here is a small Markdown note or a JSON manifest - never large enough to
+need the separate resumable-upload protocol, per §13.1's own reasoning). **Compatibility is
+proven directly, not by inspection**: `google-drive-provider-test.mjs` runs an actual
+`runBackup` → `previewRestore` → `applyRestore` sequence through this real provider (backed by
+a small in-memory fake of the Drive v3 REST API, not `FakeDriveProvider`) and confirms it
+behaves identically.
+
+### 14.4 Connection UI (Knowledge Notes)
+
+A collapsible panel, status-only: Disconnected / Connecting / Connected / Authentication
+expired / Connection error, each with a plain-language reason where one applies. "Configure
+OAuth Client ID" reveals Client ID/secret fields (the secret field is cleared from the DOM
+immediately after saving); Connect/Reconnect/Disconnect appear only when each is actually a
+valid next action for the current status. No token is ever displayed, and none could be - the
+IPC layer's replies never carry one (§14.5).
+
+### 14.5 IPC surface - connection management only
+
+Four calls: `jarvis:driveStatus`, `jarvis:driveConfigureClient`, `jarvis:driveConnect`,
+`jarvis:driveDisconnect`. Deliberately **no** `jarvis:driveBackup`/`driveRestore` yet - this
+phase is authentication and connection reliability only, per its own objective. Every reply is
+laundered through `driveStatusForWindow()`, the same discipline `phoneConfigForWindow()`
+already applies to the Telegram token - proven by a dedicated test that scans each handler's
+own source for `accessToken`/`refreshToken`/`clientSecret` and asserts none appear. No
+automatic OAuth on startup, no timer, no auto-reconnect anywhere in `drive-connection.mjs` -
+every network/browser action happens only inside a call a caller makes explicitly, by name.
+
+### 14.6 Restore safety review (Part 6) - findings and fixes
+
+Reviewing §13.5's own residual-risk notes against this phase's explicit checklist:
+
+1. **Full-manifest integrity verification before the first local modification** - the first
+   version of this fix added a new, read-only `verifyBackupIntegrity(remote, backupId)` but
+   left it as a separate function a future restore UI would have to remember to call first;
+   final review caught that `applyRestore()` itself still did not enforce it. **Fixed
+   properly**: `applyRestore()` now runs its own internal Phase 1 that downloads and
+   hash-verifies every file it would actually need to restore, in full, before Phase 2
+   (recovery copies) or Phase 3 (writes) ever starts - proven directly by a test that
+   instruments both `downloadFile` and the local write call and asserts every download
+   completes before the first write begins. `verifyBackupIntegrity()` still exists as a
+   standalone, side-effect-free check a restore UI can run on its own (e.g. to grey out a
+   corrupt backup in a list before the person even picks "Restore") - it now shares its
+   download-and-hash-check logic with `applyRestore()`'s own Phase 1 (`downloadAndVerify()`)
+   rather than being a second, divergent implementation of the same check.
+2. **Recovery checkpoints for every local file category that can be overwritten, including
+   Trash and Version History** - §13.5 had flagged this as a deliberate scope gap: only live
+   notes got a real checkpoint (`snapshotBeforeOverwrite`), so restoring over an existing,
+   locally-changed Trash or Version-History file had no recovery path at all. **Fixed**:
+   `quarantineBeforeOverwrite` now makes a verbatim copy of whatever any kind of file is about
+   to be overwritten (under `knowledge/restore-recovery/<backupId>/<kind>/<name>`), run for
+   every kind in the same before-any-write pass as the existing note checkpoint - if protecting
+   even one file fails, the whole restore is refused before anything changes, same as the
+   existing checkpoint-failure behavior. Proven directly for both Trash and Version-History
+   entries (`drive-backup-test.mjs`).
+3. **Safe handling of interrupted multi-file restores** - already correct in Phase 24B
+   (atomic per-file writes, resumable retries) and unaffected by the two fixes above, since
+   `verifyBackupIntegrity` makes no local writes at all and quarantine copies are themselves
+   written atomically (temp-then-rename) and are naturally idempotent on a retry (an
+   already-quarantined file whose local content hasn't changed is simply quarantined again
+   with the same bytes).
+4. **Clear rollback and retry behavior** - this phase did not add a transactional "undo the
+   whole restore" rollback, and recommends against building one: it would contradict the
+   deliberate, tested, per-file-resumable design §13.1 and §13.5 already established (a partial
+   restore's progress is meant to be kept and finished by a retry, not discarded). "Rollback"
+   in the sense that matters - refusing to make *any* change when the operation can't be made
+   safely - already existed for note checkpoints and now applies uniformly to every kind via
+   quarantine.
+
 Stopping here, as asked — no OAuth request, no dependency, no commit.

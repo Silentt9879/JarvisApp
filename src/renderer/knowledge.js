@@ -617,6 +617,47 @@
   // closed immediately, the same as reopening an in-progress note would.
   renderEditor();
 
-  JV.on('view', (v) => { if (v === 'kne') { load(); setTimeout(() => (current ? bodyEl() : titleEl()).focus(), 30); } });
+  // -------------------------------------------------------------- Google Drive connection (Phase 24C)
+  // Connection management only - there is no Back Up Now or Restore button here; neither
+  // operation is wired up yet (main.mjs exposes no jarvis:driveBackup/driveRestore call).
+  async function renderDriveStatus() {
+    let r;
+    try { r = await window.jarvis.driveStatus(); } catch { r = { status: 'error', reason: 'Could not reach JARVIS.' }; }
+    const word = { disconnected: 'Not connected', connected: 'Connected', expired: 'Authentication expired', error: 'Connection error' }[r.status] || 'Not connected';
+    $('driveStatusWord').textContent = `Google Drive: ${word}`;
+    $('driveDot').className = `dot st-${r.status}`;
+    $('driveReason').textContent = r.reason || '';
+    $('driveClientFields').hidden = true;
+    $('driveConfigureBtn').hidden = !!r.clientConfigured;
+    $('driveConnectBtn').hidden = !(r.clientConfigured && r.status === 'disconnected');
+    $('driveReconnectBtn').hidden = !(r.clientConfigured && (r.status === 'expired' || r.status === 'error'));
+    $('driveDisconnectBtn').hidden = !(r.status === 'connected' || r.status === 'expired');
+  }
+  $('driveConfigureBtn').onclick = () => { $('driveClientFields').hidden = false; $('driveClientId').focus(); };
+  $('driveSaveClient').onclick = async () => {
+    const clientId = $('driveClientId').value.trim();
+    const clientSecret = $('driveClientSecret').value;
+    if (!clientId) return;
+    const r = await window.jarvis.driveConfigureClient(clientId, clientSecret);
+    $('driveClientSecret').value = ''; // never left sitting in the DOM longer than needed
+    if (!r.ok) { JV.notify(r.error || 'Could not save that Client ID.', { level: 'err' }); return; }
+    await renderDriveStatus();
+  };
+  async function doConnect() {
+    $('driveConnectBtn').disabled = true; $('driveReconnectBtn').disabled = true;
+    $('driveStatusWord').textContent = 'Google Drive: Connecting…';
+    try {
+      const r = await window.jarvis.driveConnect();
+      if (!r.ok) JV.notify(r.error || 'Could not connect to Google Drive.', { level: 'err' });
+    } finally {
+      $('driveConnectBtn').disabled = false; $('driveReconnectBtn').disabled = false;
+      await renderDriveStatus();
+    }
+  }
+  $('driveConnectBtn').onclick = doConnect;
+  $('driveReconnectBtn').onclick = doConnect;
+  $('driveDisconnectBtn').onclick = async () => { await window.jarvis.driveDisconnect(); await renderDriveStatus(); };
+
+  JV.on('view', (v) => { if (v === 'kne') { load(); renderDriveStatus(); setTimeout(() => (current ? bodyEl() : titleEl()).focus(), 30); } });
   load();
 })();
