@@ -2484,6 +2484,71 @@ body.still .cbar .agents-pill.live .ap-dot { animation: none; }
 #view-notes .file-head { gap: 10px; }
 #view-notes .files-side { gap: 8px; }
 
+/* ------------------------------------------------------------------ Knowledge (Phase 23C)
+   Markdown notes with a title, tags and a favorite flag - a second, separate store from
+   Notes above, reusing its two-pane layout and message-bar styling. */
+#view-kne .file-head { gap: 10px; }
+#view-kne .files-side { gap: 8px; }
+.kne-fav { margin-left: 0; flex: 0 0 auto; }
+.kne-fav.on { color: var(--warn); }
+.kne-fav-mark { width: 11px; height: 11px; margin-right: 4px; color: var(--warn); vertical-align: -1px; }
+.kne-title {
+  display: block; width: 100%; border: 0; outline: none; background: none; padding: 0;
+  font-size: 13.5px; font-weight: 600; color: var(--text); font-family: inherit;
+}
+.kne-title::placeholder { color: var(--muted); font-weight: 400; }
+.kne-tags-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.kne-tags-row > .ic { width: 14px; height: 14px; flex: 0 0 auto; color: var(--muted); }
+.kne-tags-row input { flex: 1; }
+#view-kne .note-row small span:not(.draft) { padding: 1px 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font: 10px var(--mono); }
+.kne-body { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-height: 0; }
+.kne-body.kne-split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.kne-preview { display: none; min-height: 0; overflow-y: auto; padding: 14px 18px; border-left: 1px solid var(--line); font-size: 13px; line-height: 1.6; }
+.kne-body.kne-split .kne-preview { display: block; }
+.kne-body.kne-split .kne-edit { border-right: 0; }
+#knePreviewToggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-line, var(--line-2)); }
+@media (max-width: 900px) {
+  .kne-body.kne-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr 1fr; }
+  .kne-body.kne-split .kne-preview { border-left: 0; border-top: 1px solid var(--line); }
+}
+
+/* ------------------------------------------------------------------ Knowledge Notes (Phase 23D)
+   Import from Notes (a preview, then an explicit confirm) and Trash (a tab, not a separate
+   page - restoring is just another thing this same list and editor do). */
+.kne-tabs { display: flex; gap: 4px; padding: 2px; border-radius: var(--r); background: var(--surface-2); }
+.kne-tab { flex: 1; padding: 5px 0; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-2); font-size: 12px; font-weight: 500; cursor: pointer; }
+.kne-tab:hover { color: var(--text); }
+.kne-tab.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.kne-tab .count { margin-left: 4px; }
+#kneRestore .ic, #kneDelete .ic { width: 14px; height: 14px; }
+.kne-import-stats { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.kne-import-stats li { display: flex; justify-content: space-between; gap: 12px; }
+.kne-import-stats b { font: 600 13px var(--mono); }
+.kne-import-stats li.bad b { color: var(--err); }
+.kne-import-dest { margin: 0; font-size: 11.5px; color: var(--muted); font-family: var(--mono); overflow-wrap: anywhere; }
+
+/* Version History (Phase 23E): a list of earlier overwritten versions, and a side-by-side
+   compare before restoring one. */
+.kne-history-modal { width: 920px; }
+#kneHistoryTitle .muted { font-size: 11.5px; font-weight: 400; margin-left: 8px; }
+.kne-history-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; height: 58vh; }
+.kne-history-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; border-right: 1px solid var(--line); }
+.kne-history-list li { list-style: none; }
+.kne-history-row { display: block; width: 100%; text-align: left; padding: 7px 10px 7px 0; border: 0; border-radius: var(--r-sm); background: none; cursor: pointer; color: var(--text-2); }
+.kne-history-row:hover { background: var(--hover); }
+.kne-history-row.on { background: var(--surface-3); color: var(--text); }
+.kne-history-row b { display: block; font-size: 12px; font-weight: 600; }
+.kne-history-row small { display: block; margin-top: 2px; font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+.kne-history-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
+.kne-history-pane { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); overflow: hidden; }
+.kne-history-pane h4 { margin: 0; padding: 8px 12px; font-size: 11.5px; font-weight: 600; color: var(--text-2); border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.kne-history-text { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; font: 12px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+@media (max-width: 760px) {
+  .kne-history-body { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .kne-history-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 160px; }
+  .kne-history-compare { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ------------------------------------------------------------------ Dart analysis (Devices)
    What is wrong with an app, grouped by file. Errors read first; hints stay quiet. */
 .dev-section.problems { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }

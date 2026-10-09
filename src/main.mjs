@@ -19,6 +19,12 @@ import { readDraft, readClickUp, syncClickUp, cleanMember } from './tasks.mjs';
 import { createGitHub } from './github.mjs';
 import { listFiles, readWorkspaceFile, openInVsCode, hasVsCode, inside as insideDir, OPENABLE, reallyInside } from './files.mjs';
 import { NoteStore, sendNote, telegramReady } from './notes.mjs';
+import {
+  newId as newKnowledgeId, knowledgePaths, listKnowledgeNotes, migrationComplete as knowledgeMigrationComplete,
+  validateNoteInput, saveKnowledgeNote, noteRevision, previewMigration, migrateFromLegacy,
+  listTrash, deleteKnowledgeNote, restoreKnowledgeNote,
+  listSnapshots, readSnapshot, restoreSnapshot,
+} from './knowledge.mjs';
 import { authStatus, authLogout, startLogin } from './auth.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
 import os from 'node:os';
@@ -2625,6 +2631,122 @@ ipcMain.handle('jarvis:noteSave', async (_e, note, opts) => {
   return { ok: true, note: { ...r.note, sentAt: sent.ok ? Date.now() : r.note.sentAt }, sent, telegram: telegramStatus() };
 });
 ipcMain.handle('jarvis:noteDelete', (_e, id) => notes.remove(typeof id === 'string' ? id : ''));
+
+// ---------------------------------------------------------------- IPC: Knowledge (Phase 23C)
+// A second, separate note store (src/knowledge.mjs) - one Markdown file per note, with YAML
+// front matter, under <userData>/knowledge/notes. Deliberately kept apart from notes.json
+// above: nothing here reads, writes, renames or deletes it, and nothing migrates it on its
+// own - knowledgeStorageStatus() only ever reports numbers, never acts on them. Every save
+// goes through saveKnowledgeNote's optimistic-concurrency check, so a second window (or a
+// second save that lands first) is never silently overwritten.
+function knowledgeStorageStatus() {
+  const { notesDir } = knowledgePaths(userDir);
+  let legacyNoteCount = 0;
+  try { legacyNoteCount = notes.list().length; } catch { /* unreadable legacy file: reported as 0, never thrown */ }
+  return { storageDir: notesDir, migrationComplete: knowledgeMigrationComplete(userDir), legacyNoteCount };
+}
+ipcMain.handle('jarvis:knowledgeStatus', () => knowledgeStorageStatus());
+ipcMain.handle('jarvis:knowledgeList', () => {
+  const r = listKnowledgeNotes(userDir);
+  if (!r.ok) return { ok: false, error: r.error, notes: [], status: knowledgeStorageStatus() };
+  return {
+    ok: true,
+    status: knowledgeStorageStatus(),
+    notes: r.notes.map((n) => ({
+      id: n.id, title: n.title, created: n.created, updated: n.updated, tags: n.tags,
+      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, corrupt: n.corrupt,
+    })),
+  };
+});
+ipcMain.handle('jarvis:knowledgeRead', (_e, id) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
+  const r = listKnowledgeNotes(userDir);
+  const n = r.ok && r.notes.find((x) => x.id === id);
+  if (!n) return { ok: false, error: 'That note could not be found.' };
+  return {
+    ok: true,
+    note: {
+      id: n.id, title: n.title, created: n.created, updated: n.updated, tags: n.tags,
+      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, body: n.body,
+    },
+    revision: noteRevision(userDir, id),
+  };
+});
+ipcMain.handle('jarvis:knowledgeSave', (_e, input) => {
+  const v = validateNoteInput(input);
+  if (!v.ok) return { ok: false, error: v.error };
+  const id = typeof input?.id === 'string' && input.id ? input.id : newKnowledgeId();
+  const baseRevision = typeof input?.baseRevision === 'string' ? input.baseRevision : null;
+  const force = input?.force === true;
+  const r = saveKnowledgeNote(userDir, id, v.value, { baseRevision, force });
+  if (!r.ok) return r;
+  if (r.overwrote) log('knowledge note overwrite confirmed', id, '- prior revision backed up as', r.overwrote.snapshot || '(nothing to back up)');
+  log('knowledge note saved', id);
+  return { ok: true, note: r.note, revision: r.revision, unchanged: r.unchanged, overwrote: r.overwrote };
+});
+
+// ---------------------------------------------------------------- Phase 23D: Import, Trash, restore
+// Import only ever reads notes.json and adds to Knowledge - migrateFromLegacy (Phase 23B,
+// unchanged here) never deletes, renames or writes to notes.json, and never overwrites a
+// Knowledge note that already differs from what a fresh import would produce (an edit made
+// there since the last import counts as a conflict, not something to silently replace).
+ipcMain.handle('jarvis:knowledgeImportPreview', () => previewMigration(userDir));
+ipcMain.handle('jarvis:knowledgeImport', () => {
+  const r = migrateFromLegacy(userDir);
+  log('knowledge import from Notes', `migrated ${r.migrated}, skipped ${r.skipped}, conflicts ${r.conflicts.length}, errors ${r.errors.length}`);
+  return r;
+});
+
+// Delete moves a note to Trash - it is never gone for good from here, and a stale editor (one
+// that opened the note before someone else's newer edit) cannot delete that newer version out
+// from under them, the same revision check a save already uses.
+ipcMain.handle('jarvis:knowledgeTrash', () => {
+  const r = listTrash(userDir);
+  if (!r.ok) return { ok: false, error: r.error, notes: [] };
+  return {
+    ok: true,
+    notes: r.notes.map((n) => ({ id: n.id, title: n.title, created: n.created, updated: n.updated, tags: n.tags, favorite: n.favorite, deletedAt: n.deletedAt, corrupt: n.corrupt })),
+  };
+});
+ipcMain.handle('jarvis:knowledgeTrashRead', (_e, id) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
+  const r = listTrash(userDir);
+  const n = r.ok && r.notes.find((x) => x.id === id);
+  if (!n) return { ok: false, error: 'That note could not be found in Trash.' };
+  return { ok: true, note: { id: n.id, title: n.title, created: n.created, updated: n.updated, tags: n.tags, favorite: n.favorite, deletedAt: n.deletedAt, body: n.body } };
+});
+ipcMain.handle('jarvis:knowledgeDelete', (_e, id, baseRevision) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
+  const rev = typeof baseRevision === 'string' ? baseRevision : null;
+  const r = deleteKnowledgeNote(userDir, id, { baseRevision: rev });
+  if (r.ok) log('knowledge note moved to Trash', id);
+  return r;
+});
+ipcMain.handle('jarvis:knowledgeRestore', (_e, id) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
+  const r = restoreKnowledgeNote(userDir, id);
+  if (r.ok) log('knowledge note restored from Trash', id);
+  return r;
+});
+
+// Phase 23E: version history - every id and file reference is checked server-side before it
+// ever reaches knowledge.mjs (which checks it again, properly, with path containment); the
+// window only ever gets back a note's own snapshots, never a directory listing of anything else.
+ipcMain.handle('jarvis:knowledgeSnapshots', (_e, id) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.', snapshots: [] };
+  return listSnapshots(userDir, id);
+});
+ipcMain.handle('jarvis:knowledgeSnapshotRead', (_e, id, file) => {
+  if (typeof id !== 'string' || !id || typeof file !== 'string' || !file) return { ok: false, error: 'No version reference was given.' };
+  return readSnapshot(userDir, id, file);
+});
+ipcMain.handle('jarvis:knowledgeSnapshotRestore', (_e, id, file, baseRevision) => {
+  if (typeof id !== 'string' || !id || typeof file !== 'string' || !file) return { ok: false, error: 'No version reference was given.' };
+  const rev = typeof baseRevision === 'string' ? baseRevision : null;
+  const r = restoreSnapshot(userDir, id, file, { baseRevision: rev });
+  if (r.ok) log('knowledge note restored from version history', id, file);
+  return r;
+});
 
 // ---------------------------------------------------------------- IPC: files (read-only) + VS Code
 let fileIndex = null;

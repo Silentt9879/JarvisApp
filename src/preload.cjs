@@ -227,6 +227,21 @@ contextBridge.exposeInMainWorld('jarvis', {
   notes: () => ipcRenderer.invoke('jarvis:notes'),
   noteSave: (note, opts) => ipcRenderer.invoke('jarvis:noteSave', note, opts),
   noteDelete: (id) => ipcRenderer.invoke('jarvis:noteDelete', id),
+  // Knowledge: a second, separate note store - Markdown with front matter, one file per
+  // note. Kept apart from Notes above; nothing here touches notes.json.
+  knowledgeStatus: () => ipcRenderer.invoke('jarvis:knowledgeStatus'),
+  knowledgeList: () => ipcRenderer.invoke('jarvis:knowledgeList'),
+  knowledgeRead: (id) => ipcRenderer.invoke('jarvis:knowledgeRead', id),
+  knowledgeSave: (input) => ipcRenderer.invoke('jarvis:knowledgeSave', input),
+  knowledgeImportPreview: () => ipcRenderer.invoke('jarvis:knowledgeImportPreview'),
+  knowledgeImport: () => ipcRenderer.invoke('jarvis:knowledgeImport'),
+  knowledgeTrash: () => ipcRenderer.invoke('jarvis:knowledgeTrash'),
+  knowledgeTrashRead: (id) => ipcRenderer.invoke('jarvis:knowledgeTrashRead', id),
+  knowledgeDelete: (id, baseRevision) => ipcRenderer.invoke('jarvis:knowledgeDelete', id, baseRevision),
+  knowledgeRestore: (id) => ipcRenderer.invoke('jarvis:knowledgeRestore', id),
+  knowledgeSnapshots: (id) => ipcRenderer.invoke('jarvis:knowledgeSnapshots', id),
+  knowledgeSnapshotRead: (id, file) => ipcRenderer.invoke('jarvis:knowledgeSnapshotRead', id, file),
+  knowledgeSnapshotRestore: (id, file, baseRevision) => ipcRenderer.invoke('jarvis:knowledgeSnapshotRestore', id, file, baseRevision),
   // ASP.NET sites and APIs: dotnet watch run, shown in the window.
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),
