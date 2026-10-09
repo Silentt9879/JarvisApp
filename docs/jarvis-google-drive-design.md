@@ -832,3 +832,89 @@ preview is even shown.
 All testing used `FakeDriveProvider`/synthetic credentials - no real Google account, no real
 network call. Retry/backoff behavior under messier real-world failure patterns remains
 untested, same caveat Phase 24B and 24C already carried forward.
+
+## 16. Phase 24E — real Windows validation and Version History improvement
+
+### 16.1 What this section is, and isn't
+
+Sections 1-15 above describe behavior proven by this repo's automated test suite - every
+assertion in it runs against `FakeDriveProvider` or a real-but-local filesystem, never a real
+Google account. This section instead records a real, human-observed test against a real Google
+account and the real Google Drive API, run once by the project owner on their own Windows
+desktop, with a disposable OAuth client, a disposable Windows user-data profile, and
+disposable Knowledge Notes created only for this test. **These are observed results reported
+by the person who ran the test, not something this agent watched directly or re-derived from
+logs** - this agent cannot host or observe a GUI process in its own environment (confirmed
+repeatedly across this project's history). Nothing below should be read as a claim that
+additional live tests beyond what is listed here were performed.
+
+### 16.2 Live test environment
+
+- Date: 2026-10-10.
+- Disposable Windows profile (`JARVIS_USERDATA`): `%TEMP%\jarvis-drive-live-24e2`.
+- Isolated packaged build directory: `dist-24e2` (built via `electron-builder --win --dir`,
+  never the installed production JARVIS, never production `%APPDATA%\JARVIS`).
+- A dedicated Google Cloud project and OAuth 2.0 Client ID of type "Desktop app", consent
+  screen in Testing mode, `drive.file` scope only, with the test Google account added under
+  "Test users" - no scope beyond `drive.file` was requested or granted.
+
+### 16.3 Observed results (human-reported, not automated)
+
+- Google OAuth sign-in completed through the real system browser against the real Google
+  account, through the packaged `JARVIS.exe`; the Drive panel updated to "Connected."
+- A manual "Back Up Now" produced a complete backup containing six files, later listed as a
+  complete entry in Backup History.
+- A restore preview, run against that backup after locally editing one of the test notes,
+  correctly identified one note as modified (to be replaced) and two notes as identical
+  (unchanged) - matching this phase's "added/unchanged/replaced" preview design (§6, §15.4).
+  The modified note was `DRIVE_TEST_NOTE_B`.
+- Confirming the restore recovered `DRIVE_TEST_NOTE_B`'s original backed-up content.
+- A separate test note moved to Trash before the backup (`DRIVE_TEST_TRASH`) was still present
+  in Trash after the restore, untouched - consistent with Trash being included in the backup
+  allowlist (§15, `KIND_DIR`) and restore only ever adding/replacing files a backup's manifest
+  names, never deleting anything locally that isn't in it.
+- A note used to exercise Version History (`DRIVE_TEST_VERSION_HISTORY`) kept its earlier
+  "Version 2" snapshot accessible through Version History after the restore.
+- Separately, in a fix landed between the live Drive test and this review (commit `f168e1a`,
+  "Preserve version history on ordinary meaningful Knowledge Note saves"), the project owner
+  observed that saving `DRIVE_TEST_VERSION_HISTORY` a second time with meaningfully different
+  content did not add a new recoverable version - this was confirmed to be the pre-fix
+  behavior described in §16.5 below (Version History only captured conflict-overwrites and
+  restores, not ordinary saves), not a defect in the Drive feature itself, and is now fixed and
+  covered by automated regression tests (`knowledge-history-test.mjs`).
+
+### 16.4 Untested scenarios and limitations (as of this review)
+
+- Multi-hundred/thousand-note backups, very large individual notes, and sustained real-network
+  retry/backoff under packet loss or rate limiting were not exercised live - only the
+  automated suite's synthetic failure injection covers those paths.
+- OAuth token refresh across a long-lived connection (hours/days later) and the "Testing"
+  publishing status's 7-day refresh-token expiry (Google's own general policy for an
+  unverified OAuth consent screen) were not observed live in this short test session.
+- Backup History and Version History storage growth over many backups/edits was not observed
+  over a long real-world timeframe - only reasoned about structurally (see §16.6 and the
+  Version History improvement's own report).
+- A real interrupted-mid-upload backup (e.g. killing the app mid-run) was not reproduced live;
+  this path is covered only by the automated suite's simulated I/O failures.
+
+### 16.5 Version History on ordinary saves (summary; full detail in the commit itself)
+
+Before commit `f168e1a`, `saveKnowledgeNote()` only took a Version History snapshot when a
+save explicitly force-overwrote a stale (conflicting) revision, or when restoring an older
+version - an ordinary, non-conflicting edit that meaningfully changed a note silently replaced
+the old content with nothing to recover it from. This is the gap the live test surfaced. The
+fix snapshots the version being replaced whenever a save meaningfully changes an existing
+note's title, body, tags, favorite, or folder (timestamp-only and cosmetic/line-ending-only
+differences do not count), reusing the existing snapshot mechanism and on-disk file format
+unchanged, with a same-millisecond filename-collision guard added since snapshots are now
+far more frequent than before. See the commit message and `knowledge-history-test.mjs` for
+the complete regression coverage.
+
+### 16.6 Storage growth (flagged, not addressed this phase)
+
+Version History currently never prunes - every meaningfully different save, and every real
+Drive backup after it, keeps every prior version indefinitely. For a note edited often over a
+long period this means unbounded growth in `knowledge/overwritten/` and in the size of every
+subsequent Drive backup that includes it. No retention policy has been implemented; one should
+be designed and separately approved before this becomes a problem in practice (see Phase 24E-3
+release-readiness assessment).
