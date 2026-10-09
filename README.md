@@ -17,7 +17,20 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.3.0
+## 🆕 What's new in v2.3.1
+
+**Simplified**
+
+- 📐 **Less scrolling on the Devices page.** Dart analysis and .NET build diagnostics now collapse behind their own header - each used to stay fully open even when empty, pushing everything below off screen. Click a header to open one; it remembers your choice, and still opens and scrolls into view by itself the moment a run or build actually fails.
+
+**Technical**
+
+- `src/renderer/index.html`: both panels' body (toolbar, banners, list) now sits in a `.pb-body` wrapper under a clickable `.pb-head`, collapsed by default via a `collapsed` class on the section.
+- `src/renderer/problems.js`, `src/renderer/dotnet-problems.js`: an `open`/`setOpen()` toggle per panel, persisted to `localStorage` (`jarvis.problemsOpen`, `jarvis.dotnetProblemsOpen`), forced open on the existing failed-run/failed-build auto-trigger.
+- Styling only, no new behaviour beyond the toggle itself: the panel's own trust-gating, discovery and build/analyse logic are unchanged.
+
+<details>
+<summary><b>Earlier: v2.3.0</b></summary>
 
 **Simplified**
 
@@ -29,6 +42,8 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 - `src/project-providers.mjs`: `dotnetProjectsFrom()` resolves every .NET project's build target the same way the existing Build task action already does - the project's own file, or a solution marker, never guessed further.
 - A real build runs (there is no dry-run diagnostic mode for .NET the way `dart analyze` is), so this is trust-gated exactly like Dart analysis and the Build/Test task actions, and wired into the same shutdown and power-down bookkeeping every other long-running tool already has.
 - Tests: `dotnet-analysis-test`, 44 checks; `npm test` runs 38 suites, all passing.
+
+</details>
 
 <details>
 <summary><b>Earlier: v2.2.0</b></summary>
