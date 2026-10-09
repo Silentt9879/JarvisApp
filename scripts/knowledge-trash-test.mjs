@@ -295,14 +295,31 @@ check('overwrite confirmation and recovery: forcing a save past a stale revision
   assert.equal(listKnowledgeNotes(d).notes.find((x) => x.id === id).body, 'version three, forced');
 });
 
-check('a normal, non-conflicting save never makes a snapshot - only an actual override of someone else\'s newer revision does', () => {
+check('the very first save of a brand-new note never makes a snapshot - there is nothing yet to back up', () => {
   const d = dir();
   const id = newId();
   const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'v1', tags: [], favorite: false, folder: null }, { baseRevision: null });
   assert.equal(v1.overwrote, null);
-  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'v2', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision });
-  assert.equal(v2.overwrote, null);
   assert.equal(fs.existsSync(knowledgePaths(d).overwrittenDir), false, 'nothing was ever backed up - nothing was ever actually overwritten');
+});
+
+check('a normal, non-conflicting save that meaningfully changes an existing note backs up the version it replaces (Version History on ordinary edits)', () => {
+  const d = dir();
+  const id = newId();
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'v1', tags: [], favorite: false, folder: null }, { baseRevision: null });
+  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'v2', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision });
+  assert.ok(v2.overwrote, 'this is not a conflict override - it is an ordinary, correctly-based save - but it still preserves v1');
+  const snapFile = path.join(knowledgePaths(d).overwrittenDir, v2.overwrote.snapshot);
+  assert.match(fs.readFileSync(snapFile, 'utf8'), /v1/, 'v1 is recoverable through Version History');
+});
+
+check('a normal, non-conflicting re-save with no actual change makes no snapshot', () => {
+  const d = dir();
+  const id = newId();
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'v1', tags: [], favorite: false, folder: null }, { baseRevision: null });
+  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'v1', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision });
+  assert.equal(v2.overwrote, null);
+  assert.equal(fs.existsSync(knowledgePaths(d).overwrittenDir), false, 'nothing meaningfully changed, so nothing was backed up');
 });
 
 check('if the recovery snapshot cannot be written, the overwrite itself is refused - never destructive without a working safety net', () => {

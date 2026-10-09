@@ -561,9 +561,25 @@ export function snapshotBeforeOverwrite(userDir, id, { fsImpl = fs, now = () => 
   try { text = fsImpl.readFileSync(source, 'utf8'); } catch { return { ok: true, skipped: true }; }
   try { fsImpl.mkdirSync(overwrittenDir, { recursive: true }); }
   catch (e) { return { ok: false, error: `Could not prepare the recovery folder: ${e?.code || e?.message || e}` }; }
-  const name = `${id}.${now()}.md`;
-  const dest = path.join(overwrittenDir, name);
+  // Two snapshots of the same note landing in the same millisecond (now that an ordinary
+  // meaningful save snapshots too, not only a rare explicit conflict-overwrite, saves in quick
+  // succession are a real possibility) must never collide on this filename - a second one
+  // silently overwriting the first would quietly discard a version this exact mechanism exists
+  // to keep. `when` is bumped forward one at a time until it names a file that does not exist
+  // yet - still exactly `<id>.<digits>.md`, so listSnapshots' SNAPSHOT_FILE pattern and every
+  // other reader of that name need no change at all.
+  let when = now();
+  let name = `${id}.${when}.md`;
+  let dest = path.join(overwrittenDir, name);
   if (!within(dest, overwrittenDir)) return { ok: false, error: `"${id}" is not a usable note id.` };
+  while (true) {
+    let exists = false;
+    try { exists = fsImpl.existsSync(dest); } catch { exists = false; }
+    if (!exists) break;
+    when += 1;
+    name = `${id}.${when}.md`;
+    dest = path.join(overwrittenDir, name);
+  }
   // A temp file, then a rename, the same as every other write in this file - so a crash mid-
   // write can never leave a half-written, corrupt snapshot sitting under its real name; the
   // rename either lands it whole or not at all, and the tmp file is cleaned up either way.
@@ -620,17 +636,37 @@ export function saveKnowledgeNote(userDir, id, patch, { baseRevision = null, for
     };
   }
 
-  // force: true past an actually-stale revision is an explicit "overwrite anyway" - the
-  // version it is about to replace is backed up first (see snapshotBeforeOverwrite), and the
-  // overwrite itself is refused, not merely warned about, if that backup cannot be verified.
+  const original = existingText != null ? parseNoteFile(existingText, { fallbackId: id }) : null;
+
+  // A previous version is worth keeping exactly when the user-editable fields it carries
+  // actually differ from what is about to be written - not when only `updated`'s timestamp
+  // would change (every save touches that), and never for a brand-new note (there is nothing
+  // yet to keep). The body side of the comparison is normalized the same way renderNoteFile
+  // normalizes it before writing, so a save that only changes line endings or trailing
+  // whitespace - not real content - is not treated as a meaningful change either.
+  const normalizeBody = (b) => String(b ?? '').replace(/\r\n?/g, '\n').replace(/^\n+/, '').replace(/\s+$/, '');
+  const tagsEqual = (a, b) => { const x = Array.isArray(a) ? a : []; const y = Array.isArray(b) ? b : []; return x.length === y.length && x.every((t, i) => t === y[i]); };
+  const meaningfullyChanged = original != null && (
+    (patch.title ?? null) !== (original.fields.title ?? null)
+    || normalizeBody(patch.body) !== normalizeBody(original.body)
+    || !tagsEqual(patch.tags, original.fields.tags)
+    || (patch.favorite === true) !== (original.fields.favorite === true)
+    || (patch.folder ?? null) !== (original.fields.folder ?? null)
+  );
+
+  // Two reasons to keep a recovery copy of what is on disk right now, before it is replaced:
+  // an explicit "overwrite anyway" past a conflicting revision (always, regardless of whether
+  // the content it is about to lose happens to differ - it may be someone else's work), or an
+  // ordinary save that meaningfully changes the note. Either way this is the same snapshot
+  // mechanism Phase 23D's conflict recovery already proved - a write failure here refuses the
+  // save outright (see the `!snap.ok` return below) rather than letting the previous version be
+  // silently discarded.
   let overwrote = null;
-  if (force && isStale && currentRevision != null) {
+  if (existingText != null && currentRevision != null && ((force && isStale) || meaningfullyChanged)) {
     const snap = snapshotBeforeOverwrite(userDir, id, { fsImpl, now });
     if (!snap.ok) return { ok: false, error: `The version being replaced could not be safely backed up, so nothing was overwritten: ${snap.error}` };
-    overwrote = { revision: currentRevision, snapshot: snap.file || null };
+    if (!snap.skipped) overwrote = { revision: currentRevision, snapshot: snap.file || null };
   }
-
-  const original = existingText != null ? parseNoteFile(existingText, { fallbackId: id }) : null;
   const note = {
     id,
     title: patch.title ?? null,

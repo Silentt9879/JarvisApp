@@ -237,7 +237,7 @@ console.log('\n--- stale-save conflict: explicit reload or a two-step overwrite 
   check('the armed button now says what pressing it again will do', /Click again/.test(overwriteBtn.textContent));
   overwriteBtn.onclick(); await tick(); // second press: actually overwrites
   check('the second press overwrites for real', K.listKnowledgeNotes(d).notes.find((n) => n.id === id).body === 'version one point five, typed here');
-  check('the replaced version is recoverable - a backup now exists', fs.existsSync(K.knowledgePaths(d).overwrittenDir) && fs.readdirSync(K.knowledgePaths(d).overwrittenDir).length === 1);
+  check('the replaced version is recoverable - a backup now exists', fs.existsSync(K.knowledgePaths(d).overwrittenDir) && fs.readdirSync(K.knowledgePaths(d).overwrittenDir).length === 2);
   check('the page says the backup was made', /backed up first/.test(JV.$('kneMsg').textContent), JV.$('kneMsg').textContent);
 }
 
@@ -349,14 +349,15 @@ console.log('\n--- Version History: compare and restore (Phase 23E) ---');
   check('"Current" shows the note as it is now', JV.$('kneHistoryCurrent').textContent === 'version one');
   await JV.$('kneHistoryClose').onclick();
 
-  // Someone else overwrites this note's history-worthy past: force past a stale revision.
+  // One ordinary save (to version two, snapshotting version one), then someone else overwrites
+  // this note's history-worthy past: force past a now-stale revision (snapshotting version two).
   const rev = K.noteRevision(d, id);
   K.saveKnowledgeNote(d, id, { title: 'Historied note', body: 'version two', tags: [], favorite: false, folder: null }, { baseRevision: rev });
   K.saveKnowledgeNote(d, id, { title: 'Historied note', body: 'version three', tags: [], favorite: false, folder: null }, { baseRevision: rev, force: true }); // snapshots "version two"
 
   await JV.$('kneHistory').onclick(); await tick();
-  check('History now lists the one earlier version, freshly read from disk (not the editor\'s own stale copy)',
-    JV.$('kneHistoryList').children.length === 1 && JV.$('kneHistoryCurrent').textContent === 'version three');
+  check('History now lists both earlier versions, freshly read from disk (not the editor\'s own stale copy)',
+    JV.$('kneHistoryList').children.length === 2 && JV.$('kneHistoryCurrent').textContent === 'version three');
   check('nothing is selected yet, so Restore starts disabled', JV.$('kneHistoryRestore').disabled === true);
 
   const row = JV.$('kneHistoryList').children[0].children[0];

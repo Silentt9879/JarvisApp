@@ -84,6 +84,19 @@ await check('a symlinked directory standing in for notes/ is never descended int
   assert.deepEqual(files, [], 'the linked directory is never read through');
 });
 
+await check('a Version History snapshot made by an ordinary meaningful save (no force, no conflict) is collected exactly like any other snapshot', () => {
+  const d = dir();
+  const id = 'abc123';
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'version one', tags: [], favorite: false, folder: null }, { baseRevision: null });
+  saveKnowledgeNote(d, id, { title: 'T', body: 'version two', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision });
+  const snaps = listSnapshots(d, id).snapshots;
+  assert.equal(snaps.length, 1);
+  const files = collectLocalFiles(d);
+  const snapFile = files.find((f) => f.kind === 'snapshot');
+  assert.ok(snapFile, 'the ordinary-save snapshot is in the backup allowlist, same as a force-overwrite snapshot');
+  assert.equal(snapFile.relPath, `overwritten/${snaps[0].file}`);
+});
+
 // ================================================================== validateManifest: the security gate
 
 await check('path traversal in a manifest entry is refused', () => {

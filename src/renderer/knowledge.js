@@ -401,7 +401,7 @@
   function renderHistoryList() {
     const ul = $('kneHistoryList');
     ul.replaceChildren();
-    if (!historySnapshots.length) { ul.appendChild(el('li', 'muted empty', 'No earlier versions of this note yet - one is made automatically the first time an "Overwrite anyway" or a Version History restore actually replaces something.')); return; }
+    if (!historySnapshots.length) { ul.appendChild(el('li', 'muted empty', 'No earlier versions of this note yet - one is made automatically the first time a meaningful edit, an "Overwrite anyway," or a Version History restore actually replaces something.')); return; }
     for (const s of historySnapshots) {
       const li = el('li');
       const row = el('button', `kne-history-row${historySelected === s.file ? ' on' : ''}`);

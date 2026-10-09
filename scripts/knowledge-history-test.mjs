@@ -22,7 +22,9 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-knowledge-history-'));
 let n = 0;
 const dir = () => { const d = path.join(TMP, `d${++n}`); fs.mkdirSync(d, { recursive: true }); return d; };
 
-/** Three real versions of one note, each forcing past the last so a snapshot is made each time. */
+/** Three real versions of one note. v1 -> v2 is an ordinary meaningful save (snapshots v1);
+ *  v2 -> v3 forces past v1's now-stale revision while v2 is actually current (snapshots v2) -
+ *  so this leaves two snapshots on disk: v1 ("version one") and v2 ("version two"). */
 function threeVersions(d) {
   const id = newId();
   const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'version one', tags: ['a'], favorite: false, folder: null }, { baseRevision: null });
@@ -47,11 +49,12 @@ check('snapshot listing and preview: newest first, each with its own timestamp a
   const { id } = threeVersions(d);
   const r = listSnapshots(d, id);
   assert.equal(r.ok, true);
-  assert.equal(r.snapshots.length, 1, 'only the force-past-v2 overwrite made a snapshot (of v2)');
+  assert.equal(r.snapshots.length, 2, 'the ordinary v1->v2 save and the forced v2->v3 overwrite each made one snapshot');
   const s = r.snapshots[0];
   assert.equal(s.readable, true);
-  assert.equal(s.body, 'version two');
+  assert.equal(s.body, 'version two', 'newest first - the forced overwrite (of v2) happened after the ordinary save (of v1)');
   assert.ok(s.when > 0);
+  assert.equal(r.snapshots[1].body, 'version one');
 
   const one = readSnapshot(d, id, s.file);
   assert.equal(one.ok, true);
@@ -63,15 +66,15 @@ check('several overwrites of the same note build up several snapshots, each exac
   const d = dir();
   const id = newId();
   const a = saveKnowledgeNote(d, id, { title: 'T', body: 'a1', tags: [], favorite: false, folder: null }, { baseRevision: null });
-  saveKnowledgeNote(d, id, { title: 'T', body: 'a2', tags: [], favorite: false, folder: null }, { baseRevision: a.revision });
+  const a2 = saveKnowledgeNote(d, id, { title: 'T', body: 'a2', tags: [], favorite: false, folder: null }, { baseRevision: a.revision }); // ordinary meaningful save - snapshots a1
   // Both of these force past a1's (now stale) revision while a different version is actually
-  // current - each one backs up whatever it is about to replace, so two separate snapshots.
+  // current - each one backs up whatever it is about to replace, so two more snapshots.
   const forced1 = saveKnowledgeNote(d, id, { title: 'T', body: 'a3 (forced past a1)', tags: [], favorite: false, folder: null }, { baseRevision: a.revision, force: true });
   const forced2 = saveKnowledgeNote(d, id, { title: 'T', body: 'a4 (forced past a1 again)', tags: [], favorite: false, folder: null }, { baseRevision: a.revision, force: true });
-  assert.ok(forced1.overwrote && forced2.overwrote);
+  assert.ok(a2.overwrote && forced1.overwrote && forced2.overwrote);
   const list = listSnapshots(d, id);
-  assert.equal(list.snapshots.length, 2);
-  assert.deepEqual(list.snapshots.map((s) => s.body).sort(), ['a2', 'a3 (forced past a1)'].sort());
+  assert.equal(list.snapshots.length, 3);
+  assert.deepEqual(list.snapshots.map((s) => s.body).sort(), ['a1', 'a2', 'a3 (forced past a1)'].sort());
 });
 
 // ================================================================== restoring
@@ -159,15 +162,16 @@ check('snapshot corruption: a version with damaged front matter is still listed 
 
 check('missing snapshot files: one that is listed but cannot be read (deleted or permission-denied in the instant between readdir and read) is reported in its own row, never fatal to the rest of the list', () => {
   const d = dir();
-  const { id, v1 } = threeVersions(d); // already has one snapshot (v2)
+  const { id, v1 } = threeVersions(d); // already has two snapshots (v1, v2)
   saveKnowledgeNote(d, id, { title: 'T', body: 'v4', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision, force: true }); // v1's revision is stale now (v3 is current) - this snapshots v3
   const files = listSnapshots(d, id).snapshots.map((s) => s.file);
-  assert.equal(files.length, 2);
+  assert.equal(files.length, 3);
   const flaky = { ...fs, readFileSync: (p, enc) => { if (String(p).includes(files[0])) { const e = new Error('gone'); e.code = 'ENOENT'; throw e; } return fs.readFileSync(p, enc); } };
   const r = listSnapshots(d, id, { fsImpl: flaky });
-  assert.equal(r.snapshots.length, 2, 'both rows are still reported');
+  assert.equal(r.snapshots.length, 3, 'every row is still reported');
   assert.equal(r.snapshots.find((s) => s.file === files[0]).readable, false);
   assert.equal(r.snapshots.find((s) => s.file === files[1]).readable, true);
+  assert.equal(r.snapshots.find((s) => s.file === files[2]).readable, true);
 });
 
 check('reading a snapshot that was removed from disk between listing and reading is refused plainly, not thrown', () => {
@@ -257,6 +261,106 @@ check('a retry after a failed restore succeeds normally, once whatever stopped i
   const r2 = restoreSnapshot(d, id, snap.file, { baseRevision: rev }); // real fs this time
   assert.equal(r2.ok, true);
   assert.equal(listKnowledgeNotes(d).notes.find((x) => x.id === id).body, 'version two');
+});
+
+// ================================================================== Version History on ordinary saves
+
+check('first save of a brand-new note creates no history - there is nothing yet to keep', () => {
+  const d = dir();
+  const id = newId();
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'hello', tags: [], favorite: false, folder: null }, { baseRevision: null });
+  assert.equal(v1.ok, true);
+  assert.equal(v1.overwrote, null);
+  assert.deepEqual(listSnapshots(d, id).snapshots, []);
+});
+
+check('a second, meaningfully different save (no force, no stale revision) preserves version 1', () => {
+  const d = dir();
+  const id = newId();
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'version one', tags: [], favorite: false, folder: null }, { baseRevision: null });
+  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'version two', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision });
+  assert.equal(v2.ok, true);
+  assert.ok(v2.overwrote, 'an ordinary meaningful save reports that the version it replaced was backed up');
+  const snaps = listSnapshots(d, id).snapshots;
+  assert.equal(snaps.length, 1);
+  assert.equal(snaps[0].body, 'version one');
+  assert.equal(listKnowledgeNotes(d).notes.find((x) => x.id === id).body, 'version two');
+});
+
+check('several ordinary meaningful saves in a row each produce their own distinct, recoverable version - none lost to a filename collision', () => {
+  const d = dir();
+  const id = newId();
+  let prev = saveKnowledgeNote(d, id, { title: 'T', body: 'v1', tags: [], favorite: false, folder: null }, { baseRevision: null });
+  const bodies = ['v2', 'v3', 'v4', 'v5'];
+  for (const body of bodies) {
+    prev = saveKnowledgeNote(d, id, { title: 'T', body, tags: [], favorite: false, folder: null }, { baseRevision: prev.revision });
+    assert.equal(prev.ok, true);
+  }
+  const snaps = listSnapshots(d, id).snapshots;
+  assert.equal(snaps.length, 4, 'v1 through v4 were each snapshotted once, replaced by the next save');
+  assert.deepEqual(snaps.map((s) => s.body).sort(), ['v1', 'v2', 'v3', 'v4'].sort());
+  assert.equal(new Set(snaps.map((s) => s.file)).size, 4, 'four distinct filenames - no collision silently discarded one');
+  assert.equal(listKnowledgeNotes(d).notes.find((x) => x.id === id).body, 'v5');
+});
+
+check('re-saving a note with no actual change (same title, body, tags, favorite, folder) never creates a duplicate snapshot', () => {
+  const d = dir();
+  const id = newId();
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'unchanged content', tags: ['x'], favorite: true, folder: 'f' }, { baseRevision: null });
+  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'unchanged content', tags: ['x'], favorite: true, folder: 'f' }, { baseRevision: v1.revision });
+  assert.equal(v2.ok, true);
+  assert.equal(v2.overwrote, null, 'nothing meaningfully changed, so nothing was backed up');
+  assert.deepEqual(listSnapshots(d, id).snapshots, []);
+});
+
+check('a save that only touches the generated `updated` timestamp (everything else identical) is not treated as a meaningful change', () => {
+  const d = dir();
+  const id = newId();
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'same', tags: [], favorite: false, folder: null }, { baseRevision: null, now: () => 1000 });
+  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'same', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision, now: () => 2000 });
+  assert.equal(v2.ok, true);
+  assert.equal(v2.overwrote, null);
+  assert.deepEqual(listSnapshots(d, id).snapshots, []);
+});
+
+check('a metadata-only meaningful edit (tags/favorite/folder change, body and title unchanged) still preserves the previous version', () => {
+  const d = dir();
+  const id = newId();
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'same body throughout', tags: ['a'], favorite: false, folder: null }, { baseRevision: null });
+  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'same body throughout', tags: ['a', 'b'], favorite: true, folder: 'work' }, { baseRevision: v1.revision });
+  assert.equal(v2.ok, true);
+  assert.ok(v2.overwrote);
+  const snaps = listSnapshots(d, id).snapshots;
+  assert.equal(snaps.length, 1);
+  assert.deepEqual(snaps[0].tags, ['a']);
+  assert.equal(snaps[0].favorite, false);
+  assert.equal(snaps[0].body, 'same body throughout');
+});
+
+check('if the snapshot write fails, the save itself is refused outright - the previous version is never silently discarded', () => {
+  const d = dir();
+  const id = newId();
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'safe original', tags: [], favorite: false, folder: null }, { baseRevision: null });
+  const flaky = { ...fs, writeFileSync: (p, data) => { if (String(p).includes('overwritten')) throw new Error('disk full'); return fs.writeFileSync(p, data); } };
+  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'this must not land without a backup', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision, fsImpl: flaky });
+  assert.equal(v2.ok, false);
+  assert.match(v2.error, /backed up/);
+  assert.equal(listKnowledgeNotes(d).notes.find((x) => x.id === id).body, 'safe original', 'the live note was never overwritten without a working backup');
+  assert.deepEqual(listSnapshots(d, id).snapshots, [], 'no half-made snapshot was left behind either');
+});
+
+check('two meaningful saves of the same note landing in the exact same millisecond still produce two distinct, recoverable snapshots', () => {
+  const d = dir();
+  const id = newId();
+  const frozen = () => 123456789;
+  const v1 = saveKnowledgeNote(d, id, { title: 'T', body: 'frozen-v1', tags: [], favorite: false, folder: null }, { baseRevision: null, now: frozen });
+  const v2 = saveKnowledgeNote(d, id, { title: 'T', body: 'frozen-v2', tags: [], favorite: false, folder: null }, { baseRevision: v1.revision, now: frozen });
+  const v3 = saveKnowledgeNote(d, id, { title: 'T', body: 'frozen-v3', tags: [], favorite: false, folder: null }, { baseRevision: v2.revision, now: frozen });
+  assert.equal(v2.ok, true); assert.equal(v3.ok, true);
+  const snaps = listSnapshots(d, id).snapshots;
+  assert.equal(snaps.length, 2);
+  assert.equal(new Set(snaps.map((s) => s.file)).size, 2, 'distinct filenames despite an identical `now()` on every call');
+  assert.deepEqual(snaps.map((s) => s.body).sort(), ['frozen-v1', 'frozen-v2'].sort());
 });
 
 console.log(`\nknowledge-history-test: ${pass} passed, ${fail} failed`);
