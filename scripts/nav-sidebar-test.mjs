@@ -24,8 +24,8 @@ const css = read(`${APP}/src/renderer/styles.css`);
 const navButtons = [
   ['navChat', 'Chat'], ['navCommand', 'Overview'], ['navProjects', 'Projects'],
   ['navSource', 'GitHub Desktop'], ['navDevices', 'Devices'], ['navCore', 'AI Core'],
-  ['navNotes', 'Notes'], ['navFiles', 'Files'], ['navTasks', 'Clickup'], ['navAgents', 'Agents'],
-  ['navKne', 'Knowledge Notes'], ['navTools', 'Tools &amp; Skills'],
+  ['navKne', 'Notes'], ['navFiles', 'Files'], ['navTasks', 'Clickup'], ['navAgents', 'Agents'],
+  ['navNotes', 'Notes (Classic)'], ['navTools', 'Tools &amp; Skills'],
 ];
 for (const [id, label] of navButtons) {
   const m = new RegExp(`<button id="${id}"[^>]*>`).exec(html);

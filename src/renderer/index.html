@@ -27,14 +27,19 @@
       <button id="navSource" data-view="source" title="GitHub Desktop"><i data-icon="github"></i><span>GitHub Desktop</span><em class="nbadge" id="nbSource" hidden></em></button>
       <button id="navDevices" data-view="devices" title="Devices"><i data-icon="phone"></i><span>Devices</span><em class="nbadge" id="nbDevices" hidden></em></button>
       <button id="navCore" data-view="core" title="AI Core"><i data-icon="core"></i><span>AI Core</span></button>
-      <button id="navNotes" data-view="notes" title="Notes"><i data-icon="edit"></i><span>Notes</span><em class="nbadge" id="nbNotes"></em></button>
+      <!-- Phase 1 (Unified Notes): navKne is promoted to the primary row and relabeled "Notes" -
+           it is now the full unified notes experience (folders, tags, Trash, Version History,
+           safe migration from the old store). navNotes (the old, plain notes.json store) moves
+           into the "More" group below as "Notes (Classic)", kept reachable - not removed - until
+           the unified feature has been verified; see docs/phase0-decision-review.md Decision 5. -->
+      <button id="navKne" data-view="kne" title="Notes"><i data-icon="edit"></i><span>Notes</span><em class="nbadge" id="nbKne"></em></button>
       <button id="navFiles" data-view="files" title="Files"><i data-icon="code"></i><span>Files</span></button>
 
       <button class="nav-more" id="navMore" title="More views" aria-expanded="false"><i data-icon="chevron"></i><span>More</span></button>
       <div class="nav-group" id="navGroup">
         <button id="navTasks" data-view="tasks" title="Clickup"><i data-icon="clickup"></i><span>Clickup</span><em class="nbadge" id="nbTasks"></em></button>
         <button id="navAgents" data-view="agents" title="Agents"><i data-icon="agents"></i><span>Agents</span><em class="nbadge" id="nbAgents"></em></button>
-        <button id="navKne" data-view="kne" title="Knowledge Notes"><i data-icon="bulb"></i><span>Knowledge Notes</span><em class="nbadge" id="nbKne"></em></button>
+        <button id="navNotes" data-view="notes" title="Notes (Classic)"><i data-icon="bulb"></i><span>Notes (Classic)</span><em class="nbadge" id="nbNotes"></em></button>
         <button id="navTools" data-view="tools" title="Tools &amp; Skills"><i data-icon="tools"></i><span>Tools &amp; Skills</span><em class="nbadge" id="nbTools"></em></button>
       </div>
     </nav>
@@ -425,8 +430,8 @@
       <section class="view" id="view-notes">
         <div class="page">
           <div class="page-head">
-            <h2>Notes</h2>
-            <p>Somewhere to write things down. Saved here, and sent to your Telegram if you ask. <span class="muted" id="noteTg"></span></p>
+            <h2>Notes (Classic)</h2>
+            <p>The original, plain-text Notes store - kept here, unchanged, while <b>Notes</b> (the new page) takes over. Anything here is also visible from the new Notes page once it has been carried over automatically; nothing here is deleted or edited by that. Saved here, and sent to your Telegram if you ask. <span class="muted" id="noteTg"></span></p>
           </div>
           <div class="files-layout">
             <aside class="files-side">
@@ -451,24 +456,26 @@
         </div>
       </section>
 
-      <!-- ============================================ KNOWLEDGE NOTES (Phase 23C/23D)
-           Markdown notes with tags and favorites, stored one file per note under
-           <userData>/knowledge/notes - a separate store from Notes above (notes.json) and
-           from the Knowledge Base panel (what JARVIS knows about the codebase). Neither
-           store reads, writes or migrates the other; see kneStorageNote below. Named
-           "Knowledge Notes" rather than plain "Knowledge" (Phase 23D, Part 4) for daylight
-           from the Knowledge Base panel - a label-only change; the view id (view-kne) and
-           every element id below it are unchanged. -->
+      <!-- ============================================ NOTES - Unified (Phase 1)
+           Markdown notes with tags, folders and pinning, stored one file per note under
+           <userData>/knowledge/notes - this is now the one Notes experience (built on the
+           engine formerly labeled "Knowledge Notes"; view id view-kne and every element id
+           below it are unchanged, label-only rename). Notes (Classic) (notes.json) is carried
+           over automatically and safely (see knowledge.js's auto-migration call) and is kept
+           untouched, readable at its own page, until the unified feature is fully verified -
+           see docs/phase0-decision-review.md Decisions 2 and 5. Separate from the Knowledge
+           Base panel (what JARVIS knows about the codebase) - neither reads or writes the other. -->
       <section class="view" id="view-kne">
         <div class="page">
           <div class="page-head">
-            <h2>Knowledge Notes</h2>
-            <p>Markdown notes with tags and favorites - a separate store from <b>Notes</b> and from the <b>Knowledge Base</b> panel. <span class="muted" id="kneStorageNote"></span></p>
+            <h2>Notes</h2>
+            <p>Markdown notes with tags, folders and pinning. <span class="muted" id="kneStorageNote"></span></p>
           </div>
           <div class="files-layout">
             <aside class="files-side">
               <button class="btn btn-primary btn-block" id="kneNew"><i data-icon="plus"></i><span>New note</span></button>
-              <button class="btn btn-block" id="kneImportOpen" type="button"><i data-icon="import"></i><span>Import from Notes</span></button>
+              <button class="btn btn-block" id="kneAskOpen" type="button"><i data-icon="search"></i><span>Ask about your notes</span></button>
+              <button class="btn btn-block" id="kneImportOpen" type="button"><i data-icon="import"></i><span>Import from Notes (Classic)</span></button>
               <details class="drive-panel" id="driveConn">
                 <summary>
                   <span class="dot" id="driveDot"></span>
@@ -476,6 +483,16 @@
                 </summary>
                 <div class="drive-body">
                   <p class="muted small" id="driveReason"></p>
+                  <!-- Phase 2 (Decision 1): the no-setup path - hidden entirely unless this
+                       build has a real Client ID configured (drive-app-client.mjs - a
+                       build-time config file, or a dev env override). Until a real,
+                       Google-verified Client ID exists, driveAppOwnedStatus() always reports
+                       available:false and nothing below this comment ever becomes visible. -->
+                  <div class="drive-app-owned" id="driveAppOwnedSection" hidden>
+                    <button class="btn btn-primary btn-block" id="driveConnectAppOwnedBtn" type="button">Connect Google Account</button>
+                    <p class="muted small">Uses JARVIS's own Google sign-in - no Client ID to create or paste. <b>Early/testing configuration</b> until Google's verification for this app completes; see Settings for details.</p>
+                    <button class="link-btn" id="driveShowByoBtn" type="button">Use my own Google Cloud Client ID instead</button>
+                  </div>
                   <div class="drive-client-fields" id="driveClientFields" hidden>
                     <input class="field slim" id="driveClientId" placeholder="OAuth Client ID" autocomplete="off" spellcheck="false" />
                     <input class="field slim" id="driveClientSecret" type="password" placeholder="Client secret (optional for some client types)" autocomplete="off" spellcheck="false" />
@@ -485,6 +502,13 @@
                   <button class="btn btn-primary btn-block" id="driveConnectBtn" type="button" hidden>Connect Google Drive</button>
                   <button class="btn btn-block" id="driveReconnectBtn" type="button" hidden>Reconnect</button>
                   <button class="btn btn-block" id="driveDisconnectBtn" type="button" hidden>Disconnect</button>
+                  <!-- Phase 3: automatic bidirectional sync status - separate from the manual
+                       Back Up Now / Backup History below, which stay independent of sync. -->
+                  <div class="drive-sync-section" id="driveSyncSection" hidden>
+                    <hr class="drive-sep" />
+                    <p class="muted small" id="driveSyncStatus">Not synced yet.</p>
+                    <button class="btn btn-block" id="driveSyncNowBtn" type="button">Sync Now</button>
+                  </div>
                   <div class="drive-backup-section" id="driveBackupSection" hidden>
                     <hr class="drive-sep" />
                     <p class="muted small" id="driveLastBackup">No backup yet.</p>
@@ -498,12 +522,17 @@
                 <button class="kne-tab on" id="kneTabNotes" type="button" role="tab" aria-selected="true">Notes</button>
                 <button class="kne-tab" id="kneTabTrash" type="button" role="tab" aria-selected="false">Trash <em class="count" id="kneTrashCount" hidden></em></button>
               </div>
+              <!-- Phase 1: a folder is just the note's own `folder` front-matter field (already
+                   modeled end-to-end in src/knowledge.mjs); this list is built from the notes
+                   already loaded, not a second IPC call or a real nested filesystem. -->
+              <ul class="kne-folder-list" id="kneFolderList" aria-label="Folders"></ul>
               <input class="field slim" id="kneSearch" placeholder="Filter by title or tag…" autocomplete="off" spellcheck="false" />
               <ul class="file-list note-list" id="kneList"></ul>
             </aside>
             <div class="file-view">
               <div class="file-head">
-                <button class="icon-btn kne-fav" id="kneFavorite" type="button" title="Favorite this note" aria-pressed="false"><i data-icon="star"></i></button>
+                <button class="icon-btn kne-fav" id="kneFavorite" type="button" title="Pin this note" aria-pressed="false"><i data-icon="star"></i></button>
+                <button class="icon-btn kne-ai-exclude" id="kneAiExclude" type="button" title="Exclude this note from AI search &amp; chat context" aria-pressed="false"><i data-icon="shield"></i></button>
                 <div class="file-title">
                   <input class="kne-title" id="kneTitle" placeholder="Untitled note" autocomplete="off" spellcheck="true" />
                   <small id="kneWhen"></small>
@@ -511,10 +540,15 @@
                 <div class="file-acts">
                   <button class="btn file-btn" id="kneRestore" type="button" hidden><i data-icon="undo"></i><span>Restore</span></button>
                   <button class="btn file-btn" id="kneHistory" type="button" hidden><i data-icon="clock"></i><span>Version History</span></button>
+                  <button class="btn file-btn" id="kneSendTelegram" type="button" hidden><i data-icon="send"></i><span>Send to Telegram</span></button>
                   <button class="btn file-btn" id="knePreviewToggle" type="button" aria-pressed="false"><i data-icon="eye"></i><span>Preview</span></button>
                   <button class="btn btn-danger file-btn" id="kneDelete" type="button" hidden><i data-icon="trash"></i><span>Delete</span></button>
                   <button class="btn btn-primary file-btn" id="kneSave" type="button"><i data-icon="check"></i><span>Save</span></button>
                 </div>
+              </div>
+              <div class="kne-tags-row">
+                <i data-icon="folder"></i>
+                <input class="field slim" id="kneFolder" placeholder="Folder (e.g. Personal/Errands) - optional" autocomplete="off" spellcheck="false" />
               </div>
               <div class="kne-tags-row">
                 <i data-icon="tag"></i>
@@ -529,12 +563,14 @@
           </div>
         </div>
 
-        <!-- Import from Notes: a preview before anything happens, and an explicit confirm.
-             migrateFromLegacy never deletes, renames or edits notes.json - this only ever adds
-             to Knowledge, and never overwrites a note already edited there since the last import. -->
+        <!-- Import from Notes (Classic): a manual re-check/retry on top of the automatic carry-
+             over (see knowledge.js's autoMigrateIfNeeded) - useful for conflicts the automatic
+             pass left untouched. migrateFromLegacy never deletes, renames or edits notes.json -
+             this only ever adds to Notes, and never overwrites a note already edited here since
+             the last import. -->
         <div class="modal-veil" id="kneImportVeil" hidden>
           <div class="modal hud-panel" role="dialog" aria-modal="true" aria-labelledby="kneImportTitle">
-            <h3 id="kneImportTitle">Import from Notes</h3>
+            <h3 id="kneImportTitle">Import from Notes (Classic)</h3>
             <div class="modal-body">
               <ul class="kne-import-stats" id="kneImportStats"></ul>
               <p class="kne-import-dest" id="kneImportDest"></p>
@@ -543,6 +579,26 @@
             <div class="modal-foot">
               <button class="btn small" id="kneImportCancel" type="button">Cancel</button>
               <button class="btn btn-primary small" id="kneImportGo" type="button">Import</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ask about your notes (Phase 4, AI Knowledge): local keyword search only - nothing
+             here calls an external AI provider. "Ask in Chat" composes the matched notes'
+             own content into a prompt and inserts it into the Chat composer (JV.chat.insert)
+             for the person to read and press Send themselves - never sent automatically. -->
+        <div class="modal-veil" id="kneAskVeil" hidden>
+          <div class="modal hud-panel" role="dialog" aria-modal="true" aria-labelledby="kneAskTitle">
+            <h3 id="kneAskTitle">Ask about your notes</h3>
+            <div class="modal-body">
+              <input class="field" id="kneAskQuery" placeholder="Ask a question, or search for words in your notes…" autocomplete="off" spellcheck="false" />
+              <p class="muted small">Searches only your notes, locally - nothing is sent anywhere until you choose "Ask in Chat" below and press Send yourself. Notes marked "Exclude from AI" never appear here.</p>
+              <ul class="kne-ask-results" id="kneAskResults"></ul>
+              <div class="note-msg" id="kneAskMsg" hidden></div>
+            </div>
+            <div class="modal-foot">
+              <button class="btn small" id="kneAskCancel" type="button">Close</button>
+              <button class="btn btn-primary small" id="kneAskGo" type="button" disabled>Ask in Chat</button>
             </div>
           </div>
         </div>

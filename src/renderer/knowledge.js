@@ -24,12 +24,18 @@
 
   let notes = [];                  // sidebar metadata only - no body
   let trashNotes = [];             // Trash tab's own list - separate from notes above
-  let status = { storageDir: '', migrationComplete: false, legacyNoteCount: 0 };
+  let status = { storageDir: '', migrationComplete: false, legacyNoteCount: 0, historyCount: 0, historyBytes: 0, historyWarn: false, telegram: { ready: false, name: null } };
   let mode = 'notes';               // 'notes' | 'trash'
   let current = null;              // { id, title, created, updated, tags, favorite, folder, sentAt } or null = new note
   let baseRevision = null;         // the revision this edit started from; null means "believed not to exist yet"
   let query = '';
-  const drafts = new Map();        // note id (or 'new') -> { title, body, tags, favorite, baseRevision }
+  // Phase 1 (Unified Notes): null = "All notes" (no folder filter); '' = "Unfiled" (no folder
+  // set); any other string = that exact folder. Folders are purely the note's own `folder`
+  // front-matter field (src/knowledge.mjs already models it end to end) - this is a client-side
+  // grouping of notes already in hand, not a second IPC call or a real nested filesystem.
+  let selectedFolder = null;
+  let autoMigrateChecked = false;  // tried at most once per page boot - migrateFromLegacy itself stays safe to call any number of times
+  const drafts = new Map();        // note id (or 'new') -> { title, body, tags, favorite, folder, baseRevision }
   let historyFor = null;           // { id, baseRevision } - the note Version History is open for
   let historySnapshots = [];
   let historySelected = null;      // the file name of the snapshot picked for compare/restore
@@ -37,8 +43,10 @@
   const key = () => (current ? current.id : 'new');
   const titleEl = () => $('kneTitle');
   const tagsEl = () => $('kneTags');
+  const folderEl = () => $('kneFolder');
   const bodyEl = () => $('kneEdit');
   const favBtn = () => $('kneFavorite');
+  const aiExcludeBtn = () => $('kneAiExclude');
 
   // ------------------------------------------------------------- drafts (memory + localStorage)
   function loadDraftsFromStorage() {
@@ -62,15 +70,22 @@
   const joinTags = (arr) => (Array.isArray(arr) ? arr.join(', ') : '');
 
   function fields() {
-    return { title: titleEl().value, body: bodyEl().value, tags: parseTags(tagsEl().value), favorite: favBtn().getAttribute('aria-pressed') === 'true' };
+    return {
+      title: titleEl().value, body: bodyEl().value, tags: parseTags(tagsEl().value),
+      favorite: favBtn().getAttribute('aria-pressed') === 'true', folder: folderEl().value.trim() || null,
+      aiExcluded: aiExcludeBtn().getAttribute('aria-pressed') === 'true',
+    };
   }
   function baseline() {
-    return current ? { title: current.title || '', body: current.__body || '', tags: current.tags || [], favorite: !!current.favorite } : { title: '', body: '', tags: [], favorite: false };
+    return current
+      ? { title: current.title || '', body: current.__body || '', tags: current.tags || [], favorite: !!current.favorite, folder: current.folder || null, aiExcluded: !!current.aiExcluded }
+      : { title: '', body: '', tags: [], favorite: false, folder: null, aiExcluded: false };
   }
   function isDirty() {
     const f = fields();
     const b = baseline();
-    return f.title !== (b.title || '') || f.body !== (b.body || '') || f.favorite !== b.favorite || joinTags(f.tags) !== joinTags(b.tags);
+    return f.title !== (b.title || '') || f.body !== (b.body || '') || f.favorite !== b.favorite
+      || joinTags(f.tags) !== joinTags(b.tags) || (f.folder || null) !== (b.folder || null) || f.aiExcluded !== b.aiExcluded;
   }
   /** Remember what is in the editor, so switching notes (or closing and reopening JARVIS) never loses it. */
   function keepDraft() {
@@ -129,12 +144,72 @@
     const n = $('kneStorageNote');
     if (!n) return;
     const bits = [`Stored at ${status.storageDir || 'this PC'}.`];
-    if (status.migrationComplete) bits.push('Notes has already been migrated into this store once.');
-    else if (status.legacyNoteCount) bits.push(`${status.legacyNoteCount} note${status.legacyNoteCount === 1 ? '' : 's'} still only in Notes - nothing is migrated automatically.`);
+    if (status.legacyNoteCount && !status.migrationComplete) bits.push(`Carrying over ${status.legacyNoteCount} note${status.legacyNoteCount === 1 ? '' : 's'} from Notes (Classic)…`);
+    // Decision 4: a size/count WARNING only - nothing here prunes Version History automatically.
+    if (status.historyCount) {
+      const mb = status.historyBytes / 1_000_000;
+      const size = mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.round(status.historyBytes / 1000)} KB`;
+      bits.push(`Version History: ${status.historyCount} version${status.historyCount === 1 ? '' : 's'} (${size})${status.historyWarn ? ' - getting large; nothing is removed automatically' : ''}.`);
+    }
     n.textContent = bits.join(' ');
   }
 
+  /** A folder is just the note's own `folder` front-matter field - a `/`-separated path, the
+   *  same convention the original Knowledge design doc describes (folder: "Personal/Errands").
+   *  This builds a true nested tree for display (an ancestor with no notes of its own, like
+   *  "Personal" when only "Personal/Errands" has any, is still shown - as a 0-count row - so
+   *  the hierarchy reads correctly), while selecting a folder still means EXACTLY that folder
+   *  (never "and everything under it") - the simpler, least-surprising rule, and the one this
+   *  phase's own tests already lock in. Purely a grouping of data already in `notes`, not a
+   *  second fetch or a real filesystem. */
+  function folderTree() {
+    const direct = new Map(); // full path -> count of notes with exactly that folder
+    let unfiled = 0;
+    for (const n of notes) {
+      const f = (n.folder || '').trim();
+      if (!f) { unfiled += 1; continue; }
+      direct.set(f, (direct.get(f) || 0) + 1);
+    }
+    const allPaths = new Set(direct.keys());
+    for (const f of direct.keys()) {
+      const parts = f.split('/').filter(Boolean);
+      for (let i = 1; i < parts.length; i += 1) allPaths.add(parts.slice(0, i).join('/'));
+    }
+    const rows = [...allPaths].sort((a, b) => a.localeCompare(b)).map((path) => {
+      const parts = path.split('/').filter(Boolean);
+      return { path, label: parts[parts.length - 1], depth: parts.length - 1, count: direct.get(path) || 0 };
+    });
+    return { unfiled, rows };
+  }
+
+  function renderFolders() {
+    const ul = $('kneFolderList');
+    if (mode !== 'notes') { ul.hidden = true; return; }
+    const { unfiled, rows } = folderTree();
+    ul.hidden = rows.length === 0 && unfiled === 0;
+    ul.replaceChildren();
+    const row = (label, value, count, icon, depth) => {
+      const li = el('li');
+      const btn = el('button', `kne-folder-row${selectedFolder === value ? ' on' : ''}`);
+      btn.type = 'button';
+      if (depth) btn.style.paddingLeft = `${6 + depth * 14}px`;
+      btn.appendChild(JV.icon(icon || 'folder', 'kne-folder-ic'));
+      btn.appendChild(el('span', null, label));
+      btn.appendChild(el('em', 'count', String(count)));
+      btn.onclick = () => { selectedFolder = selectedFolder === value ? null : value; renderFolders(); renderList(); };
+      li.appendChild(btn);
+      return li;
+    };
+    ul.appendChild(row('All notes', null, notes.length, 'layers', 0));
+    if (unfiled) ul.appendChild(row('Unfiled', '', unfiled, 'file', 0));
+    for (const r of rows) ul.appendChild(row(r.label, r.path, r.count, 'folder', r.depth));
+  }
+
   function matches(n) {
+    if (mode === 'notes' && selectedFolder !== null) {
+      const f = (n.folder || '').trim();
+      if (selectedFolder === '' ? f !== '' : f !== selectedFolder) return false;
+    }
     if (!query) return true;
     const q = query.toLowerCase();
     return title(n.title).toLowerCase().includes(q) || (n.tags || []).some((t) => t.toLowerCase().includes(q));
@@ -160,8 +235,10 @@
       }
       return;
     }
-    const shown = notes.filter(matches);
-    if (!shown.length) { ul.appendChild(el('li', 'muted empty', notes.length ? 'No note matches that filter.' : 'No knowledge notes yet, sir.')); return; }
+    // Pinned (favorite) notes always lead the list, newest-first within each group - a stable
+    // re-sort of the already-newest-first list main.mjs hands back, never a second fetch.
+    const shown = notes.filter(matches).slice().sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0));
+    if (!shown.length) { ul.appendChild(el('li', 'muted empty', notes.length ? 'No note matches that filter.' : 'No notes yet, sir.')); return; }
     for (const n of shown) {
       const li = el('li');
       const draft = drafts.get(n.id);
@@ -187,8 +264,11 @@
     titleEl().value = f.title || '';
     bodyEl().value = f.body || '';
     tagsEl().value = joinTags(f.tags);
+    folderEl().value = f.folder || '';
     favBtn().setAttribute('aria-pressed', f.favorite ? 'true' : 'false');
     favBtn().classList.toggle('on', !!f.favorite);
+    aiExcludeBtn().setAttribute('aria-pressed', f.aiExcluded ? 'true' : 'false');
+    aiExcludeBtn().classList.toggle('on', !!f.aiExcluded);
     $('kneWhen').textContent = mode === 'trash'
       ? (current ? (current.deletedAt ? `Deleted ${JV.ago(current.deletedAt)}` : 'Deleted') : '')
       : current
@@ -206,11 +286,17 @@
     titleEl().readOnly = trash;
     bodyEl().readOnly = trash;
     tagsEl().disabled = trash;
+    folderEl().disabled = trash;
     favBtn().disabled = trash;
+    aiExcludeBtn().disabled = trash;
     $('kneSave').hidden = trash;
     $('kneDelete').hidden = trash || !current;
     $('kneHistory').hidden = trash || !current;
     $('kneRestore').hidden = !(trash && current);
+    // Phase 1 hardening item 1: Telegram send is per-note, offered only once a note is actually
+    // saved (there is nothing to send otherwise) and only when Telegram itself is set up -
+    // the same "ready" gate notes.js already uses, reused rather than re-derived here.
+    $('kneSendTelegram').hidden = trash || !current || !status.telegram?.ready;
   }
 
   function renderPreview() {
@@ -263,13 +349,32 @@
     say('Reloaded the latest version.', 'ok');
   }
 
+  /** Phase 1: carry Notes (Classic) over automatically, once per page boot - never on a
+   *  retry loop, and never destructive (migrateFromLegacy only ever adds; see src/knowledge.mjs
+   *  and src/main.mjs's jarvis:knowledgeAutoMigrate). Silent when there is nothing to do;
+   *  otherwise says plainly what happened, the same way Import's own confirm step does. */
+  async function autoMigrateIfNeeded() {
+    if (autoMigrateChecked) return;
+    autoMigrateChecked = true;
+    let r;
+    try { r = await window.jarvis.knowledgeAutoMigrate(); } catch { return; }
+    if (!r || r.already) return;
+    if (r.migrated > 0) {
+      JV.notify(`${r.migrated} note${r.migrated === 1 ? '' : 's'} carried over from Notes (Classic) - nothing there was changed.`, { level: 'ok' });
+    }
+    if (r.conflicts?.length) {
+      JV.notify(`${r.conflicts.length} note${r.conflicts.length === 1 ? '' : 's'} from Notes (Classic) could not be carried over automatically (already edited here, or a duplicate id) - open Import from Notes (Classic) to review.`, { level: 'err' });
+    }
+  }
+
   async function load() {
+    await autoMigrateIfNeeded();
     const r = await window.jarvis.knowledgeList();
     if (!r?.ok) { say(r?.error || 'Could not list knowledge notes.', 'err'); }
     notes = r?.notes || [];
     status = r?.status || status;
     renderStatus();
-    if (mode === 'notes') renderList();
+    if (mode === 'notes') { renderFolders(); renderList(); }
     const badge = $('nbKne');
     if (badge) badge.textContent = notes.length ? String(notes.length) : '';
     loadTrash(); // keeps the Trash tab's count current without switching to it
@@ -310,6 +415,7 @@
     baseRevision = null;
     say('');
     renderEditor();
+    renderFolders();
     if (m === 'trash') loadTrash(); else renderList();
   }
 
@@ -355,6 +461,25 @@
     await load();
     renderEditor();
     say(r.overwrote ? 'Saved - the version you replaced was backed up first.' : 'Saved.', 'ok');
+  }
+
+  // ------------------------------------------------------------- Send to Telegram (Phase 1 hardening item 1)
+  // A deliberate, separate action from Save - a note is sent exactly when this is pressed,
+  // never implicitly on every save, the same explicit-action discipline Notes (Classic) used
+  // (a checkbox the person sets before saving) just expressed as its own button here instead,
+  // since the unified editor's Save already has its own revision-check path to keep simple.
+  async function sendToTelegram() {
+    if (!current || mode !== 'notes') return;
+    const btn = $('kneSendTelegram');
+    btn.disabled = true;
+    say('Sending to Telegram…', 'busy');
+    let r;
+    try { r = await window.jarvis.knowledgeSendTelegram(current.id); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    btn.disabled = false;
+    if (!r?.ok) { say(r?.error || 'Could not send this note to Telegram.', 'err'); return; }
+    current = { ...current, sentAt: r.sentAt };
+    renderEditor();
+    say('Sent to Telegram.', 'ok');
   }
 
   // ------------------------------------------------------------- Delete (Phase 23D, Part 2)
@@ -505,7 +630,7 @@
       li.appendChild(el('b', null, String(value)));
       ul.appendChild(li);
     };
-    row('Total notes in Notes', p.total);
+    row('Total notes in Notes (Classic)', p.total);
     row('Eligible to import', p.eligible);
     row('Already imported', p.alreadyImported);
     row('Conflicts (left untouched)', p.conflicts.length, p.conflicts.length > 0);
@@ -546,10 +671,73 @@
     await load();
   }
 
+  // ------------------------------------------------------------- Ask about your notes (Phase 4, AI Knowledge)
+  // Local keyword search only (window.jarvis.notesSearch) - nothing here calls an external AI
+  // provider. "Ask in Chat" fetches the composed prompt (window.jarvis.notesAskContext, also
+  // local) and hands it to JV.chat.insert - the SAME chat composer the person already uses,
+  // pre-filled but never auto-sent, so pressing Send is always their own explicit action.
+  let lastAskQuery = '';
+  function sayAsk(msg, level) {
+    const box = $('kneAskMsg');
+    box.className = `note-msg ${level || 'ok'}`;
+    box.textContent = msg || '';
+    box.hidden = !msg;
+  }
+  function renderAskResults(results) {
+    const ul = $('kneAskResults');
+    ul.replaceChildren();
+    $('kneAskGo').disabled = !results.length;
+    if (!results.length) return;
+    for (const r of results) {
+      const li = el('li');
+      li.appendChild(el('b', null, title(r.title)));
+      li.appendChild(el('small', null, r.folder ? `in ${r.folder}` : 'unfiled'));
+      li.appendChild(el('p', null, r.snippet || ''));
+      ul.appendChild(li);
+    }
+  }
+  async function runAskSearch() {
+    const q = $('kneAskQuery').value.trim();
+    lastAskQuery = q;
+    if (!q) { renderAskResults([]); sayAsk(''); return; }
+    sayAsk('Searching your notes…', 'busy');
+    let r;
+    try { r = await window.jarvis.notesSearch(q); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    if (!r?.ok) { renderAskResults([]); sayAsk(r?.error || 'Could not search your notes.', 'err'); return; }
+    renderAskResults(r.results || []);
+    sayAsk(r.results?.length ? '' : 'Nothing in your notes matches that - try different words.', r.results?.length ? 'ok' : 'busy');
+  }
+  function openAsk() {
+    $('kneAskVeil').hidden = false;
+    $('kneAskQuery').value = '';
+    renderAskResults([]);
+    sayAsk('');
+    $('kneAskQuery').focus();
+  }
+  function closeAsk() { $('kneAskVeil').hidden = true; }
+  async function askInChat() {
+    if (!lastAskQuery) return;
+    $('kneAskGo').disabled = true;
+    sayAsk('Preparing…', 'busy');
+    let r;
+    try { r = await window.jarvis.notesAskContext(lastAskQuery); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    $('kneAskGo').disabled = false;
+    if (!r?.ok) { sayAsk(r?.error || 'Could not prepare that for Chat.', 'err'); return; }
+    closeAsk();
+    JV.chat.insert(r.prompt); // switches to Chat and fills the composer - nothing is sent until the person presses Send themselves
+  }
+
   $('kneNew').onclick = () => { if (mode !== 'notes') setMode('notes'); open(null); };
   $('kneSave').onclick = () => save();
   $('kneFavorite').onclick = () => {
     const btn = favBtn();
+    const on = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', String(on));
+    btn.classList.toggle('on', on);
+    $('kneSave').disabled = !(titleEl().value.trim() || bodyEl().value.trim());
+  };
+  $('kneAiExclude').onclick = () => {
+    const btn = aiExcludeBtn();
     const on = btn.getAttribute('aria-pressed') !== 'true';
     btn.setAttribute('aria-pressed', String(on));
     btn.classList.toggle('on', on);
@@ -560,6 +748,7 @@
   $('kneTabNotes').onclick = () => setMode('notes');
   $('kneTabTrash').onclick = () => setMode('trash');
   $('kneRestore').onclick = restoreCurrent;
+  $('kneSendTelegram').onclick = sendToTelegram;
 
   $('kneDelete').onclick = openDeleteConfirm;
   $('kneDeleteCancel').onclick = closeDeleteConfirm;
@@ -587,6 +776,14 @@
     order[(i + (e.shiftKey ? -1 : 1) + order.length) % order.length].focus();
   });
 
+  $('kneAskOpen').onclick = openAsk;
+  $('kneAskCancel').onclick = closeAsk;
+  $('kneAskQuery').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runAskSearch(); } });
+  $('kneAskQuery').addEventListener('input', () => { clearTimeout($('kneAskQuery')._t); $('kneAskQuery')._t = setTimeout(runAskSearch, 350); });
+  $('kneAskGo').onclick = askInChat;
+  $('kneAskVeil').addEventListener('mousedown', (e) => { if (e.target === $('kneAskVeil')) closeAsk(); });
+  $('kneAskVeil').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeAsk(); } });
+
   $('kneImportOpen').onclick = openImport;
   $('kneImportCancel').onclick = closeImport;
   $('kneImportGo').onclick = confirmImport;
@@ -604,7 +801,7 @@
   // soon as the editor changes again, the same as Notes does.
   const onEdit = () => { if (!$('kneMsg').querySelector('.link-btn')) say(''); $('kneSave').disabled = !(titleEl().value.trim() || bodyEl().value.trim()); };
   const onSaveKey = (e) => { if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); save(); } };
-  for (const input of [titleEl(), tagsEl()]) { input.addEventListener('input', onEdit); input.addEventListener('keydown', onSaveKey); }
+  for (const input of [titleEl(), tagsEl(), folderEl()]) { input.addEventListener('input', onEdit); input.addEventListener('keydown', onSaveKey); }
   bodyEl().addEventListener('input', () => { onEdit(); renderPreview(); });
   bodyEl().addEventListener('keydown', onSaveKey);
 
@@ -620,6 +817,7 @@
   // -------------------------------------------------------------- Google Drive connection (Phase 24C) + backup/restore (Phase 24D)
   let driveOpTimer = null; // polls jarvis:driveOperationStatus while a backup/preview/restore is in flight
   let drivePreview = null; // { backupId, token } - the one currently open in the preview/confirm modal
+  let driveShowByo = false; // Phase 2: once true, always show the BYO-client fields even if the app-owned path is available
 
   function fmtWhen(ms) { return ms ? new Date(ms).toLocaleString() : 'never'; }
   function fmtSize(n) {
@@ -636,15 +834,58 @@
     const word = { disconnected: 'Not connected', connected: 'Connected', expired: 'Authentication expired', error: 'Connection error' }[r.status] || 'Not connected';
     $('driveStatusWord').textContent = `Google Drive: ${word}`;
     $('driveDot').className = `dot st-${r.status}`;
-    $('driveReason').textContent = r.reason || '';
+    $('driveReason').textContent = (r.reason || '') + (r.status === 'connected' && r.appOwned ? ' Connected through JARVIS\'s own Google sign-in.' : '');
+
+    // Phase 2 (Decision 1): the no-setup path is offered only while disconnected, no Client ID
+    // is configured yet, this build actually has a real app-owned Client ID available, and the person has not already
+    // asked to use their own Client ID instead - BYO-client (unchanged) is the fallback in
+    // every other case, exactly as it has always been.
+    let appOwned = { available: false };
+    if (!r.clientConfigured && r.status === 'disconnected') {
+      try { appOwned = await window.jarvis.driveAppOwnedStatus(); } catch { /* treated as unavailable */ }
+    }
+    const showAppOwned = appOwned.available && !r.clientConfigured && r.status === 'disconnected' && !driveShowByo;
+    $('driveAppOwnedSection').hidden = !showAppOwned;
+
     $('driveClientFields').hidden = true;
-    $('driveConfigureBtn').hidden = !!r.clientConfigured;
+    $('driveConfigureBtn').hidden = !!r.clientConfigured || showAppOwned;
     $('driveConnectBtn').hidden = !(r.clientConfigured && r.status === 'disconnected');
     $('driveReconnectBtn').hidden = !(r.clientConfigured && (r.status === 'expired' || r.status === 'error'));
     $('driveDisconnectBtn').hidden = !(r.status === 'connected' || r.status === 'expired');
     $('driveBackupSection').hidden = r.status !== 'connected';
-    if (r.status === 'connected') await renderDriveOpStatus();
+    $('driveSyncSection').hidden = r.status !== 'connected';
+    if (r.status === 'connected') { await renderDriveOpStatus(); await renderDriveSyncStatus(); }
   }
+
+  /** Phase 3: a plain-language status line - never silent about a conflict, never silent
+   *  about being offline/behind - reusing the controller's own four words (idle/syncing/
+   *  offline/error/conflict) rather than inventing a second vocabulary for the same thing. */
+  async function renderDriveSyncStatus() {
+    let s;
+    try { s = await window.jarvis.driveSyncStatus(); } catch { return; }
+    const words = {
+      idle: 'Synced', syncing: 'Syncing…', offline: 'Offline - will sync once reconnected',
+      error: s.lastError || 'Sync error',
+      // Phase 5 (Task 3): named, not just counted - "clearly visible" means the person can
+      // tell which note(s) to open, not just that something somewhere needs attention.
+      conflict: `${s.conflictCount} note${s.conflictCount === 1 ? '' : 's'} need attention: ${(s.conflictingNotes || []).map((n) => `"${n.title}"`).join(', ')} - open Version History on each to see both versions`,
+      // Phase 6 (Task 5): corrupted/malformed remote data was refused, not silently applied -
+      // the local note(s) it would have replaced are untouched; this is informational, not a
+      // conflict to resolve, and clears on its own once the remote side is fixed and re-synced.
+      quarantine: `${s.quarantinedCount} file${s.quarantinedCount === 1 ? '' : 's'} from Google Drive looked corrupted and were not applied - your local notes were not changed.`,
+    };
+    let text = words[s.state] || 'Not synced yet.';
+    if (s.state === 'idle' && s.lastSyncAt) text = `Synced ${JV.ago(s.lastSyncAt)}`;
+    if (s.syncing && s.progress?.total) text = `Syncing… ${s.progress.current}/${s.progress.total}`;
+    $('driveSyncStatus').textContent = text;
+    $('driveSyncNowBtn').disabled = !!s.syncing;
+  }
+  $('driveSyncNowBtn').onclick = async () => {
+    $('driveSyncNowBtn').disabled = true;
+    try { await window.jarvis.driveSyncNow(); } catch { /* status below reflects whatever actually happened */ }
+    await renderDriveSyncStatus();
+    await load(); // a pull may have changed the list - the same safe, draft-preserving refresh a Drive restore already uses
+  };
 
   /** Polls main.mjs's one in-flight-operation record - real progress, read, never guessed. */
   async function renderDriveOpStatus() {
@@ -670,6 +911,18 @@
     }
   }
   $('driveConfigureBtn').onclick = () => { $('driveClientFields').hidden = false; $('driveClientId').focus(); };
+  $('driveShowByoBtn').onclick = () => { driveShowByo = true; renderDriveStatus(); };
+  $('driveConnectAppOwnedBtn').onclick = async () => {
+    $('driveConnectAppOwnedBtn').disabled = true;
+    $('driveStatusWord').textContent = 'Google Drive: Connecting…';
+    try {
+      const r = await window.jarvis.driveConnectAppOwned();
+      if (!r.ok) JV.notify(r.error || 'Could not connect to Google Drive.', { level: 'err' });
+    } finally {
+      $('driveConnectAppOwnedBtn').disabled = false;
+      await renderDriveStatus();
+    }
+  };
   $('driveSaveClient').onclick = async () => {
     const clientId = $('driveClientId').value.trim();
     const clientSecret = $('driveClientSecret').value;

@@ -44,7 +44,7 @@ check('tags: capped at 50, the rest silently dropped rather than refusing the wh
 check('a well-formed note passes through with its fields trimmed', () => {
   const r = validateNoteInput({ title: '  Shopping  ', body: 'milk\nbread', tags: ['home', ' home '], favorite: true, folder: ' Personal ' });
   assert.equal(r.ok, true);
-  assert.deepEqual(r.value, { title: 'Shopping', body: 'milk\nbread', tags: ['home'], favorite: true, folder: 'Personal' });
+  assert.deepEqual(r.value, { title: 'Shopping', body: 'milk\nbread', tags: ['home'], favorite: true, folder: 'Personal', aiExcluded: false });
 });
 check('no input at all is refused with a plain error, not a throw', () => {
   assert.equal(validateNoteInput(null).ok, false);
@@ -54,7 +54,7 @@ check('no input at all is refused with a plain error, not a throw', () => {
 check('a missing or wrong-typed field becomes its empty value, never thrown', () => {
   const r = validateNoteInput({ body: 42, tags: 'home', favorite: 'yes', folder: 9 });
   assert.equal(r.ok, true);
-  assert.deepEqual(r.value, { title: null, body: '', tags: [], favorite: false, folder: null });
+  assert.deepEqual(r.value, { title: null, body: '', tags: [], favorite: false, folder: null, aiExcluded: false });
 });
 check('an empty title/folder after trimming is null, not an empty string - so renderNoteFile omits the line entirely', () => {
   const r = validateNoteInput({ title: '   ', body: 'x', folder: '  ' });
@@ -229,22 +229,23 @@ check('the bridge exposes all ten knowledge calls, and the window is never hande
     assert.ok(pre.includes(k), `${k} is exposed`);
   }
 });
-check('the Devices-style discovery rule holds here too: Knowledge Notes is reachable from the sidebar, from search, and its view and script exist exactly once', () => {
+check('the Devices-style discovery rule holds here too: Notes (the unified page, née Knowledge Notes) is reachable from the sidebar, from search, and its view and script exist exactly once', () => {
   assert.match(html, /id="navKne" data-view="kne"/);
   assert.match(html, /id="view-kne"/);
   assert.match(html, /<script src="knowledge\.js"><\/script>/);
-  assert.match(fs.readFileSync(new URL('../src/renderer/app.js', import.meta.url), 'utf8'), /\['Knowledge Notes', 'kne'\]/);
+  assert.match(fs.readFileSync(new URL('../src/renderer/app.js', import.meta.url), 'utf8'), /\['Notes', 'kne'\]/);
   const ids = [
-    'kneNew', 'kneImportOpen', 'kneTabNotes', 'kneTabTrash', 'kneTrashCount', 'kneSearch', 'kneList',
+    'kneNew', 'kneImportOpen', 'kneTabNotes', 'kneTabTrash', 'kneTrashCount', 'kneSearch', 'kneFolderList', 'kneList',
     'kneTitle', 'kneWhen', 'kneFavorite', 'kneRestore', 'knePreviewToggle', 'kneDelete', 'kneSave',
-    'kneTags', 'kneMsg', 'kneEdit', 'knePreview', 'kneStorageNote',
+    'kneFolder', 'kneTags', 'kneMsg', 'kneEdit', 'knePreview', 'kneStorageNote', 'kneAiExclude',
+    'kneAskOpen', 'kneAskVeil', 'kneAskTitle', 'kneAskQuery', 'kneAskResults', 'kneAskMsg', 'kneAskCancel', 'kneAskGo',
     'kneImportVeil', 'kneImportTitle', 'kneImportStats', 'kneImportDest', 'kneImportMsg', 'kneImportCancel', 'kneImportGo',
     'kneDeleteVeil', 'kneDeleteTitle', 'kneDeleteName', 'kneDeleteCancel', 'kneDeleteGo',
   ];
   for (const id of ids) assert.equal(html.split(`id="${id}"`).length, 2, `"${id}" is declared exactly once`);
 });
-check('Knowledge Notes is named apart from the pre-existing Knowledge Base panel (Phase 23D, Part 4) - a label-only change, nothing structural', () => {
-  assert.match(html, /<h2>Knowledge Notes<\/h2>/);
+check('Notes (the unified page) is named apart from the pre-existing Knowledge Base panel - a label-only change, nothing structural', () => {
+  assert.match(html, /<h2>Notes<\/h2>/);
   assert.match(html, />Knowledge Base</, 'the other panel\'s own label is untouched');
 });
 check('knowledge.js is loaded after notes.js and before app.js', () => {
@@ -355,6 +356,32 @@ check('restoring a version requires two presses (arm, then confirm), the same pa
   const body = knowledgeJs.slice(knowledgeJs.indexOf('async function restoreVersion'), knowledgeJs.indexOf('async function restoreVersion') + 600);
   assert.match(body, /if \(btn\.dataset\.armed !== '1'\)/);
   assert.match(body, /backed up first/);
+});
+
+// ------------------------------------------------------------------ Phase 4: AI Knowledge - read-only, never auto-sent
+check('jarvis:notesSearch and jarvis:notesAskContext are read-only - neither handler\'s own body calls any write/save/delete function', () => {
+  for (const h of ['jarvis:notesSearch', 'jarvis:notesAskContext']) {
+    const start = main.indexOf(`ipcMain.handle('${h}'`);
+    assert.ok(start >= 0, `${h} handler exists`);
+    const end = main.indexOf('\n});', start);
+    const body = main.slice(start, end);
+    assert.doesNotMatch(body, /saveKnowledgeNote|writeKnowledgeNote|deleteKnowledgeNote|restoreKnowledgeNote|migrateFromLegacy/, `${h} never calls a write/delete/migrate function`);
+  }
+});
+check('neither Notes-AI handler, nor notes-search.mjs, ever calls out to a network or an external AI provider directly', () => {
+  assert.doesNotMatch(main.slice(main.indexOf("jarvis:notesSearch'"), main.indexOf("jarvis:notesAskContext'") + 500), /fetch\(|https?:\/\//);
+  const notesSearchSrc = fs.readFileSync(new URL('../src/notes-search.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(notesSearchSrc, /fetch\(|https?:\/\/|anthropic|openai/i);
+});
+check('jarvis:notesAskContext hands the renderer a PROMPT to review, never sends anything itself - its reply shape has no "sent" or "response" field, only prompt/sources', () => {
+  const body = main.slice(main.indexOf("ipcMain.handle('jarvis:notesAskContext'"), main.indexOf("ipcMain.handle('jarvis:notesAskContext'") + 500);
+  assert.match(body, /prompt: buildContextPrompt/);
+  assert.doesNotMatch(body, /\bsend\(|query\(|\.submit\(/);
+});
+check('the renderer only ever hands the composed prompt to JV.chat.insert - never a direct send/submit call of its own', () => {
+  assert.match(knowledgeJs, /JV\.chat\.insert\(r\.prompt\)/);
+  const askBody = knowledgeJs.slice(knowledgeJs.indexOf('async function askInChat'), knowledgeJs.indexOf('async function askInChat') + 700);
+  assert.doesNotMatch(askBody, /\.submit\(|chat\.send\(/);
 });
 
 console.log(`\nknowledge-ipc-test: ${pass} passed, ${fail} failed`);

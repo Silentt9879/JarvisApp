@@ -235,6 +235,8 @@ contextBridge.exposeInMainWorld('jarvis', {
   knowledgeSave: (input) => ipcRenderer.invoke('jarvis:knowledgeSave', input),
   knowledgeImportPreview: () => ipcRenderer.invoke('jarvis:knowledgeImportPreview'),
   knowledgeImport: () => ipcRenderer.invoke('jarvis:knowledgeImport'),
+  knowledgeAutoMigrate: () => ipcRenderer.invoke('jarvis:knowledgeAutoMigrate'),
+  knowledgeSendTelegram: (id) => ipcRenderer.invoke('jarvis:knowledgeSendTelegram', id),
   knowledgeTrash: () => ipcRenderer.invoke('jarvis:knowledgeTrash'),
   knowledgeTrashRead: (id) => ipcRenderer.invoke('jarvis:knowledgeTrashRead', id),
   knowledgeDelete: (id, baseRevision) => ipcRenderer.invoke('jarvis:knowledgeDelete', id, baseRevision),
@@ -242,17 +244,28 @@ contextBridge.exposeInMainWorld('jarvis', {
   knowledgeSnapshots: (id) => ipcRenderer.invoke('jarvis:knowledgeSnapshots', id),
   knowledgeSnapshotRead: (id, file) => ipcRenderer.invoke('jarvis:knowledgeSnapshotRead', id, file),
   knowledgeSnapshotRestore: (id, file, baseRevision) => ipcRenderer.invoke('jarvis:knowledgeSnapshotRestore', id, file, baseRevision),
+  // Phase 4 (AI Knowledge): local, read-only search/retrieval over Notes - never a direct
+  // call to an external AI provider from here; see jarvis:notesAskContext's own comment.
+  notesSearch: (query) => ipcRenderer.invoke('jarvis:notesSearch', query),
+  notesAskContext: (query) => ipcRenderer.invoke('jarvis:notesAskContext', query),
   // Google Drive connection (Phase 24C): status/configure/connect/disconnect only - never a
   // token, never a backup or restore call (neither exists yet).
   driveStatus: () => ipcRenderer.invoke('jarvis:driveStatus'),
   driveConfigureClient: (clientId, clientSecret) => ipcRenderer.invoke('jarvis:driveConfigureClient', clientId, clientSecret),
   driveConnect: () => ipcRenderer.invoke('jarvis:driveConnect'),
   driveDisconnect: () => ipcRenderer.invoke('jarvis:driveDisconnect'),
+  // Phase 2 (Decision 1): the app-owned, no-Client-ID path - available only once both of
+  // drive-app-client.mjs's env gates are open on this build.
+  driveAppOwnedStatus: () => ipcRenderer.invoke('jarvis:driveAppOwnedStatus'),
+  driveConnectAppOwned: () => ipcRenderer.invoke('jarvis:driveConnectAppOwned'),
   driveBackupNow: () => ipcRenderer.invoke('jarvis:driveBackupNow'),
   driveBackupHistory: () => ipcRenderer.invoke('jarvis:driveBackupHistory'),
   driveRestorePreview: (backupId) => ipcRenderer.invoke('jarvis:driveRestorePreview', backupId),
   driveRestoreConfirm: (backupId, token) => ipcRenderer.invoke('jarvis:driveRestoreConfirm', backupId, token),
   driveOperationStatus: () => ipcRenderer.invoke('jarvis:driveOperationStatus'),
+  // Phase 3: bidirectional sync status/trigger - separate from backup/restore above.
+  driveSyncStatus: () => ipcRenderer.invoke('jarvis:driveSyncStatus'),
+  driveSyncNow: () => ipcRenderer.invoke('jarvis:driveSyncNow'),
   // ASP.NET sites and APIs: dotnet watch run, shown in the window.
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),

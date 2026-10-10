@@ -255,7 +255,7 @@ check('main tells the window only whether Telegram is ready and what it is calle
   && !/token: tg\.token/.test(main));
 check('the note is saved before anything is sent, so a Telegram failure cannot lose it',
   main.indexOf('const r = notes.save(') < main.indexOf('await sendNote('));
-check('Notes is reachable from the search box as a view', /\['Notes', 'notes'\]/.test(read(`${APP}/src/renderer/app.js`)));
+check('Notes (Classic) is reachable from the search box as a view', /\['Notes \(Classic\)', 'notes'\]/.test(read(`${APP}/src/renderer/app.js`)));
 
 console.log(`\n${pass} passed, ${fails.length} failed`);
 for (const f of fails) console.log('  FAILED: ' + f);

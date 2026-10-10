@@ -23,9 +23,10 @@ import {
   newId as newKnowledgeId, knowledgePaths, listKnowledgeNotes, migrationComplete as knowledgeMigrationComplete,
   validateNoteInput, saveKnowledgeNote, noteRevision, previewMigration, migrateFromLegacy,
   listTrash, deleteKnowledgeNote, restoreKnowledgeNote,
-  listSnapshots, readSnapshot, restoreSnapshot,
+  listSnapshots, readSnapshot, restoreSnapshot, historyStats, markKnowledgeNoteSent,
 } from './knowledge.mjs';
 import { authStatus, authLogout, startLogin } from './auth.mjs';
+import { appOwnedLoginAvailable, appOwnedClientId } from './drive-app-client.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
 import os from 'node:os';
 import { call as telegramCall, sendTelegram, verifyToken, discoverChat, discoverGroup, isToken, isChatId } from './telegram.mjs';
@@ -43,6 +44,8 @@ import { resolveTelegramToken, telegramTokenField, migrateTelegramToken } from '
 import { createDriveConnection } from './drive-connection.mjs';
 import { createGoogleDriveProvider } from './google-drive-provider.mjs';
 import { createDriveBackupController } from './drive-backup-controller.mjs';
+import { createDriveSyncController } from './drive-sync-controller.mjs';
+import { searchNotes, notesForAiContext, buildContextPrompt } from './notes-search.mjs';
 import { describeStoppedWork } from './active-work.mjs';
 import { closePanes } from './pane-windows.mjs';
 import { normalizeWorkspaces, addWorkspace, renameWorkspace, selectWorkspace, removeWorkspace, setWorkspaceTrust, setProjectSettings, projectSettings, workspacesForWindow, NO_WORKSPACE } from './workspaces.mjs';
@@ -217,7 +220,12 @@ const driveConnection = createDriveConnection({
 function driveStatusForWindow() {
   const s = driveConnection.status();
   const c = driveConnection.getClient();
-  return { status: s.status, reason: s.reason || null, clientConfigured: !!c };
+  return {
+    status: s.status, reason: s.reason || null, clientConfigured: !!c,
+    // Phase 2 (Decision 1): lets the UI say "connected through JARVIS's own sign-in" vs
+    // "connected through your own Client ID" - never the id's value either way.
+    appOwned: !!c && c.clientId === appOwnedClientId(),
+  };
 }
 
 function phoneConfig() {
@@ -2667,7 +2675,15 @@ function knowledgeStorageStatus() {
   const { notesDir } = knowledgePaths(userDir);
   let legacyNoteCount = 0;
   try { legacyNoteCount = notes.list().length; } catch { /* unreadable legacy file: reported as 0, never thrown */ }
-  return { storageDir: notesDir, migrationComplete: knowledgeMigrationComplete(userDir), legacyNoteCount };
+  const history = historyStats(userDir);
+  return {
+    storageDir: notesDir, migrationComplete: knowledgeMigrationComplete(userDir), legacyNoteCount,
+    // Decision 4: a size/count warning only - nothing here ever prunes Version History.
+    historyCount: history.count, historyBytes: history.bytes, historyWarn: history.warn,
+    // Phase 1 hardening item 1: lets the unified editor show/hide "Send to Telegram" the same
+    // way notes.js already decides it, without a second round trip.
+    telegram: telegramStatus(),
+  };
 }
 ipcMain.handle('jarvis:knowledgeStatus', () => knowledgeStorageStatus());
 ipcMain.handle('jarvis:knowledgeList', () => {
@@ -2678,7 +2694,7 @@ ipcMain.handle('jarvis:knowledgeList', () => {
     status: knowledgeStorageStatus(),
     notes: r.notes.map((n) => ({
       id: n.id, title: n.title, created: n.created, updated: n.updated, tags: n.tags,
-      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, corrupt: n.corrupt,
+      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, aiExcluded: n.aiExcluded, corrupt: n.corrupt,
     })),
   };
 });
@@ -2691,7 +2707,7 @@ ipcMain.handle('jarvis:knowledgeRead', (_e, id) => {
     ok: true,
     note: {
       id: n.id, title: n.title, created: n.created, updated: n.updated, tags: n.tags,
-      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, body: n.body,
+      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, aiExcluded: n.aiExcluded, body: n.body,
     },
     revision: noteRevision(userDir, id),
   };
@@ -2706,6 +2722,7 @@ ipcMain.handle('jarvis:knowledgeSave', (_e, input) => {
   if (!r.ok) return r;
   if (r.overwrote) log('knowledge note overwrite confirmed', id, '- prior revision backed up as', r.overwrote.snapshot || '(nothing to back up)');
   log('knowledge note saved', id);
+  if (!r.unchanged) driveSyncController.requestSync(); // Phase 3: debounced - local-first, Drive follows in the background
   return { ok: true, note: r.note, revision: r.revision, unchanged: r.unchanged, overwrote: r.overwrote };
 });
 
@@ -2718,7 +2735,42 @@ ipcMain.handle('jarvis:knowledgeImportPreview', () => previewMigration(userDir))
 ipcMain.handle('jarvis:knowledgeImport', () => {
   const r = migrateFromLegacy(userDir);
   log('knowledge import from Notes', `migrated ${r.migrated}, skipped ${r.skipped}, conflicts ${r.conflicts.length}, errors ${r.errors.length}`);
+  if (r.migrated > 0) driveSyncController.requestSync();
   return r;
+});
+
+// Phase 1 (Unified Notes), hardening item 1: porting "Send to Telegram" from Notes (Classic).
+// The token itself never crosses into the window - exactly the same boundary notes.mjs's own
+// sendNote already holds (see notes-test.mjs's assertion of that); this handler only ever
+// hands back {ok} or {ok:false,error}, the same shape jarvis:noteSave's telegram branch uses.
+ipcMain.handle('jarvis:knowledgeSendTelegram', async (_e, id) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
+  const r = listKnowledgeNotes(userDir);
+  const n = r.ok && r.notes.find((x) => x.id === id);
+  if (!n) return { ok: false, error: 'That note could not be found.' };
+  const tg = phoneConfig().telegram;
+  if (!telegramReady(tg)) return { ok: false, error: 'Telegram is not set up yet - do that in Settings > Phone alerts.' };
+  const when = new Date(n.updated || Date.now()).toLocaleString('en-GB');
+  const sent = await sendTelegram(tg, { title: `📝 Note · ${n.title || 'Untitled note'}`, body: `${when}\n\n${n.body}` });
+  if (sent.ok) { markKnowledgeNoteSent(userDir, id, Date.now()); log('knowledge note sent to Telegram', id); }
+  else log('knowledge note not sent to Telegram:', sent.error);
+  return sent.ok ? { ok: true, sentAt: Date.now() } : { ok: false, error: sent.error };
+});
+
+// Phase 1 (Unified Notes): the same migrateFromLegacy above, called automatically rather than
+// only from the "Import from Notes" button - the unified Notes page calls this once when it
+// opens so a person never has to find and press Import by hand for their notes to show up.
+// Safe to call unconditionally (migrateFromLegacy already is), but the fast marker check
+// skips the real work entirely once migration has already completed, so this costs nothing on
+// every later load. Still never touches notes.json - same guarantees as Import above.
+ipcMain.handle('jarvis:knowledgeAutoMigrate', () => {
+  if (knowledgeMigrationComplete(userDir)) return { ok: true, already: true, migrated: 0, skipped: 0, conflicts: [], errors: [], total: 0 };
+  const r = migrateFromLegacy(userDir);
+  if (r.migrated > 0 || r.conflicts.length > 0 || r.errors.length > 0) {
+    log('knowledge auto-migrate from Notes', `migrated ${r.migrated}, skipped ${r.skipped}, conflicts ${r.conflicts.length}, errors ${r.errors.length}`);
+  }
+  if (r.migrated > 0) driveSyncController.requestSync();
+  return { ...r, already: false };
 });
 
 // Delete moves a note to Trash - it is never gone for good from here, and a stale editor (one
@@ -2743,13 +2795,13 @@ ipcMain.handle('jarvis:knowledgeDelete', (_e, id, baseRevision) => {
   if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
   const rev = typeof baseRevision === 'string' ? baseRevision : null;
   const r = deleteKnowledgeNote(userDir, id, { baseRevision: rev });
-  if (r.ok) log('knowledge note moved to Trash', id);
+  if (r.ok) { log('knowledge note moved to Trash', id); driveSyncController.requestSync(); }
   return r;
 });
 ipcMain.handle('jarvis:knowledgeRestore', (_e, id) => {
   if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
   const r = restoreKnowledgeNote(userDir, id);
-  if (r.ok) log('knowledge note restored from Trash', id);
+  if (r.ok) { log('knowledge note restored from Trash', id); driveSyncController.requestSync(); }
   return r;
 });
 
@@ -2768,8 +2820,21 @@ ipcMain.handle('jarvis:knowledgeSnapshotRestore', (_e, id, file, baseRevision) =
   if (typeof id !== 'string' || !id || typeof file !== 'string' || !file) return { ok: false, error: 'No version reference was given.' };
   const rev = typeof baseRevision === 'string' ? baseRevision : null;
   const r = restoreSnapshot(userDir, id, file, { baseRevision: rev });
-  if (r.ok) log('knowledge note restored from version history', id, file);
+  if (r.ok) { log('knowledge note restored from version history', id, file); driveSyncController.requestSync(); }
   return r;
+});
+
+// ---------------------------------------------------------------- IPC: Notes AI Knowledge (Phase 4)
+// Read-only, local-only: both handlers only ever call into notes-search.mjs, which only ever
+// calls listKnowledgeNotes - nothing here writes a note, calls an external AI provider, or
+// can be used to bypass aiExcluded. jarvis:notesAskContext hands back a composed PROMPT the
+// window inserts into the chat composer (JV.chat.insert - see knowledge.js) for the person to
+// review and press Send themselves; nothing here sends anything to Claude on its own.
+ipcMain.handle('jarvis:notesSearch', (_e, query) => searchNotes(userDir, typeof query === 'string' ? query : ''));
+ipcMain.handle('jarvis:notesAskContext', (_e, query) => {
+  const r = notesForAiContext(userDir, typeof query === 'string' ? query : '');
+  if (!r.ok) return r;
+  return { ok: true, prompt: buildContextPrompt(r.query, r.sources), sources: r.sources.map((s) => ({ id: s.id, title: s.title, folder: s.folder })) };
 });
 
 // ---------------------------------------------------------------- IPC: Google Drive connection (Phase 24C)
@@ -2789,12 +2854,32 @@ ipcMain.handle('jarvis:driveConfigureClient', (_e, clientId, clientSecret) => {
 ipcMain.handle('jarvis:driveConnect', async () => {
   const r = await driveConnection.connect({ timeoutMs: 120000 });
   log('Drive connect:', r.ok ? 'connected' : `failed (${r.error})`);
+  if (r.ok) driveSyncController.syncNow(); // Phase 3: "sync on reconnection" - fire-and-forget, never blocks the Connect reply
   return { ok: r.ok, error: r.ok ? undefined : r.error, ...driveStatusForWindow() };
 });
 ipcMain.handle('jarvis:driveDisconnect', async () => {
   await driveConnection.disconnect();
   log('Drive disconnected');
   return driveStatusForWindow();
+});
+
+// Phase 2 (Decision 1): the app-owned, no-setup path - "Connect Google Account" with nothing
+// to paste. Both environment gates (drive-app-client.mjs) must be open for `available` to be
+// true; until a real, Google-verified Client ID exists, this is false on every build and the
+// button below it in the renderer simply never appears - BYO-client above is completely
+// unaffected either way. driveConnectAppOwned does not reimplement anything: it calls the
+// exact same configureClient + connect PKCE flow BYO-client uses, just with the app's own
+// (non-secret) Client ID instead of one the person typed in - see drive-connection.mjs, which
+// has no idea which source a Client ID came from.
+ipcMain.handle('jarvis:driveAppOwnedStatus', () => ({ available: appOwnedLoginAvailable() }));
+ipcMain.handle('jarvis:driveConnectAppOwned', async () => {
+  if (!appOwnedLoginAvailable()) return { ok: false, error: 'Google sign-in through JARVIS is not available on this build yet.' };
+  const configured = driveConnection.configureClient({ clientId: appOwnedClientId(), clientSecret: '' });
+  if (!configured.ok) return configured;
+  const r = await driveConnection.connect({ timeoutMs: 120000 });
+  log('Drive connect (app-owned):', r.ok ? 'connected' : `failed (${r.error})`);
+  if (r.ok) driveSyncController.syncNow();
+  return { ok: r.ok, error: r.ok ? undefined : r.error, ...driveStatusForWindow() };
 });
 
 // ---------------------------------------------------------------- IPC: Google Drive backup/restore (Phase 24D)
@@ -2822,6 +2907,28 @@ ipcMain.handle('jarvis:driveRestoreConfirm', async (_e, backupId, token) => {
   return r;
 });
 ipcMain.handle('jarvis:driveOperationStatus', () => driveBackupController.operationStatus());
+
+// ---------------------------------------------------------------- IPC: Google Drive sync (Phase 3)
+// Deliberately separate from the backup controller above: sync maintains one LIVE mirror
+// (src/drive-sync.mjs's own "JARVIS Notes Sync" folder) and keeps backup's own immutable,
+// timestamped runs completely untouched - "manual recovery backups stay independent of sync"
+// is true by construction, not by a runtime check, since this controller never imports or
+// calls anything backup-related. requestSync() is wired into every knowledge save/delete/
+// restore/import handler below, debounced - local-first: a save lands on disk immediately,
+// regardless of Drive; sync follows a few seconds later, in the background, never blocking.
+const driveSyncController = createDriveSyncController({
+  userDir,
+  getProvider: () => createGoogleDriveProvider({ getAccessToken: driveConnection.getAccessToken, log }),
+  isConnected: () => driveConnection.status().status === 'connected',
+  log,
+});
+ipcMain.handle('jarvis:driveSyncStatus', () => driveSyncController.status());
+ipcMain.handle('jarvis:driveSyncNow', () => driveSyncController.syncNow());
+// A slow heartbeat (not a tight poll) picks up a retry whose backoff has elapsed, and is also
+// how a device notices another device's remote changes with no local edit of its own to
+// trigger the debounce. No-op whenever nothing is actually due - see drive-sync-controller.mjs.
+const driveSyncHeartbeat = setInterval(() => driveSyncController.syncIfDue(), 5 * 60_000);
+app.on('before-quit', () => clearInterval(driveSyncHeartbeat));
 
 // ---------------------------------------------------------------- IPC: files (read-only) + VS Code
 let fileIndex = null;
@@ -2950,6 +3057,9 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
     if (launchHidden) log('started at login, in the tray');
     runTelegramTokenMigration();
     createWindow();
+    // Phase 3: "sync on startup" - fire-and-forget; a disconnected account is simply a no-op
+    // (driveSyncController's own isConnected() check), never a startup delay either way.
+    if (driveConnection.status().status === 'connected') driveSyncController.syncNow();
     createTray();
     watchDeliveries();
     // Idle until remote control is switched on; then it listens. See remote.mjs.

@@ -79,30 +79,48 @@ function makeDrive(userDir) {
   return { remote, controller };
 }
 
-function makeJarvis(userDir, drive) {
-  const status = () => ({ storageDir: K.knowledgePaths(userDir).notesDir, migrationComplete: K.migrationComplete(userDir), legacyNoteCount: 0 });
-  const driveCalls = drive ? {
-    driveStatus: async () => ({ status: 'connected', clientConfigured: true }),
+function makeJarvis(userDir, drive, opts = {}) {
+  const telegram = opts.telegram || { ready: false, name: null };
+  const sent = []; // records of {id} this fake "sent" - the test's own hook into what the IPC layer would have done
+  const status = () => {
+    const h = K.historyStats(userDir);
+    return {
+      storageDir: K.knowledgePaths(userDir).notesDir, migrationComplete: K.migrationComplete(userDir), legacyNoteCount: 0,
+      historyCount: h.count, historyBytes: h.bytes, historyWarn: h.warn, telegram,
+    };
+  };
+  const appOwned = opts.appOwned || { available: false };
+  const driveCalls = (drive || opts.driveStatus) ? {
+    driveStatus: opts.driveStatus || (async () => ({ status: 'connected', clientConfigured: true, appOwned: false })),
     driveConfigureClient: async () => ({ ok: true }),
     driveConnect: async () => ({ ok: true, status: 'connected' }),
     driveDisconnect: async () => ({ status: 'disconnected' }),
+    driveAppOwnedStatus: async () => appOwned,
+    driveConnectAppOwned: opts.driveConnectAppOwned || (async () => ({ ok: true, status: 'connected' })),
+    driveSyncStatus: opts.driveSyncStatus || (async () => ({ state: 'idle', lastSyncAt: null, conflictCount: 0, syncing: false })),
+    driveSyncNow: opts.driveSyncNow || (async () => ({ ok: true })),
     driveBackupNow: () => drive.controller.backupNow(),
     driveBackupHistory: () => drive.controller.backupHistory(),
     driveRestorePreview: (id) => drive.controller.restorePreview(id),
     driveRestoreConfirm: (id, token) => drive.controller.restoreConfirm(id, token),
     driveOperationStatus: () => drive.controller.operationStatus(),
   } : {};
+  const notesAi = {
+    notesSearch: opts.notesSearch || (async () => ({ ok: true, results: [] })),
+    notesAskContext: opts.notesAskContext || (async () => ({ ok: false, error: 'no fake configured' })),
+  };
   return {
     ...driveCalls,
+    ...notesAi,
     knowledgeList: async () => {
       const r = K.listKnowledgeNotes(userDir);
-      return { ok: r.ok, error: r.error, status: status(), notes: (r.notes || []).map((x) => ({ id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, folder: x.folder, sentAt: x.sentAt, corrupt: x.corrupt })) };
+      return { ok: r.ok, error: r.error, status: status(), notes: (r.notes || []).map((x) => ({ id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, folder: x.folder, sentAt: x.sentAt, aiExcluded: x.aiExcluded, corrupt: x.corrupt })) };
     },
     knowledgeRead: async (id) => {
       const r = K.listKnowledgeNotes(userDir);
       const x = r.ok && r.notes.find((e) => e.id === id);
       if (!x) return { ok: false, error: 'not found' };
-      return { ok: true, note: { id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, folder: x.folder, sentAt: x.sentAt, body: x.body }, revision: K.noteRevision(userDir, id) };
+      return { ok: true, note: { id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, folder: x.folder, sentAt: x.sentAt, aiExcluded: x.aiExcluded, body: x.body }, revision: K.noteRevision(userDir, id) };
     },
     knowledgeSave: async (input) => {
       const v = K.validateNoteInput(input);
@@ -114,6 +132,13 @@ function makeJarvis(userDir, drive) {
     },
     knowledgeImportPreview: async () => K.previewMigration(userDir),
     knowledgeImport: async () => K.migrateFromLegacy(userDir),
+    // Mirrors main.mjs's jarvis:knowledgeAutoMigrate exactly: a fast "already done?" check,
+    // then the same migrateFromLegacy every other migration path already uses.
+    knowledgeAutoMigrate: async () => {
+      if (K.migrationComplete(userDir)) return { ok: true, already: true, migrated: 0, skipped: 0, conflicts: [], errors: [], total: 0 };
+      const r = K.migrateFromLegacy(userDir);
+      return { ...r, already: false };
+    },
     knowledgeTrash: async () => {
       const r = K.listTrash(userDir);
       return { ok: r.ok, error: r.error, notes: (r.notes || []).map((x) => ({ id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, deletedAt: x.deletedAt, corrupt: x.corrupt })) };
@@ -129,6 +154,19 @@ function makeJarvis(userDir, drive) {
     knowledgeSnapshots: async (id) => K.listSnapshots(userDir, id),
     knowledgeSnapshotRead: async (id, file) => K.readSnapshot(userDir, id, file),
     knowledgeSnapshotRestore: async (id, file, baseRevision) => K.restoreSnapshot(userDir, id, file, { baseRevision: baseRevision ?? null }),
+    // Phase 1 hardening item 1: mirrors main.mjs's jarvis:knowledgeSendTelegram, minus Electron
+    // and the real network call - a fake "sent" rather than a real telegram.mjs call, the same
+    // level main.mjs itself sits at relative to the real Telegram API.
+    knowledgeSendTelegram: async (id) => {
+      if (!telegram.ready) return { ok: false, error: 'Telegram is not set up yet - do that in Settings > Phone alerts.' };
+      const n = K.listKnowledgeNotes(userDir).notes.find((x) => x.id === id);
+      if (!n) return { ok: false, error: 'That note could not be found.' };
+      sent.push({ id, title: n.title, body: n.body });
+      const at = Date.now();
+      K.markKnowledgeNoteSent(userDir, id, at);
+      return { ok: true, sentAt: at };
+    },
+    __sent: sent,
   };
 }
 
@@ -136,7 +174,7 @@ function makeJarvis(userDir, drive) {
  *  Knowledge page - a new JS scope every time, but `storage` (localStorage) and `userDir`
  *  (the files on disk) can be the SAME object/folder across two calls, to prove a draft or a
  *  note really does survive "closing and reopening JARVIS", not just staying in one run's memory. */
-function boot(userDir, storage, drive) {
+function boot(userDir, storage, drive, jarvisOpts) {
   const byId = new Map();
   const handlers = {}; // a real, minimal pub/sub - JV.on/.emit were no-ops before Phase 24D needed them wired for real
   const notifications = [];
@@ -151,8 +189,10 @@ function boot(userDir, storage, drive) {
     notify: (msg, opts) => { notifications.push({ msg, ...opts }); },
     notifications,
     renderMarkdown: (target, text) => { target.textContent = String(text || ''); },
+    chatInserts: [], // Phase 4: records what "Ask in Chat" would have put in the composer - never auto-sent
+    chat: { insert: (text) => { JV.chatInserts.push(text); } },
   };
-  const jarvis = makeJarvis(userDir, drive);
+  const jarvis = makeJarvis(userDir, drive, jarvisOpts);
   const document_ = { hidden: false, activeElement: null, createElement: (t) => new El(t), createTextNode: (t) => { const n = new El('#text'); n.textContent = t; return n; } };
   const window_ = { JV, jarvis, document: document_, localStorage: storage };
   const ctx = vm.createContext({ JV, window: window_, document: document_, localStorage: storage, console, Promise, setTimeout: (fn) => { fn(); return 0; }, setInterval: () => 0, clearInterval() {}, clearTimeout() {} });
@@ -296,7 +336,7 @@ console.log('\n--- delete, Trash and restore (Part 2) ---');
   check('the page says so', /back in your notes/.test(JV.$('kneMsg').textContent), JV.$('kneMsg').textContent);
 }
 
-console.log('\n--- Import from Notes: preview, then an explicit confirm (Part 1) ---');
+console.log('\n--- Import from Notes (Classic): now automatic on open; the manual dialog is a safe re-check/retry (Phase 1, Decision 2) ---');
 {
   const d = DIR();
   fs.writeFileSync(path.join(d, 'notes.json'), JSON.stringify([
@@ -304,29 +344,33 @@ console.log('\n--- Import from Notes: preview, then an explicit confirm (Part 1)
     { id: 'beta', text: 'Beta from Notes', created: 1000, updated: 1000 },
   ]));
   const JV = boot(d, new FakeStorage());
-  await tick();
+  await tick(20);
+  check('simply opening the page already carried both legacy notes over - no Import click needed',
+    K.listKnowledgeNotes(d).notes.length === 2, K.listKnowledgeNotes(d).notes);
 
   await JV.$('kneImportOpen').onclick(); await tick();
-  check('opening Import shows the dialog and a preview, before anything is imported',
-    JV.$('kneImportVeil').hidden === false && /2/.test(JV.$('kneImportStats').children[0].textContent) && K.listKnowledgeNotes(d).notes.length === 0);
-  check('the destination path is shown', new RegExp(K.knowledgePaths(d).notesDir.replace(/\\/g, '\\\\')).test(JV.$('kneImportDest').textContent));
+  check('the manual dialog, opened after the automatic carry-over already ran, correctly shows nothing left eligible - not a false "2 to import"',
+    JV.$('kneImportVeil').hidden === false && /^0$/.test(JV.$('kneImportStats').children[1].children[1].textContent), JV.$('kneImportStats').children.map((c) => c.textContent));
+  check('the destination path is still shown', new RegExp(K.knowledgePaths(d).notesDir.replace(/\\/g, '\\\\')).test(JV.$('kneImportDest').textContent));
 
   await JV.$('kneImportCancel').onclick();
-  check('Cancel imports nothing', JV.$('kneImportVeil').hidden === true && K.listKnowledgeNotes(d).notes.length === 0);
+  check('Cancel changes nothing', JV.$('kneImportVeil').hidden === true && K.listKnowledgeNotes(d).notes.length === 2);
 
   await JV.$('kneImportOpen').onclick(); await tick();
   await JV.$('kneImportGo').onclick(); await tick();
-  check('confirming Import actually imports, through the real engine', K.listKnowledgeNotes(d).notes.length === 2);
-  check('the result is reported with real counts', /Imported 2/.test(JV.$('kneImportMsg').textContent), JV.$('kneImportMsg').textContent);
-  // Migrated notes have no title (notes.json never had one) - they show as "Untitled note",
-  // same as any other note without one; the list having two rows is what proves the refresh.
-  check('the live list behind the dialog is refreshed too', JV.$('kneList').children.length === 2 && /Untitled note/.test(JV.$('kneList').textContent));
+  check('confirming Import when there is nothing left to do reports zero, not an error or a false success', /Imported 0/.test(JV.$('kneImportMsg').textContent), JV.$('kneImportMsg').textContent);
+  check('no duplicates were created', K.listKnowledgeNotes(d).notes.length === 2);
 
-  // Press Import again: nothing new, no duplicates, previewed and reported accurately.
+  // The manual dialog's real remaining job: surfacing a conflict - a note edited here since
+  // the automatic import, so it no longer matches what notes.json would produce. This must
+  // never be silently overwritten by Import, automatic or manual.
+  const alphaRev = K.noteRevision(d, 'alpha');
+  K.saveKnowledgeNote(d, 'alpha', { title: 'Edited here since the import', body: 'Alpha from Notes', tags: [], favorite: false, folder: null }, { baseRevision: alphaRev });
   await JV.$('kneImportOpen').onclick(); await tick();
-  check('a second preview shows nothing left eligible', /^0$/.test(JV.$('kneImportStats').children[1].children[1].textContent));
+  check('a note edited since the import is reported as a conflict - never silently re-imported over',
+    /1/.test(JV.$('kneImportStats').children[3].textContent), JV.$('kneImportStats').children.map((c) => c.textContent));
   await JV.$('kneImportGo').onclick(); await tick();
-  check('a second import reports zero new, not an error, and creates no duplicates', /Imported 0/.test(JV.$('kneImportMsg').textContent) && K.listKnowledgeNotes(d).notes.length === 2, JV.$('kneImportMsg').textContent);
+  check('confirming does not touch the conflicting note\'s content', K.listKnowledgeNotes(d).notes.find((n) => n.id === 'alpha').title === 'Edited here since the import');
 }
 
 console.log('\n--- Version History: compare and restore (Phase 23E) ---');
@@ -464,6 +508,303 @@ console.log('\n--- Google Drive backup/restore UI (Phase 24D) ---');
   await tick();
   reloaded = true; // reaching here without throwing proves the handler ran without needing a view check to pass (state.view is 'kne' in this harness)
   check('the drive_restored event handler runs without error while the Knowledge view is open', reloaded);
+}
+
+console.log('\n--- Phase 1: automatic migration on open (Decision 2) ---');
+{
+  const d = DIR();
+  fs.writeFileSync(path.join(d, 'notes.json'), JSON.stringify([{ id: 'legacy1', text: 'Carried over automatically', created: 1, updated: 2, sentAt: null }]));
+  const JV = boot(d, new FakeStorage());
+  await tick(20);
+  check('opening the page alone - no Import button pressed - carries the legacy note over',
+    K.listKnowledgeNotes(d).notes.some((n) => n.id === 'legacy1'), K.listKnowledgeNotes(d).notes);
+  check('notes.json itself is untouched by the automatic carry-over', fs.existsSync(path.join(d, 'notes.json')));
+  check('the page says what happened, rather than silently changing the list', JV.notifications.some((n) => /carried over/.test(n.msg)), JSON.stringify(JV.notifications));
+
+  // A second "open" (simulated by re-running the view handler) must not re-notify or redo work.
+  JV.notifications.length = 0;
+  JV.emit('view', 'kne');
+  await tick(20);
+  check('a second open in the same page-load does not migrate again or notify again (the once-per-boot guard)', JV.notifications.length === 0);
+}
+
+console.log('\n--- Phase 1: folders (Decision 3) ---');
+{
+  const d = DIR();
+  const JV = boot(d, new FakeStorage());
+  await tick();
+  K.saveKnowledgeNote(d, 'fo1', { title: 'Errand', body: 'x', tags: [], favorite: false, folder: 'Personal/Errands' }, {});
+  K.saveKnowledgeNote(d, 'fo2', { title: 'Work note', body: 'x', tags: [], favorite: false, folder: 'Work' }, {});
+  K.saveKnowledgeNote(d, 'fo3', { title: 'Loose note', body: 'x', tags: [], favorite: false, folder: null }, {});
+  JV.emit('view', 'kne');
+  await tick(10);
+  const folderList = JV.$('kneFolderList');
+  check('the folder list is shown, not hidden, once notes have folders', folderList.hidden === false);
+  check('"All notes" and "Unfiled" both appear alongside the real folders',
+    folderList.children.some((li) => /All notes/.test(li.textContent)) && folderList.children.some((li) => /Unfiled/.test(li.textContent)));
+  check('a real folder ("Work") is listed with its count', folderList.children.some((li) => /Work/.test(li.textContent) && /1/.test(li.textContent)));
+
+  // Click the "Work" folder row - the list should now show only fo2.
+  const workRow = folderList.children.find((li) => /Work/.test(li.textContent)).children[0];
+  workRow.onclick();
+  await tick();
+  check('selecting a folder filters the note list to just that folder',
+    JV.$('kneList').children.length === 1 && JV.$('kneList').children[0].textContent.includes('Work note'));
+}
+
+console.log('\n--- Phase 1: pinned notes lead the list (brief item 3 / Decision 3) ---');
+{
+  const d = DIR();
+  const JV = boot(d, new FakeStorage());
+  await tick();
+  K.saveKnowledgeNote(d, 'older-pinned', { title: 'Older, pinned', body: 'x', tags: [], favorite: true, folder: null }, {});
+  K.saveKnowledgeNote(d, 'newer-plain', { title: 'Newer, not pinned', body: 'x', tags: [], favorite: false, folder: null }, {});
+  JV.emit('view', 'kne');
+  await tick(10);
+  const rows = JV.$('kneList').children.filter((li) => li.tagName === 'LI');
+  check('the pinned note is shown first, even though it is the older one', /Older, pinned/.test(rows[0].textContent), rows.map((r) => r.textContent));
+}
+
+console.log('\n--- Phase 1: a folder saved through the real editor round-trips (field wiring) ---');
+{
+  const d = DIR();
+  const JV = boot(d, new FakeStorage());
+  await tick();
+  JV.$('kneTitle').value = 'With a folder';
+  JV.$('kneTitle').fire('input');
+  JV.$('kneEdit').value = 'content';
+  JV.$('kneEdit').fire('input');
+  JV.$('kneFolder').value = 'Projects/JARVIS';
+  JV.$('kneFolder').fire('input');
+  await JV.$('kneSave').onclick(); await tick();
+  const saved = K.listKnowledgeNotes(d).notes.find((n) => n.title === 'With a folder');
+  check('the folder typed in the editor is exactly what gets saved', saved && saved.folder === 'Projects/JARVIS', saved);
+}
+
+console.log('\n--- Phase 1 hardening item 1: Send to Telegram, ported from Notes (Classic) ---');
+{
+  const d = DIR();
+  // Telegram not set up: the button stays hidden entirely, rather than shown-and-disabled -
+  // simplest, least-surprising rule for a secondary action nobody can use yet.
+  let JV = boot(d, new FakeStorage(), null, { telegram: { ready: false, name: null } });
+  await tick();
+  JV.$('kneTitle').value = 'Not yet sendable';
+  JV.$('kneTitle').fire('input');
+  JV.$('kneEdit').value = 'x';
+  JV.$('kneEdit').fire('input');
+  await JV.$('kneSave').onclick(); await tick();
+  check('Send to Telegram is hidden while Telegram is not set up', JV.$('kneSendTelegram').hidden === true);
+
+  JV = boot(d, new FakeStorage(), null, { telegram: { ready: true, name: 'My chat' } });
+  await tick();
+  const id = K.listKnowledgeNotes(d).notes[0].id;
+  await open(JV, id);
+  check('once saved and Telegram is ready, Send to Telegram is offered', JV.$('kneSendTelegram').hidden === false);
+  await JV.$('kneSendTelegram').onclick(); await tick();
+  check('pressing it sends through the real IPC bridge (here, the fake Telegram call) and reports success', /Sent to Telegram/.test(JV.$('kneMsg').textContent), JV.$('kneMsg').textContent);
+  check('the note itself now shows "sent"', /sent/.test(JV.$('kneWhen').textContent), JV.$('kneWhen').textContent);
+  check('the note\'s own content on disk now carries sentAt', K.listKnowledgeNotes(d).notes.find((n) => n.id === id).sentAt > 0);
+
+  async function open(jv, noteId) {
+    await jv.$('kneList').children[0].children[0].onclick();
+    await tick();
+    void noteId;
+  }
+}
+
+console.log('\n--- Phase 1 hardening item 2: editing after migration can never silently overwrite or lose a change ---');
+{
+  const d = DIR();
+  fs.writeFileSync(path.join(d, 'notes.json'), JSON.stringify([{ id: 'both1', text: 'Original from Notes (Classic)', created: 1, updated: 2, sentAt: null }]));
+  const JV = boot(d, new FakeStorage());
+  await tick(20); // the automatic carry-over runs here
+  check('the note exists in the unified store after automatic migration', K.listKnowledgeNotes(d).notes.some((n) => n.id === 'both1'));
+
+  // Someone edits the SAME note in the unified store through the real editor.
+  await JV.$('kneList').children[0].children[0].onclick(); await tick();
+  JV.$('kneEdit').value = 'Edited in the unified store after migration';
+  JV.$('kneEdit').fire('input');
+  await JV.$('kneSave').onclick(); await tick();
+  check('the edit in the unified store took effect', K.listKnowledgeNotes(d).notes.find((n) => n.id === 'both1').body === 'Edited in the unified store after migration');
+
+  // Notes (Classic)'s own notes.json is a completely separate store - editing it after the
+  // fact (simulating a person still using the old page during the transition) must never
+  // reach back into the already-migrated unified copy, silently or otherwise.
+  fs.writeFileSync(path.join(d, 'notes.json'), JSON.stringify([{ id: 'both1', text: 'Changed in Notes (Classic) after migration', created: 1, updated: 99999 }]));
+  check('the already-migrated unified note is untouched by a later edit to notes.json - the two stores never read each other after the fact',
+    K.listKnowledgeNotes(d).notes.find((n) => n.id === 'both1').body === 'Edited in the unified store after migration');
+
+  // And a manual re-Import at this point must report the divergence as a conflict, never
+  // silently overwrite the unified edit with the Classic one (or vice versa).
+  const preview = await window_previewFor(d);
+  check('a manual re-Import correctly reports this as a conflict, not a silent overwrite in either direction', preview.conflicts.length === 1 && preview.conflicts[0].id === 'both1', preview);
+
+  async function window_previewFor(dir) { return K.previewMigration(dir); }
+}
+
+console.log('\n--- Phase 1 hardening item 4: folder hierarchy renders nested, not just a flat list ---');
+{
+  const d = DIR();
+  const JV = boot(d, new FakeStorage());
+  await tick();
+  K.saveKnowledgeNote(d, 'nest1', { title: 'Errand', body: 'x', tags: [], favorite: false, folder: 'Personal/Errands' }, {});
+  JV.emit('view', 'kne');
+  await tick(10);
+  const rows = JV.$('kneFolderList').children;
+  const personalRow = rows.find((li) => li.children[0].children.some((c) => c.textContent === 'Personal'));
+  const errandsRow = rows.find((li) => li.children[0].children.some((c) => c.textContent === 'Errands'));
+  check('an ancestor folder ("Personal") is synthesized and shown even though no note is filed directly in it', !!personalRow, rows.map((r) => r.textContent));
+  check('the ancestor shows a zero count - no note is filed directly there', personalRow && personalRow.children[0].children.some((c) => c.textContent === '0'));
+  check('the leaf folder ("Errands") is shown indented deeper than its parent', !!errandsRow && Number(errandsRow.children[0].style.paddingLeft?.replace('px', '') || 0) > Number(personalRow.children[0].style.paddingLeft?.replace('px', '') || 0));
+  check('the leaf\'s label is just its own segment ("Errands"), not the full path - the full path is still the filter value, not the display text',
+    errandsRow.children[0].children.some((c) => c.textContent === 'Errands') && !errandsRow.children[0].children.some((c) => c.textContent === 'Personal/Errands'));
+
+  // Selecting the parent ("Personal") must mean exactly that folder, never "and everything
+  // under it" - the simplest rule, and the one already locked in by this phase's other tests.
+  personalRow.children[0].onclick();
+  await tick();
+  check('selecting the (empty) parent folder shows no notes - it does not fall back to including its child\'s notes',
+    JV.$('kneList').children.length === 1 && /No note/.test(JV.$('kneList').textContent));
+}
+
+console.log('\n--- Phase 2: app-owned "Connect Google Account" (Decision 1) ---');
+{
+  const d = DIR();
+  const disconnected = async () => ({ status: 'disconnected', clientConfigured: false });
+  // Both gates closed (the real default on every build today): nothing changes from before.
+  let JV = boot(d, new FakeStorage(), null, { driveStatus: disconnected, appOwned: { available: false } });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('with the app-owned path unavailable, the section stays hidden and BYO is exactly as before',
+    JV.$('driveAppOwnedSection').hidden === true && JV.$('driveConfigureBtn').hidden === false);
+
+  // Both gates open: the one-click path appears, and BYO's own button is hidden behind it.
+  let connectCalls = 0;
+  JV = boot(d, new FakeStorage(), null, {
+    driveStatus: disconnected, appOwned: { available: true },
+    driveConnectAppOwned: async () => { connectCalls += 1; return { ok: true, status: 'connected' }; },
+  });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('with both gates open, "Connect Google Account" is offered and the BYO Configure button is not',
+    JV.$('driveAppOwnedSection').hidden === false && JV.$('driveConfigureBtn').hidden === true);
+  await JV.$('driveConnectAppOwnedBtn').onclick(); await tick();
+  check('pressing it calls the app-owned IPC - never driveConfigureClient/driveConnect\'s own BYO path', connectCalls === 1);
+
+  // The escape hatch: a person can still choose to use their own Client ID instead.
+  await JV.$('driveShowByoBtn').onclick(); await tick();
+  check('"Use my own Client ID instead" switches to the BYO fields and hides the app-owned section',
+    JV.$('driveAppOwnedSection').hidden === true && JV.$('driveConfigureBtn').hidden === false);
+}
+
+console.log('\n--- Phase 3: sync status line and Sync Now (UI wiring only - the engine is tested separately) ---');
+{
+  const d = DIR();
+  const drive = makeDrive(d);
+  let syncCalls = 0;
+  const JV = boot(d, new FakeStorage(), drive, {
+    driveSyncStatus: async () => (syncCalls ? { state: 'idle', lastSyncAt: Date.now(), conflictCount: 0, syncing: false } : { state: 'offline', conflictCount: 0, syncing: false }),
+    driveSyncNow: async () => { syncCalls += 1; return { ok: true }; },
+  });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('an offline sync status is shown in plain language, not silently blank', /Offline/.test(JV.$('driveSyncStatus').textContent));
+  await JV.$('driveSyncNowBtn').onclick(); await tick();
+  check('pressing Sync Now calls the real IPC call, not the backup/restore ones', syncCalls === 1);
+  check('the status line reflects the result of that sync', /Synced/.test(JV.$('driveSyncStatus').textContent), JV.$('driveSyncStatus').textContent);
+}
+{
+  const d = DIR();
+  const drive = makeDrive(d);
+  const JV = boot(d, new FakeStorage(), drive, {
+    driveSyncStatus: async () => ({
+      state: 'conflict', conflictCount: 2, syncing: false,
+      conflictingNotes: [{ id: 'n1', title: 'Shared grocery list' }, { id: 'n2', title: 'Budget notes' }],
+    }),
+  });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('a conflict state names the actual notes, not just a count, so the person knows what to open',
+    /2 notes need attention/.test(JV.$('driveSyncStatus').textContent)
+    && /Shared grocery list/.test(JV.$('driveSyncStatus').textContent)
+    && /Budget notes/.test(JV.$('driveSyncStatus').textContent)
+    && /Version History/.test(JV.$('driveSyncStatus').textContent),
+    JV.$('driveSyncStatus').textContent);
+}
+{
+  const d = DIR();
+  const drive = makeDrive(d);
+  const JV = boot(d, new FakeStorage(), drive, { driveSyncStatus: async () => ({ state: 'quarantine', quarantinedCount: 2, syncing: false }) });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('Phase 6 (Task 5): a quarantine state explicitly says local notes were NOT changed - never silently invisible',
+    /2 files/.test(JV.$('driveSyncStatus').textContent) && /not changed/.test(JV.$('driveSyncStatus').textContent),
+    JV.$('driveSyncStatus').textContent);
+}
+
+console.log('\n--- Phase 4: "Exclude from AI" toggle round-trips through save ---');
+{
+  const d = DIR();
+  const JV = boot(d, new FakeStorage());
+  await tick();
+  JV.$('kneTitle').value = 'Private note';
+  JV.$('kneTitle').fire('input');
+  JV.$('kneEdit').value = 'secret content';
+  JV.$('kneEdit').fire('input');
+  check('the toggle starts off (included) by default', JV.$('kneAiExclude').getAttribute('aria-pressed') === 'false');
+  await JV.$('kneAiExclude').onclick();
+  check('clicking it arms exclusion', JV.$('kneAiExclude').getAttribute('aria-pressed') === 'true');
+  await JV.$('kneSave').onclick(); await tick();
+  const saved = K.listKnowledgeNotes(d).notes.find((n) => n.title === 'Private note');
+  check('the saved note is actually marked aiExcluded on disk', saved && saved.aiExcluded === true, saved);
+
+  // Reopening it should reflect the saved state, not reset to included.
+  await JV.$('kneNew').onclick();
+  await JV.$('kneList').children[0].children[0].onclick(); await tick();
+  check('reopening the note shows the toggle still armed', JV.$('kneAiExclude').getAttribute('aria-pressed') === 'true');
+}
+
+console.log('\n--- Phase 4: "Ask about your notes" - local search, never an automatic send ---');
+{
+  const d = DIR();
+  let searched = null;
+  const JV = boot(d, new FakeStorage(), null, {
+    notesSearch: async (q) => { searched = q; return { ok: true, results: [{ id: 'n1', title: 'Vet notes', folder: null, snippet: 'switch food gradually', score: 5 }] }; },
+    notesAskContext: async (q) => ({ ok: true, prompt: `Using only the following notes of mine, answer this question: ${q}\n\n[1] Vet notes\nswitch food gradually`, sources: [{ id: 'n1', title: 'Vet notes' }] }),
+  });
+  await tick();
+  await JV.$('kneAskOpen').onclick();
+  check('opening Ask shows the dialog, empty, with Ask-in-Chat disabled until something is found', JV.$('kneAskVeil').hidden === false && JV.$('kneAskGo').disabled === true);
+
+  JV.$('kneAskQuery').value = 'what did the vet say about food';
+  await runAskSearchFor(JV);
+  check('typing a question calls the real search IPC with exactly what was typed', searched === 'what did the vet say about food');
+  check('a result is shown, with its own title and snippet - the citation', /Vet notes/.test(JV.$('kneAskResults').textContent) && /gradually/.test(JV.$('kneAskResults').textContent));
+  check('Ask in Chat is now enabled', JV.$('kneAskGo').disabled === false);
+
+  await JV.$('kneAskGo').onclick(); await tick();
+  check('pressing "Ask in Chat" inserts the composed prompt (with its citation) into the chat composer', JV.chatInserts.length === 1 && /Vet notes/.test(JV.chatInserts[0]) && /gradually/.test(JV.chatInserts[0]));
+  check('the dialog closed after handing off to Chat', JV.$('kneAskVeil').hidden === true);
+  check('nothing was ever sent automatically - JV.chat.insert only fills the composer, never submits', JV.chatInserts.length === 1);
+
+  async function runAskSearchFor(jv) {
+    // The real code debounces input via setTimeout; this harness's setTimeout runs its
+    // callback immediately (see ctx's setTimeout override above), so firing 'input' alone
+    // already triggers the search synchronously-enough for `await tick()` to catch up.
+    jv.$('kneAskQuery').fire('input');
+    await tick(10);
+  }
+}
+{
+  const d = DIR();
+  const JV = boot(d, new FakeStorage(), null, { notesSearch: async () => ({ ok: true, results: [] }) });
+  await tick();
+  await JV.$('kneAskOpen').onclick();
+  JV.$('kneAskQuery').value = 'nothing matches this';
+  JV.$('kneAskQuery').fire('input');
+  await tick(10);
+  check('no results shown in plain language, not a blank or broken dialog', /Nothing in your notes matches/.test(JV.$('kneAskMsg').textContent));
+  check('Ask in Chat stays disabled when there is nothing to ask about', JV.$('kneAskGo').disabled === true);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);
