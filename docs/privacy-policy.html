@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS Privacy Policy</title>
+<style>
+  body { font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 28px; }
+  h2 { font-size: 20px; margin-top: 2em; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  code { background: #f2f2f2; padding: 2px 5px; border-radius: 4px; font-size: 0.9em; }
+  footer { margin-top: 3em; padding-top: 1em; border-top: 1px solid #ddd; color: #666; font-size: 0.9em; }
+  a { color: #2563eb; }
+</style>
+</head>
+<body>
+
+<h1>JARVIS Privacy Policy</h1>
+<p><em>Last updated: October 2026</em></p>
+
+<p>JARVIS is a Windows desktop application for working with Claude Code. This page describes
+what JARVIS does with your data, specifically regarding its optional Google Drive integration
+and in general.</p>
+
+<h2>Who this covers</h2>
+<p>This policy covers JARVIS, a desktop application you install and run on your own PC. It is
+published by the maintainer of
+<a href="https://github.com/Silentt9879/JarvisApp">github.com/Silentt9879/JarvisApp</a>.
+JARVIS has no server component, no account system of its own, and no backend that your data
+passes through.</p>
+
+<h2>Google Drive integration</h2>
+<p>JARVIS's Notes feature can optionally connect to your Google Drive to back up, restore, and
+synchronize the notes you write in JARVIS. This connection is <strong>entirely optional</strong>
+and off by default — nothing is connected unless you explicitly press "Connect" yourself.</p>
+
+<h3>What JARVIS can access</h3>
+<p>JARVIS requests only the
+<a href="https://developers.google.com/workspace/drive/api/guides/api-specific-auth"><code>drive.file</code></a>
+scope from Google. This scope is deliberately narrow: it grants access <strong>only to files and
+folders that JARVIS itself creates</strong> in your Drive. JARVIS can never see, list, read, or
+modify any file already in your Drive, or any file created by another app or person — Google
+enforces this restriction on its own servers, independent of anything JARVIS's code does.</p>
+
+<h3>What JARVIS does with that access</h3>
+<ul>
+  <li>Creates a folder in your Drive (named "JARVIS Knowledge Backups" or "JARVIS Notes Sync")
+    containing copies of the notes you write in JARVIS, so you can back them up, restore them,
+    or synchronize them between your own devices.</li>
+  <li>Never uploads, reads, or otherwise touches any other file or folder in your Drive.</li>
+  <li>Never sends your notes, your Drive contents, or any other data from your PC to JARVIS's
+    developer, or to any third party. The only parties your data ever travels to are Google's own
+    servers (when you choose to back up or sync) and, separately and only if you explicitly use
+    JARVIS's AI features, Anthropic's Claude API (for the specific content you choose to send in
+    a chat message — never your whole notes database, and never automatically).</li>
+</ul>
+
+<h2>Where your data is stored</h2>
+<ul>
+  <li><strong>Locally:</strong> your notes, settings, and Google account connection token are
+    stored on your own PC, under your Windows user profile
+    (<code>%APPDATA%\JARVIS</code>). Nothing is stored on any server operated by JARVIS's
+    developer, because no such server exists.</li>
+  <li><strong>Your Google account token</strong> is encrypted at rest using Windows' own
+    per-user encryption (via Electron's <code>safeStorage</code> API), the same mechanism
+    Windows uses to protect other applications' saved credentials. It is never stored in plain
+    text, and never leaves your PC except to Google's own token-refresh servers, directly from
+    your PC.</li>
+  <li><strong>In Google Drive:</strong> only the notes you explicitly back up or sync, inside the
+    JARVIS-created folder described above.</li>
+</ul>
+
+<h2>Revoking access</h2>
+<p>You can disconnect JARVIS from your Google account at any time from within the app
+(the Drive panel's "Disconnect" button), or directly from Google's own account settings at
+<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+Disconnecting removes JARVIS's local copy of your access token immediately; Google's own page
+lets you revoke access from Google's side as well.</p>
+
+<h2>Other data JARVIS handles</h2>
+<p>JARVIS is primarily a tool for working with Claude Code and your own local code projects.
+Depending on which optional features you turn on, it may also read local project files (to show
+you their contents, never uploading them anywhere without your action), connect to a Telegram
+bot you configure yourself (for remote notifications/control), or connect to your own ClickUp
+account (read-only, for task syncing). Each of these is off by default and requires your own
+explicit setup.</p>
+
+<h2>Changes to this policy</h2>
+<p>If this policy changes, the updated version will be published at this same URL, with the
+"Last updated" date above revised accordingly.</p>
+
+<h2>Contact</h2>
+<p>Questions about this policy or JARVIS's data handling can be raised as an issue on the
+project's GitHub repository:
+<a href="https://github.com/Silentt9879/JarvisApp/issues">github.com/Silentt9879/JarvisApp/issues</a>.</p>
+
+<footer>
+  JARVIS is open source. You can verify every claim on this page directly against the
+  source code at <a href="https://github.com/Silentt9879/JarvisApp">github.com/Silentt9879/JarvisApp</a>.
+</footer>
+
+</body>
+</html>
