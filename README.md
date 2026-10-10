@@ -17,6 +17,25 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
+## 🆕 What's new in v2.5.1
+
+A small, fast follow-up to v2.5.0 - three real bugs found while actually connecting a real Google account for the first time, fixed the same day.
+
+**Fixed**
+
+- 🔑 **Google Drive wouldn't connect: "client_secret is missing."** Google's current console issues a Client Secret for Desktop-type OAuth clients too, and its token endpoint now requires it - the README and the field's own placeholder previously said it was optional. Both corrected; pasting the secret alongside the Client ID now works as expected.
+- 🔒 **The "Configure OAuth Client ID" button could disappear forever.** Once a Client ID was saved, there was no way back to those fields at all - not even to add the secret above after the fact. It now always stays reachable, relabeled "Change OAuth Client ID" once something is already saved.
+- 👁️ **The whole Google Drive panel was collapsed by default**, hiding every control (Configure, Connect, Sync, Backup) behind one undiscoverable click on the status row. It's open on first sight now.
+
+**Technical**
+
+- `src/renderer/knowledge.js`: the Drive Configure button's visibility no longer depends on `clientConfigured`; a new `driveEditingClient` flag stops a background status refresh from force-closing the fields while they're being edited.
+- `src/renderer/index.html`: `driveConn`'s `<details>` now opens by default; the Client Secret field's placeholder corrected.
+- Tests: 5 new checks in `knowledge-renderer-test.mjs` covering the Configure-button fix specifically; `npm test` runs 61 suites, all passing.
+- First real-account validation of the Phase 2/3 OAuth and Sync work - a real Google Cloud project, a real Desktop OAuth client, a real `Connect Google Drive`, and a real sync pass, all confirmed working end to end.
+
+---
+
 ## 🆕 What's new in v2.5.0
 
 See the [Releases page](https://github.com/Silentt9879/JarvisApp/releases) for every published build; this is the current one.
@@ -729,7 +748,7 @@ added in the future.
 
 ## 🔗 Releases
 
-Every published build is on the [**Releases page**](https://github.com/Silentt9879/JarvisApp/releases) - **v2.5.0 is the current release**. See [What's new in v2.5.0](#whats-new-in-v250) above for a summary, or `JARVIS-Setup-2.5.0.exe`'s own release notes for the exact text published with it.
+Every published build is on the [**Releases page**](https://github.com/Silentt9879/JarvisApp/releases) - **v2.5.1 is the current release**. See [What's new in v2.5.1](#whats-new-in-v251) above for a summary, or `JARVIS-Setup-2.5.1.exe`'s own release notes for the exact text published with it.
 
 ---
 

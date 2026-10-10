@@ -1,7 +1,7 @@
 {
   "name": "jarvis-app",
   "productName": "JARVIS",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "JARVIS - a Windows desktop command center for Claude Code and the projects in your workspace",
   "main": "src/main.mjs",
   "type": "module",
