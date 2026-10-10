@@ -24,12 +24,18 @@
 
   let notes = [];                  // sidebar metadata only - no body
   let trashNotes = [];             // Trash tab's own list - separate from notes above
-  let status = { storageDir: '', migrationComplete: false, legacyNoteCount: 0 };
+  let status = { storageDir: '', migrationComplete: false, legacyNoteCount: 0, historyCount: 0, historyBytes: 0, historyWarn: false, telegram: { ready: false, name: null } };
   let mode = 'notes';               // 'notes' | 'trash'
   let current = null;              // { id, title, created, updated, tags, favorite, folder, sentAt } or null = new note
   let baseRevision = null;         // the revision this edit started from; null means "believed not to exist yet"
   let query = '';
-  const drafts = new Map();        // note id (or 'new') -> { title, body, tags, favorite, baseRevision }
+  // Phase 1 (Unified Notes): null = "All notes" (no folder filter); '' = "Unfiled" (no folder
+  // set); any other string = that exact folder. Folders are purely the note's own `folder`
+  // front-matter field (src/knowledge.mjs already models it end to end) - this is a client-side
+  // grouping of notes already in hand, not a second IPC call or a real nested filesystem.
+  let selectedFolder = null;
+  let autoMigrateChecked = false;  // tried at most once per page boot - migrateFromLegacy itself stays safe to call any number of times
+  const drafts = new Map();        // note id (or 'new') -> { title, body, tags, favorite, folder, baseRevision }
   let historyFor = null;           // { id, baseRevision } - the note Version History is open for
   let historySnapshots = [];
   let historySelected = null;      // the file name of the snapshot picked for compare/restore
@@ -37,6 +43,7 @@
   const key = () => (current ? current.id : 'new');
   const titleEl = () => $('kneTitle');
   const tagsEl = () => $('kneTags');
+  const folderEl = () => $('kneFolder');
   const bodyEl = () => $('kneEdit');
   const favBtn = () => $('kneFavorite');
 
@@ -62,15 +69,21 @@
   const joinTags = (arr) => (Array.isArray(arr) ? arr.join(', ') : '');
 
   function fields() {
-    return { title: titleEl().value, body: bodyEl().value, tags: parseTags(tagsEl().value), favorite: favBtn().getAttribute('aria-pressed') === 'true' };
+    return {
+      title: titleEl().value, body: bodyEl().value, tags: parseTags(tagsEl().value),
+      favorite: favBtn().getAttribute('aria-pressed') === 'true', folder: folderEl().value.trim() || null,
+    };
   }
   function baseline() {
-    return current ? { title: current.title || '', body: current.__body || '', tags: current.tags || [], favorite: !!current.favorite } : { title: '', body: '', tags: [], favorite: false };
+    return current
+      ? { title: current.title || '', body: current.__body || '', tags: current.tags || [], favorite: !!current.favorite, folder: current.folder || null }
+      : { title: '', body: '', tags: [], favorite: false, folder: null };
   }
   function isDirty() {
     const f = fields();
     const b = baseline();
-    return f.title !== (b.title || '') || f.body !== (b.body || '') || f.favorite !== b.favorite || joinTags(f.tags) !== joinTags(b.tags);
+    return f.title !== (b.title || '') || f.body !== (b.body || '') || f.favorite !== b.favorite
+      || joinTags(f.tags) !== joinTags(b.tags) || (f.folder || null) !== (b.folder || null);
   }
   /** Remember what is in the editor, so switching notes (or closing and reopening JARVIS) never loses it. */
   function keepDraft() {
@@ -129,12 +142,72 @@
     const n = $('kneStorageNote');
     if (!n) return;
     const bits = [`Stored at ${status.storageDir || 'this PC'}.`];
-    if (status.migrationComplete) bits.push('Notes has already been migrated into this store once.');
-    else if (status.legacyNoteCount) bits.push(`${status.legacyNoteCount} note${status.legacyNoteCount === 1 ? '' : 's'} still only in Notes - nothing is migrated automatically.`);
+    if (status.legacyNoteCount && !status.migrationComplete) bits.push(`Carrying over ${status.legacyNoteCount} note${status.legacyNoteCount === 1 ? '' : 's'} from Notes (Classic)…`);
+    // Decision 4: a size/count WARNING only - nothing here prunes Version History automatically.
+    if (status.historyCount) {
+      const mb = status.historyBytes / 1_000_000;
+      const size = mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.round(status.historyBytes / 1000)} KB`;
+      bits.push(`Version History: ${status.historyCount} version${status.historyCount === 1 ? '' : 's'} (${size})${status.historyWarn ? ' - getting large; nothing is removed automatically' : ''}.`);
+    }
     n.textContent = bits.join(' ');
   }
 
+  /** A folder is just the note's own `folder` front-matter field - a `/`-separated path, the
+   *  same convention the original Knowledge design doc describes (folder: "Personal/Errands").
+   *  This builds a true nested tree for display (an ancestor with no notes of its own, like
+   *  "Personal" when only "Personal/Errands" has any, is still shown - as a 0-count row - so
+   *  the hierarchy reads correctly), while selecting a folder still means EXACTLY that folder
+   *  (never "and everything under it") - the simpler, least-surprising rule, and the one this
+   *  phase's own tests already lock in. Purely a grouping of data already in `notes`, not a
+   *  second fetch or a real filesystem. */
+  function folderTree() {
+    const direct = new Map(); // full path -> count of notes with exactly that folder
+    let unfiled = 0;
+    for (const n of notes) {
+      const f = (n.folder || '').trim();
+      if (!f) { unfiled += 1; continue; }
+      direct.set(f, (direct.get(f) || 0) + 1);
+    }
+    const allPaths = new Set(direct.keys());
+    for (const f of direct.keys()) {
+      const parts = f.split('/').filter(Boolean);
+      for (let i = 1; i < parts.length; i += 1) allPaths.add(parts.slice(0, i).join('/'));
+    }
+    const rows = [...allPaths].sort((a, b) => a.localeCompare(b)).map((path) => {
+      const parts = path.split('/').filter(Boolean);
+      return { path, label: parts[parts.length - 1], depth: parts.length - 1, count: direct.get(path) || 0 };
+    });
+    return { unfiled, rows };
+  }
+
+  function renderFolders() {
+    const ul = $('kneFolderList');
+    if (mode !== 'notes') { ul.hidden = true; return; }
+    const { unfiled, rows } = folderTree();
+    ul.hidden = rows.length === 0 && unfiled === 0;
+    ul.replaceChildren();
+    const row = (label, value, count, icon, depth) => {
+      const li = el('li');
+      const btn = el('button', `kne-folder-row${selectedFolder === value ? ' on' : ''}`);
+      btn.type = 'button';
+      if (depth) btn.style.paddingLeft = `${6 + depth * 14}px`;
+      btn.appendChild(JV.icon(icon || 'folder', 'kne-folder-ic'));
+      btn.appendChild(el('span', null, label));
+      btn.appendChild(el('em', 'count', String(count)));
+      btn.onclick = () => { selectedFolder = selectedFolder === value ? null : value; renderFolders(); renderList(); };
+      li.appendChild(btn);
+      return li;
+    };
+    ul.appendChild(row('All notes', null, notes.length, 'layers', 0));
+    if (unfiled) ul.appendChild(row('Unfiled', '', unfiled, 'file', 0));
+    for (const r of rows) ul.appendChild(row(r.label, r.path, r.count, 'folder', r.depth));
+  }
+
   function matches(n) {
+    if (mode === 'notes' && selectedFolder !== null) {
+      const f = (n.folder || '').trim();
+      if (selectedFolder === '' ? f !== '' : f !== selectedFolder) return false;
+    }
     if (!query) return true;
     const q = query.toLowerCase();
     return title(n.title).toLowerCase().includes(q) || (n.tags || []).some((t) => t.toLowerCase().includes(q));
@@ -160,8 +233,10 @@
       }
       return;
     }
-    const shown = notes.filter(matches);
-    if (!shown.length) { ul.appendChild(el('li', 'muted empty', notes.length ? 'No note matches that filter.' : 'No knowledge notes yet, sir.')); return; }
+    // Pinned (favorite) notes always lead the list, newest-first within each group - a stable
+    // re-sort of the already-newest-first list main.mjs hands back, never a second fetch.
+    const shown = notes.filter(matches).slice().sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0));
+    if (!shown.length) { ul.appendChild(el('li', 'muted empty', notes.length ? 'No note matches that filter.' : 'No notes yet, sir.')); return; }
     for (const n of shown) {
       const li = el('li');
       const draft = drafts.get(n.id);
@@ -187,6 +262,7 @@
     titleEl().value = f.title || '';
     bodyEl().value = f.body || '';
     tagsEl().value = joinTags(f.tags);
+    folderEl().value = f.folder || '';
     favBtn().setAttribute('aria-pressed', f.favorite ? 'true' : 'false');
     favBtn().classList.toggle('on', !!f.favorite);
     $('kneWhen').textContent = mode === 'trash'
@@ -206,11 +282,16 @@
     titleEl().readOnly = trash;
     bodyEl().readOnly = trash;
     tagsEl().disabled = trash;
+    folderEl().disabled = trash;
     favBtn().disabled = trash;
     $('kneSave').hidden = trash;
     $('kneDelete').hidden = trash || !current;
     $('kneHistory').hidden = trash || !current;
     $('kneRestore').hidden = !(trash && current);
+    // Phase 1 hardening item 1: Telegram send is per-note, offered only once a note is actually
+    // saved (there is nothing to send otherwise) and only when Telegram itself is set up -
+    // the same "ready" gate notes.js already uses, reused rather than re-derived here.
+    $('kneSendTelegram').hidden = trash || !current || !status.telegram?.ready;
   }
 
   function renderPreview() {
@@ -263,13 +344,32 @@
     say('Reloaded the latest version.', 'ok');
   }
 
+  /** Phase 1: carry Notes (Classic) over automatically, once per page boot - never on a
+   *  retry loop, and never destructive (migrateFromLegacy only ever adds; see src/knowledge.mjs
+   *  and src/main.mjs's jarvis:knowledgeAutoMigrate). Silent when there is nothing to do;
+   *  otherwise says plainly what happened, the same way Import's own confirm step does. */
+  async function autoMigrateIfNeeded() {
+    if (autoMigrateChecked) return;
+    autoMigrateChecked = true;
+    let r;
+    try { r = await window.jarvis.knowledgeAutoMigrate(); } catch { return; }
+    if (!r || r.already) return;
+    if (r.migrated > 0) {
+      JV.notify(`${r.migrated} note${r.migrated === 1 ? '' : 's'} carried over from Notes (Classic) - nothing there was changed.`, { level: 'ok' });
+    }
+    if (r.conflicts?.length) {
+      JV.notify(`${r.conflicts.length} note${r.conflicts.length === 1 ? '' : 's'} from Notes (Classic) could not be carried over automatically (already edited here, or a duplicate id) - open Import from Notes (Classic) to review.`, { level: 'err' });
+    }
+  }
+
   async function load() {
+    await autoMigrateIfNeeded();
     const r = await window.jarvis.knowledgeList();
     if (!r?.ok) { say(r?.error || 'Could not list knowledge notes.', 'err'); }
     notes = r?.notes || [];
     status = r?.status || status;
     renderStatus();
-    if (mode === 'notes') renderList();
+    if (mode === 'notes') { renderFolders(); renderList(); }
     const badge = $('nbKne');
     if (badge) badge.textContent = notes.length ? String(notes.length) : '';
     loadTrash(); // keeps the Trash tab's count current without switching to it
@@ -310,6 +410,7 @@
     baseRevision = null;
     say('');
     renderEditor();
+    renderFolders();
     if (m === 'trash') loadTrash(); else renderList();
   }
 
@@ -355,6 +456,25 @@
     await load();
     renderEditor();
     say(r.overwrote ? 'Saved - the version you replaced was backed up first.' : 'Saved.', 'ok');
+  }
+
+  // ------------------------------------------------------------- Send to Telegram (Phase 1 hardening item 1)
+  // A deliberate, separate action from Save - a note is sent exactly when this is pressed,
+  // never implicitly on every save, the same explicit-action discipline Notes (Classic) used
+  // (a checkbox the person sets before saving) just expressed as its own button here instead,
+  // since the unified editor's Save already has its own revision-check path to keep simple.
+  async function sendToTelegram() {
+    if (!current || mode !== 'notes') return;
+    const btn = $('kneSendTelegram');
+    btn.disabled = true;
+    say('Sending to Telegram…', 'busy');
+    let r;
+    try { r = await window.jarvis.knowledgeSendTelegram(current.id); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    btn.disabled = false;
+    if (!r?.ok) { say(r?.error || 'Could not send this note to Telegram.', 'err'); return; }
+    current = { ...current, sentAt: r.sentAt };
+    renderEditor();
+    say('Sent to Telegram.', 'ok');
   }
 
   // ------------------------------------------------------------- Delete (Phase 23D, Part 2)
@@ -505,7 +625,7 @@
       li.appendChild(el('b', null, String(value)));
       ul.appendChild(li);
     };
-    row('Total notes in Notes', p.total);
+    row('Total notes in Notes (Classic)', p.total);
     row('Eligible to import', p.eligible);
     row('Already imported', p.alreadyImported);
     row('Conflicts (left untouched)', p.conflicts.length, p.conflicts.length > 0);
@@ -560,6 +680,7 @@
   $('kneTabNotes').onclick = () => setMode('notes');
   $('kneTabTrash').onclick = () => setMode('trash');
   $('kneRestore').onclick = restoreCurrent;
+  $('kneSendTelegram').onclick = sendToTelegram;
 
   $('kneDelete').onclick = openDeleteConfirm;
   $('kneDeleteCancel').onclick = closeDeleteConfirm;
@@ -604,7 +725,7 @@
   // soon as the editor changes again, the same as Notes does.
   const onEdit = () => { if (!$('kneMsg').querySelector('.link-btn')) say(''); $('kneSave').disabled = !(titleEl().value.trim() || bodyEl().value.trim()); };
   const onSaveKey = (e) => { if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); save(); } };
-  for (const input of [titleEl(), tagsEl()]) { input.addEventListener('input', onEdit); input.addEventListener('keydown', onSaveKey); }
+  for (const input of [titleEl(), tagsEl(), folderEl()]) { input.addEventListener('input', onEdit); input.addEventListener('keydown', onSaveKey); }
   bodyEl().addEventListener('input', () => { onEdit(); renderPreview(); });
   bodyEl().addEventListener('keydown', onSaveKey);
 

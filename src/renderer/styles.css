@@ -2562,6 +2562,16 @@ body.still .cbar .agents-pill.live .ap-dot { animation: none; }
 .kne-import-stats li.bad b { color: var(--err); }
 .kne-import-dest { margin: 0; font-size: 11.5px; color: var(--muted); font-family: var(--mono); overflow-wrap: anywhere; }
 
+/* Folders (Phase 1, Unified Notes): a flat list of the distinct `folder` values among the
+   notes already loaded - "All notes" and "Unfiled" always lead, then each real folder. */
+.kne-folder-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; max-height: 140px; overflow-y: auto; }
+.kne-folder-row { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-2); font-size: 12px; cursor: pointer; text-align: left; }
+.kne-folder-row:hover { background: var(--surface-2); color: var(--text); }
+.kne-folder-row.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
+.kne-folder-row .ic { width: 13px; height: 13px; flex: none; }
+.kne-folder-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kne-folder-row .count { color: var(--muted); font: 500 11px var(--mono); }
+
 /* Version History (Phase 23E): a list of earlier overwritten versions, and a side-by-side
    compare before restoring one. */
 .kne-history-modal { width: 920px; }

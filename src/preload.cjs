@@ -235,6 +235,8 @@ contextBridge.exposeInMainWorld('jarvis', {
   knowledgeSave: (input) => ipcRenderer.invoke('jarvis:knowledgeSave', input),
   knowledgeImportPreview: () => ipcRenderer.invoke('jarvis:knowledgeImportPreview'),
   knowledgeImport: () => ipcRenderer.invoke('jarvis:knowledgeImport'),
+  knowledgeAutoMigrate: () => ipcRenderer.invoke('jarvis:knowledgeAutoMigrate'),
+  knowledgeSendTelegram: (id) => ipcRenderer.invoke('jarvis:knowledgeSendTelegram', id),
   knowledgeTrash: () => ipcRenderer.invoke('jarvis:knowledgeTrash'),
   knowledgeTrashRead: (id) => ipcRenderer.invoke('jarvis:knowledgeTrashRead', id),
   knowledgeDelete: (id, baseRevision) => ipcRenderer.invoke('jarvis:knowledgeDelete', id, baseRevision),

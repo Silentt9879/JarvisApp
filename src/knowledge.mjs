@@ -444,6 +444,31 @@ export function migrationComplete(userDir, { fsImpl = fs } = {}) {
   try { return fsImpl.existsSync(knowledgePaths(userDir).marker); } catch { return false; }
 }
 
+// Decision 4 (Phase 0 review): Version History never auto-prunes - a rushed pruning policy
+// risks real data loss, where unbounded growth is only a visible, reversible nuisance. These
+// thresholds back a size/count WARNING only, surfaced to the user; nothing here ever deletes
+// a snapshot. Chosen generously (a personal notebook's worth of history, not a hard limit).
+export const HISTORY_WARN_COUNT = 300;
+export const HISTORY_WARN_BYTES = 25_000_000; // 25 MB
+
+/**
+ * How much Version History ("knowledge/overwritten") is actually using on disk - a read-only
+ * count and byte total, never a trigger to remove anything. `warn` is true once either
+ * threshold above is passed, so the UI can say "this is getting large" without this function
+ * (or anything else) ever pruning on its own.
+ */
+export function historyStats(userDir, { fsImpl = fs } = {}) {
+  const { overwrittenDir } = knowledgePaths(userDir);
+  let names = [];
+  try { names = fsImpl.readdirSync(overwrittenDir).filter((n) => /\.md$/i.test(n)); } catch { /* no history yet */ }
+  let bytes = 0;
+  for (const name of names) {
+    try { bytes += fsImpl.statSync(path.join(overwrittenDir, name)).size; } catch { /* a file that vanished mid-count is simply not counted - not fatal */ }
+  }
+  const count = names.length;
+  return { count, bytes, warn: count > HISTORY_WARN_COUNT || bytes > HISTORY_WARN_BYTES };
+}
+
 /**
  * Phase 23D: what migrateFromLegacy *would* do, without doing any of it - read-only, so an
  * "Import from Notes" screen can show an accurate count before anyone presses the button.
@@ -686,6 +711,37 @@ export function saveKnowledgeNote(userDir, id, patch, { baseRevision = null, for
   if (!r.ok) return r;
   const { original: _original, ...saved } = note;
   return { ok: true, unchanged: r.unchanged, file: r.file, note: saved, revision: noteRevision(userDir, id, { fsImpl }), overwrote };
+}
+
+/**
+ * Phase 1 (Unified Notes): stamp that a note reached Telegram - cosmetic, best-effort, the
+ * same spirit as notes.mjs's own markSent: a failure here is never worth failing the send
+ * itself (the caller already knows the send succeeded by the time this runs), so it reports
+ * ok:false rather than throwing and never touches `updated` (not a real edit) or triggers a
+ * Version History snapshot (nothing about the note's own content changed).
+ */
+export function markKnowledgeNoteSent(userDir, id, at, { fsImpl = fs } = {}) {
+  const { notesDir } = knowledgePaths(userDir);
+  const target = fileFor(notesDir, id);
+  if (!target) return { ok: false };
+  let text;
+  try { text = fsImpl.readFileSync(target, 'utf8'); } catch { return { ok: false }; }
+  const p = parseNoteFile(text, { fallbackId: id });
+  const note = {
+    id, title: p.fields.title, created: p.fields.created, updated: p.fields.updated, tags: p.fields.tags,
+    favorite: p.fields.favorite, folder: p.fields.folder, project: p.fields.project, session: p.fields.session,
+    branch: p.fields.branch, sentAt: at, body: p.body,
+  };
+  const rendered = renderNoteFile(note, p);
+  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fsImpl.writeFileSync(tmp, rendered);
+    fsImpl.renameSync(tmp, target);
+  } catch {
+    try { fsImpl.rmSync?.(tmp, { force: true }); } catch { /* best effort cleanup */ }
+    return { ok: false };
+  }
+  return { ok: true };
 }
 
 // ------------------------------------------------------------------ Phase 23D: Trash and restore

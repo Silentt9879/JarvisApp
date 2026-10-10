@@ -229,22 +229,22 @@ check('the bridge exposes all ten knowledge calls, and the window is never hande
     assert.ok(pre.includes(k), `${k} is exposed`);
   }
 });
-check('the Devices-style discovery rule holds here too: Knowledge Notes is reachable from the sidebar, from search, and its view and script exist exactly once', () => {
+check('the Devices-style discovery rule holds here too: Notes (the unified page, née Knowledge Notes) is reachable from the sidebar, from search, and its view and script exist exactly once', () => {
   assert.match(html, /id="navKne" data-view="kne"/);
   assert.match(html, /id="view-kne"/);
   assert.match(html, /<script src="knowledge\.js"><\/script>/);
-  assert.match(fs.readFileSync(new URL('../src/renderer/app.js', import.meta.url), 'utf8'), /\['Knowledge Notes', 'kne'\]/);
+  assert.match(fs.readFileSync(new URL('../src/renderer/app.js', import.meta.url), 'utf8'), /\['Notes', 'kne'\]/);
   const ids = [
-    'kneNew', 'kneImportOpen', 'kneTabNotes', 'kneTabTrash', 'kneTrashCount', 'kneSearch', 'kneList',
+    'kneNew', 'kneImportOpen', 'kneTabNotes', 'kneTabTrash', 'kneTrashCount', 'kneSearch', 'kneFolderList', 'kneList',
     'kneTitle', 'kneWhen', 'kneFavorite', 'kneRestore', 'knePreviewToggle', 'kneDelete', 'kneSave',
-    'kneTags', 'kneMsg', 'kneEdit', 'knePreview', 'kneStorageNote',
+    'kneFolder', 'kneTags', 'kneMsg', 'kneEdit', 'knePreview', 'kneStorageNote',
     'kneImportVeil', 'kneImportTitle', 'kneImportStats', 'kneImportDest', 'kneImportMsg', 'kneImportCancel', 'kneImportGo',
     'kneDeleteVeil', 'kneDeleteTitle', 'kneDeleteName', 'kneDeleteCancel', 'kneDeleteGo',
   ];
   for (const id of ids) assert.equal(html.split(`id="${id}"`).length, 2, `"${id}" is declared exactly once`);
 });
-check('Knowledge Notes is named apart from the pre-existing Knowledge Base panel (Phase 23D, Part 4) - a label-only change, nothing structural', () => {
-  assert.match(html, /<h2>Knowledge Notes<\/h2>/);
+check('Notes (the unified page) is named apart from the pre-existing Knowledge Base panel - a label-only change, nothing structural', () => {
+  assert.match(html, /<h2>Notes<\/h2>/);
   assert.match(html, />Knowledge Base</, 'the other panel\'s own label is untouched');
 });
 check('knowledge.js is loaded after notes.js and before app.js', () => {

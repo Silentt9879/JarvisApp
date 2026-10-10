@@ -23,7 +23,7 @@ import {
   newId as newKnowledgeId, knowledgePaths, listKnowledgeNotes, migrationComplete as knowledgeMigrationComplete,
   validateNoteInput, saveKnowledgeNote, noteRevision, previewMigration, migrateFromLegacy,
   listTrash, deleteKnowledgeNote, restoreKnowledgeNote,
-  listSnapshots, readSnapshot, restoreSnapshot,
+  listSnapshots, readSnapshot, restoreSnapshot, historyStats, markKnowledgeNoteSent,
 } from './knowledge.mjs';
 import { authStatus, authLogout, startLogin } from './auth.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
@@ -2667,7 +2667,15 @@ function knowledgeStorageStatus() {
   const { notesDir } = knowledgePaths(userDir);
   let legacyNoteCount = 0;
   try { legacyNoteCount = notes.list().length; } catch { /* unreadable legacy file: reported as 0, never thrown */ }
-  return { storageDir: notesDir, migrationComplete: knowledgeMigrationComplete(userDir), legacyNoteCount };
+  const history = historyStats(userDir);
+  return {
+    storageDir: notesDir, migrationComplete: knowledgeMigrationComplete(userDir), legacyNoteCount,
+    // Decision 4: a size/count warning only - nothing here ever prunes Version History.
+    historyCount: history.count, historyBytes: history.bytes, historyWarn: history.warn,
+    // Phase 1 hardening item 1: lets the unified editor show/hide "Send to Telegram" the same
+    // way notes.js already decides it, without a second round trip.
+    telegram: telegramStatus(),
+  };
 }
 ipcMain.handle('jarvis:knowledgeStatus', () => knowledgeStorageStatus());
 ipcMain.handle('jarvis:knowledgeList', () => {
@@ -2719,6 +2727,39 @@ ipcMain.handle('jarvis:knowledgeImport', () => {
   const r = migrateFromLegacy(userDir);
   log('knowledge import from Notes', `migrated ${r.migrated}, skipped ${r.skipped}, conflicts ${r.conflicts.length}, errors ${r.errors.length}`);
   return r;
+});
+
+// Phase 1 (Unified Notes), hardening item 1: porting "Send to Telegram" from Notes (Classic).
+// The token itself never crosses into the window - exactly the same boundary notes.mjs's own
+// sendNote already holds (see notes-test.mjs's assertion of that); this handler only ever
+// hands back {ok} or {ok:false,error}, the same shape jarvis:noteSave's telegram branch uses.
+ipcMain.handle('jarvis:knowledgeSendTelegram', async (_e, id) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
+  const r = listKnowledgeNotes(userDir);
+  const n = r.ok && r.notes.find((x) => x.id === id);
+  if (!n) return { ok: false, error: 'That note could not be found.' };
+  const tg = phoneConfig().telegram;
+  if (!telegramReady(tg)) return { ok: false, error: 'Telegram is not set up yet - do that in Settings > Phone alerts.' };
+  const when = new Date(n.updated || Date.now()).toLocaleString('en-GB');
+  const sent = await sendTelegram(tg, { title: `📝 Note · ${n.title || 'Untitled note'}`, body: `${when}\n\n${n.body}` });
+  if (sent.ok) { markKnowledgeNoteSent(userDir, id, Date.now()); log('knowledge note sent to Telegram', id); }
+  else log('knowledge note not sent to Telegram:', sent.error);
+  return sent.ok ? { ok: true, sentAt: Date.now() } : { ok: false, error: sent.error };
+});
+
+// Phase 1 (Unified Notes): the same migrateFromLegacy above, called automatically rather than
+// only from the "Import from Notes" button - the unified Notes page calls this once when it
+// opens so a person never has to find and press Import by hand for their notes to show up.
+// Safe to call unconditionally (migrateFromLegacy already is), but the fast marker check
+// skips the real work entirely once migration has already completed, so this costs nothing on
+// every later load. Still never touches notes.json - same guarantees as Import above.
+ipcMain.handle('jarvis:knowledgeAutoMigrate', () => {
+  if (knowledgeMigrationComplete(userDir)) return { ok: true, already: true, migrated: 0, skipped: 0, conflicts: [], errors: [], total: 0 };
+  const r = migrateFromLegacy(userDir);
+  if (r.migrated > 0 || r.conflicts.length > 0 || r.errors.length > 0) {
+    log('knowledge auto-migrate from Notes', `migrated ${r.migrated}, skipped ${r.skipped}, conflicts ${r.conflicts.length}, errors ${r.errors.length}`);
+  }
+  return { ...r, already: false };
 });
 
 // Delete moves a note to Trash - it is never gone for good from here, and a stale editor (one
