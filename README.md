@@ -606,7 +606,7 @@ Notes can be backed up to, restored from, and now optionally **synced continuous
 **What it covers:** only Notes, their Trash, and their Version History. It does **not** back up your JARVIS settings, your workspace, your agents, or anything else JARVIS stores.
 
 **Connecting (today, for everyone):**
-1. In Google Cloud Console, create an OAuth 2.0 Client ID of type **Desktop app**, and paste its Client ID (and secret, if given one) into the Drive panel inside Notes.
+1. In Google Cloud Console, create an OAuth 2.0 Client ID of type **Desktop app**, and paste its Client ID into the Drive panel inside Notes. **Also copy and paste the Client secret shown next to it** - Google's current console issues one for Desktop clients too, and its token endpoint now rejects the connection without it (`client_secret is missing`), even though it isn't meant to be kept truly confidential the way a server secret would be.
 2. Press **Connect Google Drive** - your system browser opens to Google's own sign-in and consent screen, requesting only the `drive.file` scope (JARVIS can only ever see files and folders it creates itself through this connection - never your existing Drive content).
 3. Once signed in, the panel shows **Connected**, and the backup/restore/sync controls appear.
 
