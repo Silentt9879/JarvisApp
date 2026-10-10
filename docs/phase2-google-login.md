@@ -1,9 +1,9 @@
 # Phase 2 — Simple Google Login: what's built, and what still needs your action
 
 Code-complete, **not** production-ready — see "What's still required" below. Nothing here is
-reachable by a real user yet: both environment gates (`JARVIS_DRIVE_APP_OWNED`,
-`JARVIS_GOOGLE_CLIENT_ID`) default unset on every build, so BYO-client (unchanged) remains the
-only path until you deliberately turn this on with a real, Google-registered Client ID.
+reachable by a real user yet: the checked-in build-time config file ships with an **empty**
+Client ID, so BYO-client (unchanged) remains the only path until you deliberately fill in a
+real, Google-registered Client ID.
 
 ## What was built
 
@@ -11,13 +11,20 @@ A second way to connect Google Drive, reusing 100% of the existing PKCE/token-st
 (`src/google-oauth.mjs`, `src/drive-connection.mjs`, `src/drive-token.mjs`) — nothing about the
 OAuth protocol, token encryption, or refresh logic was duplicated or changed:
 
-- `src/drive-app-client.mjs` (new): two independent environment gates, same style as the
-  existing `JARVIS_CAPTURE` dev-flag convention in `main.mjs`.
-  - `JARVIS_DRIVE_APP_OWNED=1` — the feature flag itself.
-  - `JARVIS_GOOGLE_CLIENT_ID=<id>` — the app's own OAuth Client ID. **Not a secret** — Google's
-    own guidance is that a public/installed-app client cannot keep a secret confidential
-    anyway (confirmed in the existing `docs/jarvis-google-drive-design.md` §2-3), so this can
-    be baked into a build/package step without any confidentiality concern.
+- `src/drive-app-client.mjs` + `src/drive-app-client-config.json` (new; the config file
+  revised in Phase 5 per Task 2 — see below): the Client ID now comes from a **build-time
+  config file**, shipped inside `src/**` by electron-builder's existing `files` list (no
+  packaging change needed) — not an environment variable, so **no end user, and no launch
+  environment, ever needs to configure anything** for a production build to offer this path.
+  **Not a secret** — Google's own guidance is that a public/installed-app client cannot keep a
+  secret confidential anyway (confirmed in the existing `docs/jarvis-google-drive-design.md`
+  §2-3), so committing it in a plain JSON file carries no confidentiality concern.
+  - `src/drive-app-client-config.json`: `{ "googleDriveClientId": "" }` — fill this in, once
+    (see the Google Cloud steps below), and every subsequently packaged build ships with it.
+  - Dev overrides, preserved: `JARVIS_GOOGLE_CLIENT_ID=<id>` overrides the config file for a
+    single local run (no need to edit the committed file while testing); `JARVIS_DRIVE_APP_OWNED=0`
+    force-disables the app-owned path even with a real Client ID configured, for QA that wants
+    to deliberately exercise the BYO-only path.
 - `jarvis:driveAppOwnedStatus` / `jarvis:driveConnectAppOwned` (new IPC, `src/main.mjs`):
   `driveConnectAppOwned` takes **no arguments from the renderer** — it always calls
   `driveConnection.configureClient({ clientId: appOwnedClientId(), clientSecret: '' })` then
@@ -25,25 +32,27 @@ OAuth protocol, token encryption, or refresh logic was duplicated or changed:
   Client ID through this call. `driveAppOwnedStatus` never returns the Client ID itself, only
   `{ available }`.
 - Renderer (`knowledge.js`/`index.html`): a "Connect Google Account" button, shown **only**
-  when both gates are open, with an "Early/testing configuration" notice and an escape hatch
-  ("Use my own Google Cloud Client ID instead") back to the unchanged BYO-client UI. With
-  either gate closed — the real state of every build today — this section never appears, and
-  BYO-client's own UI is pixel-for-pixel what it was before this phase.
+  when a real Client ID is actually configured, with an "Early/testing configuration" notice
+  and an escape hatch ("Use my own Google Cloud Client ID instead") back to the unchanged
+  BYO-client UI. With the checked-in empty config — the real state of every build today —
+  this section never appears, and BYO-client's own UI is pixel-for-pixel what it was before
+  this phase.
 
 ## Development/testing vs. production-ready — the explicit distinction requested
 
 | | Development/testing (what exists now) | Production-ready (what still requires your action) |
 |---|---|---|
-| Client ID source | A placeholder you set via `JARVIS_GOOGLE_CLIENT_ID` for local testing (e.g. your own throwaway OAuth client) | A **real** Client ID from a Google Cloud project you (or JARVIS's publisher) control |
+| Client ID source | `JARVIS_GOOGLE_CLIENT_ID` env override, or a non-empty value written into `drive-app-client-config.json` for local testing | A **real** Client ID from a Google Cloud project you (or JARVIS's publisher) control, committed into `drive-app-client-config.json` |
 | OAuth consent screen status | Testing mode (Google's default for an unverified client) | **Published/In production**, and verified for the `drive.file` scope |
 | Refresh token lifetime | **Expires every 7 days** (Google's own Testing-mode policy) | No forced expiry |
 | User cap | 100 test users max | No cap |
-| Who can click "Connect Google Account" | Nobody, until you set both env vars on a build you control | Any JARVIS user, once verification is complete |
+| Who can click "Connect Google Account" | Nobody, until the config file (or an env override) names a real Client ID | Any JARVIS user, automatically, once a verified Client ID ships in the packaged build |
 
 **This code must never be presented to end users as "Google login" until the production
-column above is actually true.** The feature flag is the mechanism that enforces this: it
-defaults off, and turning it on requires deliberately setting environment variables, not a
-UI toggle a user could stumble into.
+column above is actually true.** The gate is the Client ID itself: the checked-in config
+ships empty, and turning this on for real users means deliberately committing a real,
+verified Client ID into the build — never a UI toggle a user could stumble into, and never
+something that depends on a launch-time environment variable being present on every machine.
 
 ## Exact steps required in Google's own console (external, manual, not something this
 ## session can do)
@@ -68,11 +77,13 @@ These require your own Google account and cannot be scripted or automated from h
    Google's review to take real calendar time (historically days to a few weeks for a
    non-sensitive scope) — this is outside engineering's control and should be tracked as its
    own task, not assumed to complete by any particular date.
-7. Once published and verified, set `JARVIS_GOOGLE_CLIENT_ID` to the real Client ID and
-   `JARVIS_DRIVE_APP_OWNED=1` in the build/package configuration that ships to real users.
+7. Once published and verified, edit `src/drive-app-client-config.json` and set
+   `googleDriveClientId` to the real Client ID, then build/package normally - no environment
+   variable, launch script, or installer change is needed; the value ships with the app the
+   same way any other file under `src/**` already does.
 
 Until step 6 completes, this code should stay exactly as it is today: present, tested, and
-inert by default.
+inert by default (the config file's `googleDriveClientId` stays `""`).
 
 ## Token expiry, disconnect, cancellation, and authorization errors
 
@@ -93,8 +104,11 @@ machinery this phase reuses rather than reimplements:
 
 ## Test results
 
-- `scripts/drive-app-client-test.mjs` (new): 6/6 passed — both gates independently required,
-  exact-string flag matching (no "truthy" guessing), id trimming/empty handling.
+- `scripts/drive-app-client-test.mjs` (rewritten for Phase 5 Task 2): 8/8 passed — the
+  checked-in default stays empty/unavailable, a build-time config id makes the path available
+  with no environment variable, the dev env override takes priority, the `=0` kill switch
+  force-disables even with a real id configured, the legacy `=1` convention still works as a
+  no-op, and a missing/corrupt config file is treated as "not configured," never thrown.
 - `scripts/drive-ipc-security-test.mjs` (extended): 14/14 passed — confirms
   `driveConnectAppOwned` takes no renderer-supplied Client ID/secret, and
   `driveAppOwnedStatus` never leaks the id itself.

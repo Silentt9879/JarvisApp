@@ -837,7 +837,7 @@
     $('driveReason').textContent = (r.reason || '') + (r.status === 'connected' && r.appOwned ? ' Connected through JARVIS\'s own Google sign-in.' : '');
 
     // Phase 2 (Decision 1): the no-setup path is offered only while disconnected, no Client ID
-    // is configured yet, this build's env gates are both open, and the person has not already
+    // is configured yet, this build actually has a real app-owned Client ID available, and the person has not already
     // asked to use their own Client ID instead - BYO-client (unchanged) is the fallback in
     // every other case, exactly as it has always been.
     let appOwned = { available: false };

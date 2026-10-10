@@ -484,7 +484,8 @@
                 <div class="drive-body">
                   <p class="muted small" id="driveReason"></p>
                   <!-- Phase 2 (Decision 1): the no-setup path - hidden entirely unless this
-                       build's two env gates (drive-app-client.mjs) are both open. Until a real,
+                       build has a real Client ID configured (drive-app-client.mjs - a
+                       build-time config file, or a dev env override). Until a real,
                        Google-verified Client ID exists, driveAppOwnedStatus() always reports
                        available:false and nothing below this comment ever becomes visible. -->
                   <div class="drive-app-owned" id="driveAppOwnedSection" hidden>
