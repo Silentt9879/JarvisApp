@@ -865,7 +865,10 @@
     try { s = await window.jarvis.driveSyncStatus(); } catch { return; }
     const words = {
       idle: 'Synced', syncing: 'Syncing…', offline: 'Offline - will sync once reconnected',
-      error: s.lastError || 'Sync error', conflict: `${s.conflictCount} note${s.conflictCount === 1 ? '' : 's'} need attention - see Version History`,
+      error: s.lastError || 'Sync error',
+      // Phase 5 (Task 3): named, not just counted - "clearly visible" means the person can
+      // tell which note(s) to open, not just that something somewhere needs attention.
+      conflict: `${s.conflictCount} note${s.conflictCount === 1 ? '' : 's'} need attention: ${(s.conflictingNotes || []).map((n) => `"${n.title}"`).join(', ')} - open Version History on each to see both versions`,
     };
     let text = words[s.state] || 'Not synced yet.';
     if (s.state === 'idle' && s.lastSyncAt) text = `Synced ${JV.ago(s.lastSyncAt)}`;

@@ -129,6 +129,24 @@ await check('a conflict leaves status().state as "conflict" and a non-zero confl
   assert.equal(cb.ctrl.status().state, 'conflict');
   assert.ok(cb.ctrl.status().conflictCount >= 1);
 });
+console.log('\n--- Phase 5 (Task 3): conflicts are named, not just counted ---');
+await check('status().conflictingNotes resolves each conflicted path back to the real note\'s id and title', async () => {
+  const remote = new FakeDriveProvider();
+  const a = dir(); const b = dir();
+  saveKnowledgeNote(a, 'n1', { title: 'Shared grocery list', body: 'original', tags: [], favorite: false, folder: null }, {});
+  const ca = makeController(a, { remote });
+  const cb = makeController(b, { remote });
+  await ca.ctrl.syncNow(); await cb.ctrl.syncNow();
+  const { noteRevision } = await import('../src/knowledge.mjs');
+  saveKnowledgeNote(a, 'n1', { title: 'Shared grocery list', body: 'A edit', tags: [], favorite: false, folder: null }, { baseRevision: noteRevision(a, 'n1') });
+  saveKnowledgeNote(b, 'n1', { title: 'Shared grocery list', body: 'B edit', tags: [], favorite: false, folder: null }, { baseRevision: noteRevision(b, 'n1') });
+  await ca.ctrl.syncNow();
+  await cb.ctrl.syncNow();
+  const names = cb.ctrl.status().conflictingNotes;
+  assert.equal(names.length, 1);
+  assert.equal(names[0].id, 'n1');
+  assert.equal(names[0].title, 'Shared grocery list', 'the person sees which note, by its real title, not just a bare path or a count');
+});
 
 console.log(`\n${pass} passed, ${fail} failed`);
 fs.rmSync(TMP, { recursive: true, force: true });

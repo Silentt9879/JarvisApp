@@ -716,10 +716,20 @@ console.log('\n--- Phase 3: sync status line and Sync Now (UI wiring only - the 
 {
   const d = DIR();
   const drive = makeDrive(d);
-  const JV = boot(d, new FakeStorage(), drive, { driveSyncStatus: async () => ({ state: 'conflict', conflictCount: 2, syncing: false }) });
+  const JV = boot(d, new FakeStorage(), drive, {
+    driveSyncStatus: async () => ({
+      state: 'conflict', conflictCount: 2, syncing: false,
+      conflictingNotes: [{ id: 'n1', title: 'Shared grocery list' }, { id: 'n2', title: 'Budget notes' }],
+    }),
+  });
   await tick();
   JV.emit('view', 'kne'); await tick();
-  check('a conflict state is surfaced in plain language pointing at Version History, never silently hidden', /2 notes need attention/.test(JV.$('driveSyncStatus').textContent) && /Version History/.test(JV.$('driveSyncStatus').textContent), JV.$('driveSyncStatus').textContent);
+  check('a conflict state names the actual notes, not just a count, so the person knows what to open',
+    /2 notes need attention/.test(JV.$('driveSyncStatus').textContent)
+    && /Shared grocery list/.test(JV.$('driveSyncStatus').textContent)
+    && /Budget notes/.test(JV.$('driveSyncStatus').textContent)
+    && /Version History/.test(JV.$('driveSyncStatus').textContent),
+    JV.$('driveSyncStatus').textContent);
 }
 
 console.log('\n--- Phase 4: "Exclude from AI" toggle round-trips through save ---');

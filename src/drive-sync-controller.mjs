@@ -3,7 +3,9 @@
 // marker), and status reporting - as its own pure, dependency-injected module, the same split
 // drive-backup-controller.mjs already uses for backup/restore. main.mjs only wires this to
 // the real provider/connection/timers; it adds no sync logic of its own.
+import path from 'node:path';
 import { planSync, applySync, markPending, markSynced, syncDue, loadSyncState } from './drive-sync.mjs';
+import { listKnowledgeNotes, listTrash } from './knowledge.mjs';
 
 const DEFAULT_DEBOUNCE_MS = 4_000; // local-first: a save lands on disk immediately; sync follows a few seconds later, not on every keystroke
 
@@ -23,6 +25,24 @@ export function createDriveSyncController({
   let lastError = null;    // a hard failure (offline, thrown) from the most recent attempt - distinct from per-file `failed` entries in lastResult
   let lastSyncAt = null;
 
+  /** Phase 5 (Task 3 - "conflict notifications must be clearly visible"): a bare count is not
+   *  enough to act on - this resolves each conflicted path back to the actual note (id,
+   *  title) so the status line can name which notes need attention, not just how many. Reads
+   *  are cheap (a personal notebook's worth of notes) and this is only called for status(),
+   *  never on a hot path. A note that is itself unreadable/missing is still named by its
+   *  bare id rather than silently dropped from the list. */
+  function conflictNotes(state) {
+    const paths = Object.keys(state.conflicts || {});
+    if (!paths.length) return [];
+    const live = new Map(listKnowledgeNotes(userDir).notes.map((n) => [n.id, n]));
+    const trashed = new Map(listTrash(userDir).notes.map((n) => [n.id, n]));
+    return paths.map((relPath) => {
+      const id = path.basename(relPath, '.md');
+      const n = live.get(id) || trashed.get(id);
+      return { id, title: n?.title || 'Untitled note', relPath };
+    });
+  }
+
   function status() {
     const state = loadSyncState(userDir);
     const conflictCount = Object.keys(state.conflicts || {}).length;
@@ -33,6 +53,7 @@ export function createDriveSyncController({
     else if (conflictCount) kind = 'conflict';
     return {
       state: kind,
+      conflictingNotes: conflictNotes(state),
       syncing: !!op,
       progress: op?.progress || null,
       lastSyncAt,
