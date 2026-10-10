@@ -17,9 +17,31 @@ A Windows command center for Claude Code and the projects in your workspace: cha
 
 ---
 
-## 🆕 What's new in v2.4.0
+## 🆕 What's new in v2.5.0
 
 See the [Releases page](https://github.com/Silentt9879/JarvisApp/releases) for every published build; this is the current one.
+
+**Simplified**
+
+- 📝 **Notes, unified.** The old plain-text Notes page and the separate Knowledge Notes store are now one page - **Notes** - built on the Knowledge Notes engine. Opening it for the first time carries your old notes in automatically (verified, byte-for-byte, never destructive - the original `notes.json` is untouched and kept as a backup); the old page stays put, relabeled **Notes (Classic)**, for as long as you want to keep comparing. Send to Telegram, Trash, and full Version History all carried over.
+- 🗂️ **Folders and pinning.** Give any note a folder (even a nested one, like `Work/Projects`) and it shows up as a real, indented tree in the sidebar, filterable with one click. Pin the notes you want at the top of the list regardless of when they were last touched.
+- 🔎 **Ask about your notes.** A local, offline search box over your own notes - no account, no network call, no AI provider involved in the search itself. Find a note by the words in it, then press **Ask in Chat** to drop a cited, ready-to-edit question into the Chat composer - nothing is ever sent until you press Send yourself. Mark any note **Exclude from AI** and it will never appear in a search result or be offered as chat context, no matter how well it matches.
+- ☁️ **Automatic, bidirectional Google Drive sync (early).** Beyond the existing manual Back Up Now/Restore, Notes can now sync continuously in both directions between devices on the same Google account: local-first, debounced, works back online automatically after being offline, and never picks a side automatically if two devices changed the same note differently - the other version is always kept, in full, in that note's own Version History, never silently discarded. A corrupted or incomplete transfer from Drive is quarantined rather than ever being allowed to replace a good local note.
+- 🔐 **Simpler Google sign-in, on the way.** A one-click "Connect Google Account" path has been built, so you won't always need to create your own Google Cloud OAuth Client ID - it's just not switched on for everyone yet (see [Google Drive backup, restore & sync](#google-drive-backup-restore--sync) below for exactly why, and what's still needed before it is). Your own Client ID, if you already use one, keeps working exactly as before.
+
+**Fixed**
+
+- 🪟 **JARVIS could silently never open a window.** A rare but real startup failure - `ready-to-show` not firing (a slow first paint, a GPU hiccup, antivirus scanning a freshly-installed exe) - could leave JARVIS running with a tray icon and no window at all, with no way to recover it short of quitting from the tray and relaunching. JARVIS now checks a few seconds after startup and shows itself anyway if it hasn't already.
+
+**Technical**
+
+- New: `src/drive-sync.mjs` + `src/drive-sync-controller.mjs` (the bidirectional sync engine: a local ledger for a real three-way merge, never last-write-wins, a persistent restart-surviving offline retry queue, and corruption quarantine for malformed remote data), `src/notes-search.mjs` (local keyword search/retrieval with a per-note AI-exclusion permission, enforced at the storage boundary, not just the UI), `src/drive-app-client.mjs` + `src/drive-app-client-config.json` (the app-owned OAuth Client ID, resolved from a build-time config file - no secret, ships empty until a verified Client ID is deliberately committed).
+- `src/knowledge.mjs`: a new `aiExcluded` front-matter field, carried through save/delete/restore/migrate the same way `favorite` already is.
+- `src/main.mjs`: an in-process watchdog that shows the main window if it still isn't visible 8 seconds after creation - the window-not-appearing fix above.
+- Tests: 9 new suites (`unified-notes`, `drive-app-client`, `drive-sync`, `drive-sync-controller`, `drive-sync-safety`, `notes-search`, `ai-security-boundary`, `integration-audit`, `window-show`); `npm test` runs 61 suites, all passing. No automated change here has been run against a real Google account or a real two-device sync - see `docs/phase6-release-decision.md` in the repository for exactly what's verified versus what still needs a human at a real keyboard.
+
+<details>
+<summary><b>Earlier: v2.4.0</b></summary>
 
 **Simplified**
 
@@ -39,6 +61,8 @@ See the [Releases page](https://github.com/Silentt9879/JarvisApp/releases) for e
 - `src/workspace.mjs`: `docRoots(cwd)` now returns no roots (not a throw) when `cwd` isn't a usable workspace path yet.
 - `src/renderer/styles.css`, `src/renderer/index.html`: the sidebar's narrow-window breakpoint now sets both `width` and `flex-basis` together (a flex item's rendered size follows `flex-basis`, not a standalone `width`), reusing the same compact-rail layout the manual sidebar toggle already had; every nav icon gained a `title` attribute for its hover tooltip.
 - Tests: 13 new suites (`knowledge`, `knowledge-ipc`, `knowledge-trash`, `knowledge-history`, `knowledge-renderer`, `drive-backup`, `google-oauth`, `drive-token`, `drive-connection`, `google-drive-provider`, `drive-ipc-security`, `drive-backup-controller`, `nav-sidebar`); `npm test` runs 51 suites, all passing.
+
+</details>
 
 <details>
 <summary><b>Earlier: v2.3.1</b></summary>
@@ -488,9 +512,9 @@ See the [Releases page](https://github.com/Silentt9879/JarvisApp/releases) for e
 | 📲 **Devices** | Live Android phone screens with `flutter run`, ASP.NET sites and APIs with `dotnet watch`, and build diagnostics for both - Dart analysis and .NET build errors/warnings |
 | 🧑‍🏭 **Agents** | Your Claude Code subagents and the built-in ones, working as minions on the Agent floor; build your own from a blank page or a starter, or let JARVIS suggest a team for this workspace |
 | 📂 **Files** | Read any text file in the workspace, and double-click to open it in VS Code |
-| 📝 **Notes** | Write something down, save it, and send it to your Telegram |
-| 📓 **Knowledge Notes** | A second, separate Markdown note store with tags, favorites, Trash and full Version History |
-| ☁️ **Google Drive backup** | Manual backup and restore of Knowledge Notes to your own Google Drive, with a preview before any restore |
+| 📝 **Notes** | Markdown notes with folders, pinning, tags, Trash and full Version History - write something down, save it, and optionally send it to your Telegram |
+| 🔎 **Ask about your notes** | Local, offline search over your own notes, with a cited hand-off into Chat - nothing is sent until you press Send. Mark a note "Exclude from AI" to keep it out of search and chat context entirely |
+| ☁️ **Google Drive backup & sync** | Manual backup/restore, plus optional automatic two-way sync between devices, to your own Google Drive - a preview before any restore, and conflicts are always kept, never silently overwritten |
 | ✅ **ClickUp** | Your ClickUp tasks, synced through Claude Code's ClickUp connection and grouped by sprint (optional) |
 | ↩️ **Undo** | Undo every file change made since any message, in one click |
 | 🩺 **Health** | What is in order and what needs setting up, judged against the projects you actually have |
@@ -501,7 +525,7 @@ See the [Releases page](https://github.com/Silentt9879/JarvisApp/releases) for e
 ## 📷 Screenshots
 
 > No screenshots are published in this repository yet. This section is a placeholder for
-> future images of Chat, Projects, Devices, Knowledge Notes and the Google Drive panel.
+> future images of Chat, Projects, Devices, Notes and the Google Drive panel.
 
 ---
 
@@ -519,8 +543,8 @@ See the [Releases page](https://github.com/Silentt9879/JarvisApp/releases) for e
 1. Download `JARVIS-Setup-<version>.exe` from this repository's **Releases** page and run it. It installs for you alone, with no administrator rights. The installer is not code-signed yet, so Windows SmartScreen may warn the first time: **More info → Run anyway**.
 2. The walk-through opens: sign in to Claude, **choose your workspace** (the folder that holds your projects), see what JARVIS found in it and what this PC has, then the optional extras. Every step can be skipped and done later.
 3. Decide whether to **trust** the workspace (below). JARVIS asks when you add one.
-4. Open **Knowledge Notes** in the sidebar to start a Markdown note, or **Import from Notes** to bring in what you already wrote on the plain Notes page.
-5. To back Knowledge Notes up to your own Google Drive, open the Drive panel inside Knowledge Notes and follow [Google Drive backup & restore](#google-drive-backup--restore) below - entirely optional, and off until you connect it yourself.
+4. Open **Notes** in the sidebar. If you used JARVIS before v2.5.0, your old notes carry over automatically the first time you open it - nothing is deleted, and the original is kept (see [Notes](#notes) below).
+5. To back Notes up to, or sync them with, your own Google Drive, open the Drive panel inside Notes and follow [Google Drive backup, restore & sync](#google-drive-backup-restore--sync) below - entirely optional, and off until you connect it yourself.
 
 ---
 
@@ -562,36 +586,48 @@ An agent is a Claude Code subagent - one file, with a name, a description and in
 
 ---
 
-## 📓 Knowledge Notes
+## 📝 Notes
 
-A second, separate Markdown note store from the plain Notes page above - one file per note, with tags, favorites, a two-pane editor (write on the left, a live Markdown preview on the right), Trash with Restore, and full **Version History**.
+One unified Markdown note store - folders, pinning, tags, a two-pane editor (write on the left, a live Markdown preview on the right), Trash with Restore, and full **Version History**. Built on what used to be the separate "Knowledge Notes" store; the old plain-text Notes page is still there, relabeled **Notes (Classic)**, until you've had a chance to confirm everything carried over.
 
-- **Version History.** Every save that meaningfully changes a note's title, body, tags, favorite or folder keeps the version it replaces - browsable, compared side-by-side with the current version, and restorable at any time. A restore is itself reversible: the version it replaces is kept too. Nothing here is ever pruned automatically, so history only grows; there is no retention limit yet.
+- **Automatic migration, on first open.** Your old Notes (Classic) entries carry over the moment you open the new Notes page - no button to find, nothing deleted. The original `notes.json` is kept untouched as its own backup; a note already edited in the new store since the last carry-over is left alone and flagged, never silently overwritten.
+- **Folders and pinning.** A folder (even a nested one, like `Personal/Errands`) shows as a real, indented tree in the sidebar you can filter by. Pin any note to keep it at the top of the list.
+- **Version History.** Every save that meaningfully changes a note's title, body, tags, folder, pin or AI-exclusion state keeps the version it replaces - browsable, compared side-by-side with the current version, and restorable at any time. A restore is itself reversible: the version it replaces is kept too. Nothing here is ever pruned automatically, so history only grows; there is no retention limit yet (JARVIS will tell you once it's getting large).
 - **Conflict-safe saves.** A save names the exact version it started from; if the note changed elsewhere since you opened it, the save is refused rather than silently overwriting - with an explicit "Overwrite anyway" that backs up what it would replace first.
-- **Import from Notes**, with a preview of exactly what would be added before you confirm anything.
-- Entirely separate from the plain Notes page and its `notes.json` file - nothing here touches that store, and nothing in it touches Knowledge Notes.
+- **Ask about your notes.** A search box, entirely local and offline - no account, no network call. Find a note by the words in it, then **Ask in Chat** drops a cited question into the Chat composer for you to review and send yourself. A note marked **Exclude from AI** never appears here, and never reaches Chat as context, no matter how well it matches - enforced where the data is stored, not only in this page.
+- **Send to Telegram**, carried over from Notes (Classic), as its own button per note.
 
 ---
 
-## ☁️ Google Drive backup & restore
+## ☁️ Google Drive backup, restore & sync
 
-Knowledge Notes can be backed up to, and restored from, your own Google Drive - **manually only**. There is no automatic sync, no scheduled backup, and no background upload; a backup happens only when you press **Back Up Now**, and a restore only after you explicitly confirm it.
+Notes can be backed up to, restored from, and now optionally **synced continuously** with, your own Google Drive.
 
-**What it backs up:** only your Knowledge Notes, their Trash, and their Version History. It does **not** back up the plain Notes page, your JARVIS settings, your workspace, your agents, or anything else JARVIS stores.
+**What it covers:** only Notes, their Trash, and their Version History. It does **not** back up your JARVIS settings, your workspace, your agents, or anything else JARVIS stores.
 
-**Connecting:**
-1. In Google Cloud Console, create an OAuth 2.0 Client ID of type **Desktop app**, and paste its Client ID (and secret, if given one) into Knowledge Notes' Drive panel.
+**Connecting (today, for everyone):**
+1. In Google Cloud Console, create an OAuth 2.0 Client ID of type **Desktop app**, and paste its Client ID (and secret, if given one) into the Drive panel inside Notes.
 2. Press **Connect Google Drive** - your system browser opens to Google's own sign-in and consent screen, requesting only the `drive.file` scope (JARVIS can only ever see files and folders it creates itself through this connection - never your existing Drive content).
-3. Once signed in, the panel shows **Connected**, and the backup/restore controls appear.
+3. Once signed in, the panel shows **Connected**, and the backup/restore/sync controls appear.
 
-**Backing up and restoring:**
-- **Back Up Now** uploads every Knowledge Note, Trash entry and Version History snapshot, verifying each one by hashing it after upload - a backup is only ever marked complete once every file has been confirmed.
+> **A simpler, no-setup "Connect Google Account" button has been built, but is not switched on in this release.** It needs a Google-verified OAuth Client ID baked into the app at build time, which in turn needs Google's own review of the consent screen - an external process, not something a code change can skip or speed up. Pasting your own Client ID above keeps working exactly as it always has, unaffected either way.
+
+**Backing up and restoring (manual, unchanged):**
+- **Back Up Now** uploads every note, Trash entry and Version History snapshot, verifying each one by hashing it after upload - a backup is only ever marked complete once every file has been confirmed.
 - **Backup History** lists every backup made, distinguishing a complete one from an interrupted or corrupted one; only a complete, re-verified backup can be restored.
 - **Restore** first shows a read-only preview of exactly what would be added, replaced or left unchanged, then requires a second, explicit confirmation before anything is written locally. Whatever a restore would overwrite is itself backed up first, so a restore is never a one-way trip.
 
+**Automatic sync (new, early):**
+- Once connected, Notes sync in the background - local-first (a save always lands on disk immediately; sync follows after a short pause), and automatically on reconnecting after being offline.
+- **Conflicts are never resolved automatically.** If the same note changed on two devices since they last agreed, neither side is overwritten - the status line names the note, and the other device's version is kept, in full, in that note's own Version History for you to review and restore if you want it.
+- **Deletions and Trash sync too**, the same way an ordinary edit does - moving a note to Trash on one device moves it to Trash on the others, recoverable there exactly as it would be locally.
+- **Corrupted or incomplete data from Drive is quarantined, never applied.** If what comes back from Drive doesn't look like a real note, it's set aside for inspection instead of ever being allowed to replace a good local note.
+- Sync and the manual Backup History above are completely independent - a backup taken at any point restores exactly what existed then, unaffected by anything sync has done since.
+
 **Known limits:**
-- The Google OAuth consent screen for this project is currently in Google's **Testing** publishing status; a test user's refresh token expires after about seven days, after which JARVIS will ask you to reconnect.
-- A restore is verified and protected file-by-file, but is not one single all-or-nothing transaction across the whole backup - if an individual file fails partway through, the files already restored stay restored, and the failure is reported plainly rather than silently.
+- The Google OAuth consent screen for a self-configured Client ID is typically in Google's **Testing** publishing status; a test user's refresh token expires after about seven days, after which JARVIS will ask you to reconnect.
+- Sync has been tested thoroughly against a simulated Google Drive, but not yet against a real multi-day, multi-device, real-account run - treat it as an early feature and keep using manual backups alongside it for now.
+- A restore (or a sync pass) is verified and protected file-by-file, but is not one single all-or-nothing transaction - if an individual file fails partway through, the files already handled stay handled, and the failure is reported plainly rather than silently.
 - Backups and Version History are both kept indefinitely for now - there is no automatic cleanup of old ones.
 
 ---
@@ -658,10 +694,11 @@ Knowledge Notes can be backed up to, and restored from, your own Google Drive - 
 - **Source Control** lists the repositories at the top of the workspace and up to two folders down; the Projects page shows deeper ones too.
 - **ClickUp** works through Claude Code's own ClickUp connection, so connect ClickUp in Claude Code first. JARVIS only reads; nothing is written back.
 - **Voice** runs on this PC; the speech model (about 250 MB) downloads the first time you use it.
-- **Google Drive backup is manual only** - there is no scheduled or automatic backup, and no two-way sync.
-- **Knowledge Notes' Version History, and Drive backups, are both kept indefinitely** - nothing is pruned automatically yet.
-- **A Drive restore is not one atomic transaction** across the whole backup - each file is individually verified and protected, but a failure partway through leaves the files already restored in place rather than rolling everything back.
-- **The Google OAuth consent screen is in Testing status** - a signed-in test account's refresh token expires after about seven days, after which reconnecting is needed.
+- **Google Drive sync is an early feature** - keep using manual Back Up Now alongside it for now, and expect to see "Sync Now" rather than a fully hands-off experience just yet.
+- **Notes' Version History, and Drive backups, are both kept indefinitely** - nothing is pruned automatically yet.
+- **A Drive restore (or a sync pass) is not one atomic transaction** across the whole backup - each file is individually verified and protected, but a failure partway through leaves the files already handled in place rather than rolling everything back.
+- **The "Connect Google Account" one-click sign-in isn't live yet** - it needs Google's own verification of a published OAuth client first; pasting your own Client ID is still the way to connect today.
+- **The Google OAuth consent screen is in Testing status for a self-configured Client ID** - a signed-in test account's refresh token expires after about seven days, after which reconnecting is needed.
 
 ---
 
@@ -692,7 +729,7 @@ added in the future.
 
 ## 🔗 Releases
 
-Every published build is on the [**Releases page**](https://github.com/Silentt9879/JarvisApp/releases) - **v2.4.0 is the current release**. See [What's new in v2.4.0](#whats-new-in-v240) above for a summary, or `JARVIS-Setup-2.4.0.exe`'s own release notes for the exact text published with it.
+Every published build is on the [**Releases page**](https://github.com/Silentt9879/JarvisApp/releases) - **v2.5.0 is the current release**. See [What's new in v2.5.0](#whats-new-in-v250) above for a summary, or `JARVIS-Setup-2.5.0.exe`'s own release notes for the exact text published with it.
 
 ---
 
