@@ -731,6 +731,16 @@ console.log('\n--- Phase 3: sync status line and Sync Now (UI wiring only - the 
     && /Version History/.test(JV.$('driveSyncStatus').textContent),
     JV.$('driveSyncStatus').textContent);
 }
+{
+  const d = DIR();
+  const drive = makeDrive(d);
+  const JV = boot(d, new FakeStorage(), drive, { driveSyncStatus: async () => ({ state: 'quarantine', quarantinedCount: 2, syncing: false }) });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('Phase 6 (Task 5): a quarantine state explicitly says local notes were NOT changed - never silently invisible',
+    /2 files/.test(JV.$('driveSyncStatus').textContent) && /not changed/.test(JV.$('driveSyncStatus').textContent),
+    JV.$('driveSyncStatus').textContent);
+}
 
 console.log('\n--- Phase 4: "Exclude from AI" toggle round-trips through save ---');
 {

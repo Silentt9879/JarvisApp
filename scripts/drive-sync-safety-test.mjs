@@ -118,8 +118,8 @@ await check('after a simulated reconnect (the provider starts working again), th
 
 // ================================================================== Corrupted remote data
 
-console.log('\n--- corrupted remote data is pulled faithfully, never silently "fixed" or crashed on ---');
-await check('a remote file that is not valid note content (corrupted by something other than JARVIS) is still pulled byte-for-byte, and the existing corrupt-note handling catches it afterward', async () => {
+console.log('\n--- Task 5 (corruption safety): malformed/corrupted remote data is quarantined, never silently applied ---');
+await check('corrupted remote data with no existing local note is quarantined, not created as a live (corrupt) note', async () => {
   const remote = new FakeDriveProvider();
   const a = dir(); const b = dir();
   saveKnowledgeNote(a, 'n1', { title: 'Fine', body: 'hello', tags: [], favorite: false, folder: null }, {});
@@ -134,10 +134,63 @@ await check('a remote file that is not valid note content (corrupted by somethin
   remote.files.get(fileId).bytes = Buffer.from('%%% not front matter, just garbage %%%');
 
   const rB = await syncOnce(b, remote);
-  assert.equal(rB.failed.length, 0, 'the pull itself does not fail or throw on corrupted-but-readable bytes');
+  assert.equal(rB.failed.length, 0, 'quarantining is not treated as a hard failure of the pass');
+  assert.equal(rB.quarantined.length, 1, 'the bad file is explicitly quarantined');
   const pulled = listKnowledgeNotes(b).notes.find((x) => x.id === 'n1');
-  assert.ok(pulled, 'the file exists locally');
-  assert.equal(pulled.corrupt, true, 'and the existing, already-tested corrupt-note flag correctly catches it on the way back out - no special sync-side crash or silent repair');
+  assert.equal(pulled, undefined, 'no live note (corrupt or otherwise) was ever created from the bad data');
+
+  // The quarantined bytes themselves must still be recoverable on disk, for inspection.
+  const qDir = path.join(knowledgePaths(b).root, 'sync-quarantine');
+  const qFiles = fs.readdirSync(qDir);
+  assert.equal(qFiles.length, 1);
+  assert.match(fs.readFileSync(path.join(qDir, qFiles[0]), 'utf8'), /garbage/);
+});
+await check('corrupted remote data that WOULD replace an already-valid local note leaves that note completely untouched - the central Task 5 guarantee', async () => {
+  const remote = new FakeDriveProvider();
+  const a = dir(); const b = dir();
+  saveKnowledgeNote(a, 'n1', { title: 'Good content', body: 'This is the real, valid note.', tags: [], favorite: false, folder: null }, {});
+  await syncOnce(a, remote);
+  await syncOnce(b, remote); // B now has its own valid, synced copy
+
+  const root = await remote.findFolder(null, 'JARVIS Notes Sync');
+  const notesFolder = await remote.findFolder(root.id, 'notes');
+  const children = await remote.listChildren(notesFolder.id);
+  const fileId = children.find((c) => c.name === 'n1.md').id;
+  remote.files.get(fileId).bytes = Buffer.from('garbage, truncated, not even front matter');
+
+  // Edit A again so B's next sync sees a real reason to pull an "update" - but the remote
+  // copy it would pull is the corrupted one above.
+  saveKnowledgeNote(a, 'n1', { title: 'Good content', body: 'An edit that never actually reaches B, because the remote copy is corrupted.', tags: [], favorite: false, folder: null }, { baseRevision: noteRevision(a, 'n1') });
+  // (Re-corrupt after A's own push, since pushing would otherwise overwrite the corruption.)
+  await syncOnce(a, remote);
+  const childrenAfter = await remote.listChildren(notesFolder.id);
+  const fileIdAfter = childrenAfter.find((c) => c.name === 'n1.md').id;
+  remote.files.get(fileIdAfter).bytes = Buffer.from('garbage, truncated, not even front matter');
+
+  const rB = await syncOnce(b, remote);
+  assert.equal(rB.quarantined.length, 1, 'the corrupted pull is quarantined');
+  const stillOnB = listKnowledgeNotes(b).notes.find((x) => x.id === 'n1');
+  assert.equal(stillOnB.body, 'This is the real, valid note.', 'B\'s valid local note is byte-for-byte untouched - never replaced by the corrupted data');
+  assert.equal(stillOnB.corrupt, false, 'and never marked corrupt either - it was never touched at all');
+});
+await check('a quarantined path is retried on the next pass once the remote side is fixed - never permanently stuck', async () => {
+  const remote = new FakeDriveProvider();
+  const a = dir(); const b = dir();
+  saveKnowledgeNote(a, 'n1', { title: 'T', body: 'hello', tags: [], favorite: false, folder: null }, {});
+  await syncOnce(a, remote);
+  const root = await remote.findFolder(null, 'JARVIS Notes Sync');
+  const notesFolder = await remote.findFolder(root.id, 'notes');
+  const children = await remote.listChildren(notesFolder.id);
+  const fileId = children.find((c) => c.name === 'n1.md').id;
+  const goodBytes = remote.files.get(fileId).bytes;
+  remote.files.get(fileId).bytes = Buffer.from('garbage');
+
+  const r1 = await syncOnce(b, remote);
+  assert.equal(r1.quarantined.length, 1);
+  remote.files.get(fileId).bytes = goodBytes; // "fixed" - the real content is back
+  const r2 = await syncOnce(b, remote);
+  assert.equal(r2.pulled, 1, 'once the remote data is valid again, the very next pass pulls it normally - the quarantine was never a permanent block');
+  assert.ok(listKnowledgeNotes(b).notes.some((x) => x.id === 'n1' && x.body === 'hello'));
 });
 
 // ================================================================== Conflicts across more than two cycles

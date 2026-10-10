@@ -869,6 +869,10 @@
       // Phase 5 (Task 3): named, not just counted - "clearly visible" means the person can
       // tell which note(s) to open, not just that something somewhere needs attention.
       conflict: `${s.conflictCount} note${s.conflictCount === 1 ? '' : 's'} need attention: ${(s.conflictingNotes || []).map((n) => `"${n.title}"`).join(', ')} - open Version History on each to see both versions`,
+      // Phase 6 (Task 5): corrupted/malformed remote data was refused, not silently applied -
+      // the local note(s) it would have replaced are untouched; this is informational, not a
+      // conflict to resolve, and clears on its own once the remote side is fixed and re-synced.
+      quarantine: `${s.quarantinedCount} file${s.quarantinedCount === 1 ? '' : 's'} from Google Drive looked corrupted and were not applied - your local notes were not changed.`,
     };
     let text = words[s.state] || 'Not synced yet.';
     if (s.state === 'idle' && s.lastSyncAt) text = `Synced ${JV.ago(s.lastSyncAt)}`;

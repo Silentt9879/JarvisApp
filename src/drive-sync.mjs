@@ -31,7 +31,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { knowledgePaths, snapshotBeforeOverwrite } from './knowledge.mjs';
+import { knowledgePaths, snapshotBeforeOverwrite, parseNoteFile } from './knowledge.mjs';
 import { collectLocalFiles } from './drive-backup.mjs';
 
 export const SYNC_ROOT_NAME = 'JARVIS Notes Sync';
@@ -238,6 +238,48 @@ export async function planSync(userDir, remote, { fsImpl = fs } = {}) {
 
 function pathFor(root, relPath) { return path.join(root, relPath); }
 
+/**
+ * Phase 6 (Task 5 - corruption safety): a pulled file must actually look like one of this
+ * app's own note files - real front matter, no parse problems, and its front-matter `id`
+ * matching the filename it is about to be written under - before it is ever allowed to
+ * replace (or create) anything in the live store. This rejects partial/truncated transfers,
+ * garbage bytes, and a file whose id was altered or mismatched in transit - exactly the
+ * "malformed, incomplete, or corrupted remote data" Task 5 asks to never silently accept.
+ */
+function isWellFormedNoteFile(bytes, relPath, kind) {
+  let text;
+  try { text = Buffer.from(bytes).toString('utf8'); } catch { return false; }
+  const filename = path.basename(relPath, '.md');
+  // notes/trash are named exactly "<id>.md"; a version-history snapshot is "<id>.<when>.md"
+  // (see knowledge.mjs's own SNAPSHOT_FILE pattern) - the id is only the part before the
+  // first dot there, never the whole filename.
+  const expectedId = kind === 'snapshot' ? filename.split('.')[0] : filename;
+  const parsed = parseNoteFile(text, { fallbackId: expectedId });
+  return parsed.hasFrontMatter && parsed.problems.length === 0 && parsed.fields.id === expectedId;
+}
+
+/** Quarantines suspicious bytes under knowledge/sync-quarantine/ - never under notes/trash/
+ *  overwritten, so a corrupted transfer can never be mistaken for a real, live note merely by
+ *  sitting in the right folder. Atomic write, read back and verified, same as every other
+ *  write in this file - the quarantined copy itself must be trustworthy, even if its content
+ *  is not. Returns the file written, for the caller to report; never throws. */
+function quarantineBytes(userDir, relPath, bytes, { fsImpl, now }) {
+  const { root } = knowledgePaths(userDir);
+  const qDir = path.join(root, 'sync-quarantine');
+  const name = `${path.basename(relPath, '.md')}.${now()}.quarantined.md`;
+  const dest = path.join(qDir, name);
+  if (!within(dest, qDir)) return { ok: false, error: 'not a usable quarantine path' };
+  try {
+    fsImpl.mkdirSync(qDir, { recursive: true });
+    const tmp = `${dest}.${process.pid}.tmp`;
+    fsImpl.writeFileSync(tmp, bytes);
+    fsImpl.renameSync(tmp, dest);
+    const back = fsImpl.readFileSync(dest);
+    if (Buffer.compare(Buffer.from(back), Buffer.from(bytes)) !== 0) throw new Error('the quarantined copy did not verify');
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  return { ok: true, file: name };
+}
+
 /** A conflict's losing (remote) content, preserved as a real, recoverable Version History
  *  snapshot - reusing snapshotBeforeOverwrite's own exact mechanism and safety (atomic write,
  *  read-back verified, collision-proofed filename), so "both sides are kept, the person
@@ -297,7 +339,7 @@ export async function applySync(userDir, remote, plan, { fsImpl = fs, now = () =
   const { root } = knowledgePaths(userDir);
   const state = loadSyncState(userDir, { fsImpl });
   const { kindFolders } = await collectRemoteFiles(remote); // ensures the mirror's folders exist even on an all-unchanged pass
-  const result = { pushed: 0, pulled: 0, deleted: 0, conflicts: 0, failed: [] };
+  const result = { pushed: 0, pulled: 0, deleted: 0, conflicts: 0, quarantined: [], failed: [] };
   let done = 0;
   const total = plan.pushAdd.length + plan.pushUpdate.length + plan.pushDelete.length + plan.pullAdd.length + plan.pullUpdate.length + plan.pullDelete.length + plan.conflicts.length;
   const step = (relPath) => { onProgress({ phase: 'sync', current: done, total, path: relPath }); done += 1; };
@@ -335,6 +377,18 @@ export async function applySync(userDir, remote, plan, { fsImpl = fs, now = () =
     let bytes;
     try { bytes = await remote.downloadFile(entry.driveFileId); } catch (e) { result.failed.push({ relPath: entry.relPath, op: 'pull', error: String(e?.message || e) }); continue; }
     const hash = hashBytes(bytes);
+
+    // Task 5 (corruption safety): malformed/incomplete/corrupted remote data is never allowed
+    // to replace (or create) a note - it is quarantined instead, and a VALID local note is
+    // left completely untouched (not even snapshotted, since nothing about it is about to
+    // change). The remote side gets another chance to self-heal on a later pass; this device
+    // never silently trusts it in the meantime.
+    if (!isWellFormedNoteFile(bytes, entry.relPath, entry.kind)) {
+      const q = quarantineBytes(userDir, entry.relPath, bytes, { fsImpl, now });
+      result.quarantined.push({ relPath: entry.relPath, quarantineFile: q.file || null, error: q.ok ? 'remote data did not look like a valid note - quarantined, not applied' : `remote data was corrupted AND could not even be quarantined: ${q.error}` });
+      continue; // the ledger entry for this path is deliberately left unchanged - never marked synced to data we refused to trust
+    }
+
     // A pulled note that would replace an existing local note is checkpointed first - the
     // same safety net a Drive restore already gives a replaced note, reused here unchanged.
     let existedLocally = false;

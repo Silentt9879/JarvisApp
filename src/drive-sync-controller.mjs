@@ -46,14 +46,22 @@ export function createDriveSyncController({
   function status() {
     const state = loadSyncState(userDir);
     const conflictCount = Object.keys(state.conflicts || {}).length;
+    // Quarantine (Task 5) is tracked only for the most recently completed pass - unlike
+    // conflicts, a quarantined item is never "stuck" (the very next pass re-evaluates it
+    // fresh against whatever the remote now holds), so there is no durable per-path ledger
+    // entry for it the way conflicts have one; surfacing the last pass's count is enough to
+    // make it visible without inventing persistent state that would mislead once it clears.
+    const quarantinedCount = lastResult?.quarantined?.length || 0;
     let kind = 'idle';
     if (op) kind = 'syncing';
     else if (!isConnected()) kind = 'offline';
     else if (lastError) kind = 'error';
     else if (conflictCount) kind = 'conflict';
+    else if (quarantinedCount) kind = 'quarantine';
     return {
       state: kind,
       conflictingNotes: conflictNotes(state),
+      quarantinedCount,
       syncing: !!op,
       progress: op?.progress || null,
       lastSyncAt,
@@ -81,8 +89,8 @@ export function createDriveSyncController({
       lastSyncAt = now();
       markSynced(userDir, {});
       lastResult = r;
-      if (r.failed.length || r.conflicts) {
-        log('Drive sync: partial -', `${r.pushed} pushed, ${r.pulled} pulled, ${r.deleted} deleted, ${r.conflicts} conflict(s), ${r.failed.length} failed`);
+      if (r.failed.length || r.conflicts || r.quarantined?.length) {
+        log('Drive sync: partial -', `${r.pushed} pushed, ${r.pulled} pulled, ${r.deleted} deleted, ${r.conflicts} conflict(s), ${r.quarantined?.length || 0} quarantined, ${r.failed.length} failed`);
       } else {
         log('Drive sync: complete -', `${r.pushed} pushed, ${r.pulled} pulled, ${r.deleted} deleted`);
       }

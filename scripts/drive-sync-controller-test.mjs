@@ -148,6 +148,25 @@ await check('status().conflictingNotes resolves each conflicted path back to the
   assert.equal(names[0].title, 'Shared grocery list', 'the person sees which note, by its real title, not just a bare path or a count');
 });
 
+console.log('\n--- Phase 6 (Task 5): quarantined remote data is surfaced in status, never silently invisible ---');
+await check('status().state becomes "quarantine" with a count, after a pass that refused corrupted remote data', async () => {
+  const remote = new FakeDriveProvider();
+  const a = dir(); const b = dir();
+  saveKnowledgeNote(a, 'n1', { title: 'T', body: 'hello', tags: [], favorite: false, folder: null }, {});
+  const ca = makeController(a, { remote });
+  const cb = makeController(b, { remote });
+  await ca.ctrl.syncNow();
+  const root = await remote.findFolder(null, 'JARVIS Notes Sync');
+  const notesFolder = await remote.findFolder(root.id, 'notes');
+  const children = await remote.listChildren(notesFolder.id);
+  const fileId = children.find((c) => c.name === 'n1.md').id;
+  remote.files.get(fileId).bytes = Buffer.from('garbage, not a real note');
+  const r = await cb.ctrl.syncNow();
+  assert.equal(r.ok, true, 'quarantining is not a hard failure of the pass');
+  assert.equal(cb.ctrl.status().state, 'quarantine');
+  assert.equal(cb.ctrl.status().quarantinedCount, 1);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 fs.rmSync(TMP, { recursive: true, force: true });
 process.exit(fail ? 1 : 0);
