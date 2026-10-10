@@ -42,7 +42,12 @@ export const SCHEMA_VERSION = 1;
 // restored note keeps it as "was deleted, then restored" history) - not read by anything in
 // the live store today, only by listTrash(), but it is a managed key like created/updated/
 // sentAt rather than something a later phase would have to carry through by hand.
-const MANAGED_KEYS = ['id', 'title', 'created', 'updated', 'tags', 'favorite', 'folder', 'project', 'session', 'branch', 'sentAt', 'deletedAt'];
+// `aiExcluded` (Phase 4, AI Knowledge): a per-note opt-out, checked by notes-search.mjs
+// before a note's content is ever included in a search result or an AI chat context -
+// "respect note-level AI permissions... exclude private or restricted notes" from the brief.
+// Defaults to false (included) the same way `favorite` defaults to false - a note is
+// discoverable unless its own owner has explicitly said otherwise.
+const MANAGED_KEYS = ['id', 'title', 'created', 'updated', 'tags', 'favorite', 'folder', 'project', 'session', 'branch', 'sentAt', 'deletedAt', 'aiExcluded'];
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 // Windows reserves these as device names, whatever the extension - "con.md" cannot be a real file.
 const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
@@ -136,7 +141,7 @@ export function parseNoteFile(text, { fallbackId = null } = {}) {
   const lines = raw.split(/\r?\n/);
   const out = {
     hasFrontMatter: false, eol, problems: [],
-    fields: { id: null, title: null, created: null, updated: null, tags: null, favorite: null, folder: null, project: null, session: null, branch: null, sentAt: null, deletedAt: null },
+    fields: { id: null, title: null, created: null, updated: null, tags: null, favorite: null, folder: null, project: null, session: null, branch: null, sentAt: null, deletedAt: null, aiExcluded: null },
     otherKeys: [], raw: new Map(), body: raw,
   };
   if (lines[0]?.trim() !== '---') {
@@ -174,6 +179,7 @@ export function parseNoteFile(text, { fallbackId = null } = {}) {
     if (MANAGED_KEYS.includes(b.key)) {
       if (b.key === 'tags') out.fields.tags = v.kind === 'list' ? v.list : (v.text ? splitList(v.text) : []);
       else if (b.key === 'favorite') out.fields.favorite = /^true$/i.test(v.text || '');
+      else if (b.key === 'aiExcluded') out.fields.aiExcluded = /^true$/i.test(v.text || '');
       else if (b.key === 'created' || b.key === 'updated' || b.key === 'sentAt' || b.key === 'deletedAt') { const n = Number(v.text); out.fields[b.key] = Number.isFinite(n) ? n : null; }
       else out.fields[b.key] = v.kind === 'scalar' ? (v.text || null) : null;
     } else {
@@ -185,6 +191,7 @@ export function parseNoteFile(text, { fallbackId = null } = {}) {
   else if (!ID.test(out.fields.id)) out.problems.push(`"${out.fields.id}" is not a valid id shape.`);
   if (out.fields.tags == null) out.fields.tags = [];
   if (out.fields.favorite == null) out.fields.favorite = false;
+  if (out.fields.aiExcluded == null) out.fields.aiExcluded = false;
   return out;
 }
 
@@ -203,6 +210,7 @@ export function renderNoteFile(note, original = null) {
     if (v === null || v === undefined || v === '') return null;
     if (k === 'tags') return Array.isArray(v) && v.length ? `tags: [${v.map((t) => yamlString(String(t))).join(', ')}]` : null;
     if (k === 'favorite') return v ? 'favorite: true' : null;
+    if (k === 'aiExcluded') return v ? 'aiExcluded: true' : null;
     if (k === 'created' || k === 'updated' || k === 'sentAt' || k === 'deletedAt') return `${k}: ${Number(v)}`;
     return `${k}: ${yamlString(String(v))}`;
   };
@@ -282,7 +290,7 @@ export function listKnowledgeNotes(userDir, { fsImpl = fs } = {}) {
       id: p.fields.id || fallbackId, file: name, readable: true,
       title: p.fields.title, created: p.fields.created, updated: p.fields.updated, tags: p.fields.tags,
       favorite: p.fields.favorite, folder: p.fields.folder, project: p.fields.project, session: p.fields.session,
-      branch: p.fields.branch, sentAt: p.fields.sentAt, body: p.body,
+      branch: p.fields.branch, sentAt: p.fields.sentAt, aiExcluded: p.fields.aiExcluded, body: p.body,
       corrupt: p.problems.length > 0, problems: p.problems,
       idMismatch, otherKeys: p.otherKeys, modified: stat.mtimeMs, size: stat.size,
     });
@@ -558,7 +566,7 @@ export function validateNoteInput(input) {
   if (body.length > MAX_BODY) return { ok: false, error: `This note is too long to save (over ${MAX_BODY.toLocaleString()} characters).` };
   const title = typeof input.title === 'string' ? input.title.trim().slice(0, MAX_TITLE) : '';
   const folder = typeof input.folder === 'string' ? input.folder.trim().slice(0, MAX_FOLDER) : '';
-  return { ok: true, value: { title: title || null, body, tags: sanitizeTags(input.tags), favorite: input.favorite === true, folder: folder || null } };
+  return { ok: true, value: { title: title || null, body, tags: sanitizeTags(input.tags), favorite: input.favorite === true, folder: folder || null, aiExcluded: input.aiExcluded === true } };
 }
 
 const hashText = (text) => createHash('sha256').update(text).digest('hex');
@@ -677,6 +685,7 @@ export function saveKnowledgeNote(userDir, id, patch, { baseRevision = null, for
     || !tagsEqual(patch.tags, original.fields.tags)
     || (patch.favorite === true) !== (original.fields.favorite === true)
     || (patch.folder ?? null) !== (original.fields.folder ?? null)
+    || (patch.aiExcluded === true) !== (original.fields.aiExcluded === true)
   );
 
   // Two reasons to keep a recovery copy of what is on disk right now, before it is replaced:
@@ -700,6 +709,7 @@ export function saveKnowledgeNote(userDir, id, patch, { baseRevision = null, for
     tags: Array.isArray(patch.tags) ? patch.tags : [],
     favorite: patch.favorite === true,
     folder: patch.folder ?? null,
+    aiExcluded: patch.aiExcluded === true,
     project: original?.fields.project ?? null,
     session: original?.fields.session ?? null,
     branch: original?.fields.branch ?? null,
@@ -730,7 +740,7 @@ export function markKnowledgeNoteSent(userDir, id, at, { fsImpl = fs } = {}) {
   const note = {
     id, title: p.fields.title, created: p.fields.created, updated: p.fields.updated, tags: p.fields.tags,
     favorite: p.fields.favorite, folder: p.fields.folder, project: p.fields.project, session: p.fields.session,
-    branch: p.fields.branch, sentAt: at, body: p.body,
+    branch: p.fields.branch, sentAt: at, aiExcluded: p.fields.aiExcluded, body: p.body,
   };
   const rendered = renderNoteFile(note, p);
   const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
@@ -826,7 +836,7 @@ export function deleteKnowledgeNote(userDir, id, { baseRevision = null, fsImpl =
     id, title: original.fields.title, created: original.fields.created, updated: original.fields.updated,
     tags: original.fields.tags, favorite: original.fields.favorite, folder: original.fields.folder,
     project: original.fields.project, session: original.fields.session, branch: original.fields.branch,
-    sentAt: original.fields.sentAt, deletedAt, body: original.body, original,
+    sentAt: original.fields.sentAt, aiExcluded: original.fields.aiExcluded, deletedAt, body: original.body, original,
   };
   const rendered = renderNoteFile(note, original);
   const tmp = `${dest}.${process.pid}.${deletedAt}.tmp`;
@@ -869,7 +879,7 @@ export function restoreKnowledgeNote(userDir, id, { fsImpl = fs } = {}) {
   try { back = fsImpl.readFileSync(dest, 'utf8'); } catch (e) { return { ok: false, error: `Restored, but could not be read back to verify: ${e?.code || e?.message || e}` }; }
   if (back !== text) return { ok: false, error: 'The restored note does not match what was in Trash - not trusted.' };
   const p = parseNoteFile(text, { fallbackId: id });
-  return { ok: true, note: { id: p.fields.id || id, title: p.fields.title, tags: p.fields.tags, favorite: p.fields.favorite }, revision: noteRevision(userDir, id, { fsImpl }) };
+  return { ok: true, note: { id: p.fields.id || id, title: p.fields.title, tags: p.fields.tags, favorite: p.fields.favorite, aiExcluded: p.fields.aiExcluded }, revision: noteRevision(userDir, id, { fsImpl }) };
 }
 
 // ------------------------------------------------------------------ Phase 23E: version history
@@ -994,7 +1004,7 @@ export function restoreSnapshot(userDir, id, file, { baseRevision = null, fsImpl
     ok: true,
     note: {
       id, title: p.fields.title, created: p.fields.created, updated: p.fields.updated, tags: p.fields.tags,
-      favorite: p.fields.favorite, folder: p.fields.folder, sentAt: p.fields.sentAt, body: p.body,
+      favorite: p.fields.favorite, folder: p.fields.folder, sentAt: p.fields.sentAt, aiExcluded: p.fields.aiExcluded, body: p.body,
     },
     revision: noteRevision(userDir, id, { fsImpl }),
   };

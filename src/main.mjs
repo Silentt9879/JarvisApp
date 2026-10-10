@@ -45,6 +45,7 @@ import { createDriveConnection } from './drive-connection.mjs';
 import { createGoogleDriveProvider } from './google-drive-provider.mjs';
 import { createDriveBackupController } from './drive-backup-controller.mjs';
 import { createDriveSyncController } from './drive-sync-controller.mjs';
+import { searchNotes, notesForAiContext, buildContextPrompt } from './notes-search.mjs';
 import { describeStoppedWork } from './active-work.mjs';
 import { closePanes } from './pane-windows.mjs';
 import { normalizeWorkspaces, addWorkspace, renameWorkspace, selectWorkspace, removeWorkspace, setWorkspaceTrust, setProjectSettings, projectSettings, workspacesForWindow, NO_WORKSPACE } from './workspaces.mjs';
@@ -2693,7 +2694,7 @@ ipcMain.handle('jarvis:knowledgeList', () => {
     status: knowledgeStorageStatus(),
     notes: r.notes.map((n) => ({
       id: n.id, title: n.title, created: n.created, updated: n.updated, tags: n.tags,
-      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, corrupt: n.corrupt,
+      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, aiExcluded: n.aiExcluded, corrupt: n.corrupt,
     })),
   };
 });
@@ -2706,7 +2707,7 @@ ipcMain.handle('jarvis:knowledgeRead', (_e, id) => {
     ok: true,
     note: {
       id: n.id, title: n.title, created: n.created, updated: n.updated, tags: n.tags,
-      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, body: n.body,
+      favorite: n.favorite, folder: n.folder, sentAt: n.sentAt, aiExcluded: n.aiExcluded, body: n.body,
     },
     revision: noteRevision(userDir, id),
   };
@@ -2821,6 +2822,19 @@ ipcMain.handle('jarvis:knowledgeSnapshotRestore', (_e, id, file, baseRevision) =
   const r = restoreSnapshot(userDir, id, file, { baseRevision: rev });
   if (r.ok) { log('knowledge note restored from version history', id, file); driveSyncController.requestSync(); }
   return r;
+});
+
+// ---------------------------------------------------------------- IPC: Notes AI Knowledge (Phase 4)
+// Read-only, local-only: both handlers only ever call into notes-search.mjs, which only ever
+// calls listKnowledgeNotes - nothing here writes a note, calls an external AI provider, or
+// can be used to bypass aiExcluded. jarvis:notesAskContext hands back a composed PROMPT the
+// window inserts into the chat composer (JV.chat.insert - see knowledge.js) for the person to
+// review and press Send themselves; nothing here sends anything to Claude on its own.
+ipcMain.handle('jarvis:notesSearch', (_e, query) => searchNotes(userDir, typeof query === 'string' ? query : ''));
+ipcMain.handle('jarvis:notesAskContext', (_e, query) => {
+  const r = notesForAiContext(userDir, typeof query === 'string' ? query : '');
+  if (!r.ok) return r;
+  return { ok: true, prompt: buildContextPrompt(r.query, r.sources), sources: r.sources.map((s) => ({ id: s.id, title: s.title, folder: s.folder })) };
 });
 
 // ---------------------------------------------------------------- IPC: Google Drive connection (Phase 24C)

@@ -244,6 +244,10 @@ contextBridge.exposeInMainWorld('jarvis', {
   knowledgeSnapshots: (id) => ipcRenderer.invoke('jarvis:knowledgeSnapshots', id),
   knowledgeSnapshotRead: (id, file) => ipcRenderer.invoke('jarvis:knowledgeSnapshotRead', id, file),
   knowledgeSnapshotRestore: (id, file, baseRevision) => ipcRenderer.invoke('jarvis:knowledgeSnapshotRestore', id, file, baseRevision),
+  // Phase 4 (AI Knowledge): local, read-only search/retrieval over Notes - never a direct
+  // call to an external AI provider from here; see jarvis:notesAskContext's own comment.
+  notesSearch: (query) => ipcRenderer.invoke('jarvis:notesSearch', query),
+  notesAskContext: (query) => ipcRenderer.invoke('jarvis:notesAskContext', query),
   // Google Drive connection (Phase 24C): status/configure/connect/disconnect only - never a
   // token, never a backup or restore call (neither exists yet).
   driveStatus: () => ipcRenderer.invoke('jarvis:driveStatus'),

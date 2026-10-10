@@ -474,6 +474,7 @@
           <div class="files-layout">
             <aside class="files-side">
               <button class="btn btn-primary btn-block" id="kneNew"><i data-icon="plus"></i><span>New note</span></button>
+              <button class="btn btn-block" id="kneAskOpen" type="button"><i data-icon="search"></i><span>Ask about your notes</span></button>
               <button class="btn btn-block" id="kneImportOpen" type="button"><i data-icon="import"></i><span>Import from Notes (Classic)</span></button>
               <details class="drive-panel" id="driveConn">
                 <summary>
@@ -530,6 +531,7 @@
             <div class="file-view">
               <div class="file-head">
                 <button class="icon-btn kne-fav" id="kneFavorite" type="button" title="Pin this note" aria-pressed="false"><i data-icon="star"></i></button>
+                <button class="icon-btn kne-ai-exclude" id="kneAiExclude" type="button" title="Exclude this note from AI search &amp; chat context" aria-pressed="false"><i data-icon="shield"></i></button>
                 <div class="file-title">
                   <input class="kne-title" id="kneTitle" placeholder="Untitled note" autocomplete="off" spellcheck="true" />
                   <small id="kneWhen"></small>
@@ -576,6 +578,26 @@
             <div class="modal-foot">
               <button class="btn small" id="kneImportCancel" type="button">Cancel</button>
               <button class="btn btn-primary small" id="kneImportGo" type="button">Import</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ask about your notes (Phase 4, AI Knowledge): local keyword search only - nothing
+             here calls an external AI provider. "Ask in Chat" composes the matched notes'
+             own content into a prompt and inserts it into the Chat composer (JV.chat.insert)
+             for the person to read and press Send themselves - never sent automatically. -->
+        <div class="modal-veil" id="kneAskVeil" hidden>
+          <div class="modal hud-panel" role="dialog" aria-modal="true" aria-labelledby="kneAskTitle">
+            <h3 id="kneAskTitle">Ask about your notes</h3>
+            <div class="modal-body">
+              <input class="field" id="kneAskQuery" placeholder="Ask a question, or search for words in your notes…" autocomplete="off" spellcheck="false" />
+              <p class="muted small">Searches only your notes, locally - nothing is sent anywhere until you choose "Ask in Chat" below and press Send yourself. Notes marked "Exclude from AI" never appear here.</p>
+              <ul class="kne-ask-results" id="kneAskResults"></ul>
+              <div class="note-msg" id="kneAskMsg" hidden></div>
+            </div>
+            <div class="modal-foot">
+              <button class="btn small" id="kneAskCancel" type="button">Close</button>
+              <button class="btn btn-primary small" id="kneAskGo" type="button" disabled>Ask in Chat</button>
             </div>
           </div>
         </div>

@@ -46,6 +46,7 @@
   const folderEl = () => $('kneFolder');
   const bodyEl = () => $('kneEdit');
   const favBtn = () => $('kneFavorite');
+  const aiExcludeBtn = () => $('kneAiExclude');
 
   // ------------------------------------------------------------- drafts (memory + localStorage)
   function loadDraftsFromStorage() {
@@ -72,18 +73,19 @@
     return {
       title: titleEl().value, body: bodyEl().value, tags: parseTags(tagsEl().value),
       favorite: favBtn().getAttribute('aria-pressed') === 'true', folder: folderEl().value.trim() || null,
+      aiExcluded: aiExcludeBtn().getAttribute('aria-pressed') === 'true',
     };
   }
   function baseline() {
     return current
-      ? { title: current.title || '', body: current.__body || '', tags: current.tags || [], favorite: !!current.favorite, folder: current.folder || null }
-      : { title: '', body: '', tags: [], favorite: false, folder: null };
+      ? { title: current.title || '', body: current.__body || '', tags: current.tags || [], favorite: !!current.favorite, folder: current.folder || null, aiExcluded: !!current.aiExcluded }
+      : { title: '', body: '', tags: [], favorite: false, folder: null, aiExcluded: false };
   }
   function isDirty() {
     const f = fields();
     const b = baseline();
     return f.title !== (b.title || '') || f.body !== (b.body || '') || f.favorite !== b.favorite
-      || joinTags(f.tags) !== joinTags(b.tags) || (f.folder || null) !== (b.folder || null);
+      || joinTags(f.tags) !== joinTags(b.tags) || (f.folder || null) !== (b.folder || null) || f.aiExcluded !== b.aiExcluded;
   }
   /** Remember what is in the editor, so switching notes (or closing and reopening JARVIS) never loses it. */
   function keepDraft() {
@@ -265,6 +267,8 @@
     folderEl().value = f.folder || '';
     favBtn().setAttribute('aria-pressed', f.favorite ? 'true' : 'false');
     favBtn().classList.toggle('on', !!f.favorite);
+    aiExcludeBtn().setAttribute('aria-pressed', f.aiExcluded ? 'true' : 'false');
+    aiExcludeBtn().classList.toggle('on', !!f.aiExcluded);
     $('kneWhen').textContent = mode === 'trash'
       ? (current ? (current.deletedAt ? `Deleted ${JV.ago(current.deletedAt)}` : 'Deleted') : '')
       : current
@@ -284,6 +288,7 @@
     tagsEl().disabled = trash;
     folderEl().disabled = trash;
     favBtn().disabled = trash;
+    aiExcludeBtn().disabled = trash;
     $('kneSave').hidden = trash;
     $('kneDelete').hidden = trash || !current;
     $('kneHistory').hidden = trash || !current;
@@ -666,10 +671,73 @@
     await load();
   }
 
+  // ------------------------------------------------------------- Ask about your notes (Phase 4, AI Knowledge)
+  // Local keyword search only (window.jarvis.notesSearch) - nothing here calls an external AI
+  // provider. "Ask in Chat" fetches the composed prompt (window.jarvis.notesAskContext, also
+  // local) and hands it to JV.chat.insert - the SAME chat composer the person already uses,
+  // pre-filled but never auto-sent, so pressing Send is always their own explicit action.
+  let lastAskQuery = '';
+  function sayAsk(msg, level) {
+    const box = $('kneAskMsg');
+    box.className = `note-msg ${level || 'ok'}`;
+    box.textContent = msg || '';
+    box.hidden = !msg;
+  }
+  function renderAskResults(results) {
+    const ul = $('kneAskResults');
+    ul.replaceChildren();
+    $('kneAskGo').disabled = !results.length;
+    if (!results.length) return;
+    for (const r of results) {
+      const li = el('li');
+      li.appendChild(el('b', null, title(r.title)));
+      li.appendChild(el('small', null, r.folder ? `in ${r.folder}` : 'unfiled'));
+      li.appendChild(el('p', null, r.snippet || ''));
+      ul.appendChild(li);
+    }
+  }
+  async function runAskSearch() {
+    const q = $('kneAskQuery').value.trim();
+    lastAskQuery = q;
+    if (!q) { renderAskResults([]); sayAsk(''); return; }
+    sayAsk('Searching your notes…', 'busy');
+    let r;
+    try { r = await window.jarvis.notesSearch(q); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    if (!r?.ok) { renderAskResults([]); sayAsk(r?.error || 'Could not search your notes.', 'err'); return; }
+    renderAskResults(r.results || []);
+    sayAsk(r.results?.length ? '' : 'Nothing in your notes matches that - try different words.', r.results?.length ? 'ok' : 'busy');
+  }
+  function openAsk() {
+    $('kneAskVeil').hidden = false;
+    $('kneAskQuery').value = '';
+    renderAskResults([]);
+    sayAsk('');
+    $('kneAskQuery').focus();
+  }
+  function closeAsk() { $('kneAskVeil').hidden = true; }
+  async function askInChat() {
+    if (!lastAskQuery) return;
+    $('kneAskGo').disabled = true;
+    sayAsk('Preparing…', 'busy');
+    let r;
+    try { r = await window.jarvis.notesAskContext(lastAskQuery); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    $('kneAskGo').disabled = false;
+    if (!r?.ok) { sayAsk(r?.error || 'Could not prepare that for Chat.', 'err'); return; }
+    closeAsk();
+    JV.chat.insert(r.prompt); // switches to Chat and fills the composer - nothing is sent until the person presses Send themselves
+  }
+
   $('kneNew').onclick = () => { if (mode !== 'notes') setMode('notes'); open(null); };
   $('kneSave').onclick = () => save();
   $('kneFavorite').onclick = () => {
     const btn = favBtn();
+    const on = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', String(on));
+    btn.classList.toggle('on', on);
+    $('kneSave').disabled = !(titleEl().value.trim() || bodyEl().value.trim());
+  };
+  $('kneAiExclude').onclick = () => {
+    const btn = aiExcludeBtn();
     const on = btn.getAttribute('aria-pressed') !== 'true';
     btn.setAttribute('aria-pressed', String(on));
     btn.classList.toggle('on', on);
@@ -707,6 +775,14 @@
     const i = order.indexOf(document.activeElement);
     order[(i + (e.shiftKey ? -1 : 1) + order.length) % order.length].focus();
   });
+
+  $('kneAskOpen').onclick = openAsk;
+  $('kneAskCancel').onclick = closeAsk;
+  $('kneAskQuery').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runAskSearch(); } });
+  $('kneAskQuery').addEventListener('input', () => { clearTimeout($('kneAskQuery')._t); $('kneAskQuery')._t = setTimeout(runAskSearch, 350); });
+  $('kneAskGo').onclick = askInChat;
+  $('kneAskVeil').addEventListener('mousedown', (e) => { if (e.target === $('kneAskVeil')) closeAsk(); });
+  $('kneAskVeil').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeAsk(); } });
 
   $('kneImportOpen').onclick = openImport;
   $('kneImportCancel').onclick = closeImport;

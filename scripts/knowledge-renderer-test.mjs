@@ -105,17 +105,22 @@ function makeJarvis(userDir, drive, opts = {}) {
     driveRestoreConfirm: (id, token) => drive.controller.restoreConfirm(id, token),
     driveOperationStatus: () => drive.controller.operationStatus(),
   } : {};
+  const notesAi = {
+    notesSearch: opts.notesSearch || (async () => ({ ok: true, results: [] })),
+    notesAskContext: opts.notesAskContext || (async () => ({ ok: false, error: 'no fake configured' })),
+  };
   return {
     ...driveCalls,
+    ...notesAi,
     knowledgeList: async () => {
       const r = K.listKnowledgeNotes(userDir);
-      return { ok: r.ok, error: r.error, status: status(), notes: (r.notes || []).map((x) => ({ id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, folder: x.folder, sentAt: x.sentAt, corrupt: x.corrupt })) };
+      return { ok: r.ok, error: r.error, status: status(), notes: (r.notes || []).map((x) => ({ id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, folder: x.folder, sentAt: x.sentAt, aiExcluded: x.aiExcluded, corrupt: x.corrupt })) };
     },
     knowledgeRead: async (id) => {
       const r = K.listKnowledgeNotes(userDir);
       const x = r.ok && r.notes.find((e) => e.id === id);
       if (!x) return { ok: false, error: 'not found' };
-      return { ok: true, note: { id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, folder: x.folder, sentAt: x.sentAt, body: x.body }, revision: K.noteRevision(userDir, id) };
+      return { ok: true, note: { id: x.id, title: x.title, created: x.created, updated: x.updated, tags: x.tags, favorite: x.favorite, folder: x.folder, sentAt: x.sentAt, aiExcluded: x.aiExcluded, body: x.body }, revision: K.noteRevision(userDir, id) };
     },
     knowledgeSave: async (input) => {
       const v = K.validateNoteInput(input);
@@ -184,6 +189,8 @@ function boot(userDir, storage, drive, jarvisOpts) {
     notify: (msg, opts) => { notifications.push({ msg, ...opts }); },
     notifications,
     renderMarkdown: (target, text) => { target.textContent = String(text || ''); },
+    chatInserts: [], // Phase 4: records what "Ask in Chat" would have put in the composer - never auto-sent
+    chat: { insert: (text) => { JV.chatInserts.push(text); } },
   };
   const jarvis = makeJarvis(userDir, drive, jarvisOpts);
   const document_ = { hidden: false, activeElement: null, createElement: (t) => new El(t), createTextNode: (t) => { const n = new El('#text'); n.textContent = t; return n; } };
@@ -713,6 +720,71 @@ console.log('\n--- Phase 3: sync status line and Sync Now (UI wiring only - the 
   await tick();
   JV.emit('view', 'kne'); await tick();
   check('a conflict state is surfaced in plain language pointing at Version History, never silently hidden', /2 notes need attention/.test(JV.$('driveSyncStatus').textContent) && /Version History/.test(JV.$('driveSyncStatus').textContent), JV.$('driveSyncStatus').textContent);
+}
+
+console.log('\n--- Phase 4: "Exclude from AI" toggle round-trips through save ---');
+{
+  const d = DIR();
+  const JV = boot(d, new FakeStorage());
+  await tick();
+  JV.$('kneTitle').value = 'Private note';
+  JV.$('kneTitle').fire('input');
+  JV.$('kneEdit').value = 'secret content';
+  JV.$('kneEdit').fire('input');
+  check('the toggle starts off (included) by default', JV.$('kneAiExclude').getAttribute('aria-pressed') === 'false');
+  await JV.$('kneAiExclude').onclick();
+  check('clicking it arms exclusion', JV.$('kneAiExclude').getAttribute('aria-pressed') === 'true');
+  await JV.$('kneSave').onclick(); await tick();
+  const saved = K.listKnowledgeNotes(d).notes.find((n) => n.title === 'Private note');
+  check('the saved note is actually marked aiExcluded on disk', saved && saved.aiExcluded === true, saved);
+
+  // Reopening it should reflect the saved state, not reset to included.
+  await JV.$('kneNew').onclick();
+  await JV.$('kneList').children[0].children[0].onclick(); await tick();
+  check('reopening the note shows the toggle still armed', JV.$('kneAiExclude').getAttribute('aria-pressed') === 'true');
+}
+
+console.log('\n--- Phase 4: "Ask about your notes" - local search, never an automatic send ---');
+{
+  const d = DIR();
+  let searched = null;
+  const JV = boot(d, new FakeStorage(), null, {
+    notesSearch: async (q) => { searched = q; return { ok: true, results: [{ id: 'n1', title: 'Vet notes', folder: null, snippet: 'switch food gradually', score: 5 }] }; },
+    notesAskContext: async (q) => ({ ok: true, prompt: `Using only the following notes of mine, answer this question: ${q}\n\n[1] Vet notes\nswitch food gradually`, sources: [{ id: 'n1', title: 'Vet notes' }] }),
+  });
+  await tick();
+  await JV.$('kneAskOpen').onclick();
+  check('opening Ask shows the dialog, empty, with Ask-in-Chat disabled until something is found', JV.$('kneAskVeil').hidden === false && JV.$('kneAskGo').disabled === true);
+
+  JV.$('kneAskQuery').value = 'what did the vet say about food';
+  await runAskSearchFor(JV);
+  check('typing a question calls the real search IPC with exactly what was typed', searched === 'what did the vet say about food');
+  check('a result is shown, with its own title and snippet - the citation', /Vet notes/.test(JV.$('kneAskResults').textContent) && /gradually/.test(JV.$('kneAskResults').textContent));
+  check('Ask in Chat is now enabled', JV.$('kneAskGo').disabled === false);
+
+  await JV.$('kneAskGo').onclick(); await tick();
+  check('pressing "Ask in Chat" inserts the composed prompt (with its citation) into the chat composer', JV.chatInserts.length === 1 && /Vet notes/.test(JV.chatInserts[0]) && /gradually/.test(JV.chatInserts[0]));
+  check('the dialog closed after handing off to Chat', JV.$('kneAskVeil').hidden === true);
+  check('nothing was ever sent automatically - JV.chat.insert only fills the composer, never submits', JV.chatInserts.length === 1);
+
+  async function runAskSearchFor(jv) {
+    // The real code debounces input via setTimeout; this harness's setTimeout runs its
+    // callback immediately (see ctx's setTimeout override above), so firing 'input' alone
+    // already triggers the search synchronously-enough for `await tick()` to catch up.
+    jv.$('kneAskQuery').fire('input');
+    await tick(10);
+  }
+}
+{
+  const d = DIR();
+  const JV = boot(d, new FakeStorage(), null, { notesSearch: async () => ({ ok: true, results: [] }) });
+  await tick();
+  await JV.$('kneAskOpen').onclick();
+  JV.$('kneAskQuery').value = 'nothing matches this';
+  JV.$('kneAskQuery').fire('input');
+  await tick(10);
+  check('no results shown in plain language, not a blank or broken dialog', /Nothing in your notes matches/.test(JV.$('kneAskMsg').textContent));
+  check('Ask in Chat stays disabled when there is nothing to ask about', JV.$('kneAskGo').disabled === true);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

@@ -2564,6 +2564,15 @@ body.still .cbar .agents-pill.live .ap-dot { animation: none; }
 .kne-import-stats li.bad b { color: var(--err); }
 .kne-import-dest { margin: 0; font-size: 11.5px; color: var(--muted); font-family: var(--mono); overflow-wrap: anywhere; }
 
+/* Ask about your notes (Phase 4): plain result rows - title, folder, snippet - each one IS
+   the citation back to its source note. */
+.kne-ask-results { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; max-height: 42vh; overflow-y: auto; }
+.kne-ask-results li { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.kne-ask-results b { display: block; font-size: 13px; }
+.kne-ask-results small { color: var(--muted); }
+.kne-ask-results p { margin: 4px 0 0; font-size: 12.5px; color: var(--text-2); }
+.kne-ai-exclude.on { color: var(--err); }
+
 /* Folders (Phase 1, Unified Notes): a flat list of the distinct `folder` values among the
    notes already loaded - "All notes" and "Unfiled" always lead, then each real folder. */
 .kne-folder-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; max-height: 140px; overflow-y: auto; }
