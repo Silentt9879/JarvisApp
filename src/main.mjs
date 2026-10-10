@@ -715,6 +715,27 @@ function createWindow() {
     }
   });
 
+  // Safety net: 'ready-to-show' can fail to fire at all - a slow first paint, a GPU hiccup,
+  // antivirus scanning a freshly-installed exe - leaving the window created but never shown:
+  // the tray icon and the process are there, but nothing a person can see or interact with,
+  // and no later action (even the single-instance "open it again" bring-to-front) is
+  // guaranteed to recover it once this has happened. Previously the ONLY retry for this was
+  // external, in updaterCommand (src/updates.mjs) - this gives an ordinary launch the same
+  // "if it didn't actually show, show it again" guarantee, without needing a whole separate
+  // process relaunch to do it. Never overrides a deliberate hidden start (login, `--hidden`)
+  // unless this was itself the post-update relaunch, which must always end up visible.
+  if (!capture) {
+    setTimeout(() => {
+      if (!win || win.isDestroyed() || win.isVisible()) return;
+      if (launchHidden && !process.argv.includes('--updated')) return;
+      log('the window did not become visible after launch - showing it now');
+      if (!shownOnce) win.maximize();
+      win.show();
+      win.focus();
+      shownOnce = true;
+    }, 8000);
+  }
+
   // While remote control is on, closing hides to the tray: the window is what submits a
   // message from Telegram, so it has to stay alive. Quit from the tray menu.
   win.on('close', (e) => {
