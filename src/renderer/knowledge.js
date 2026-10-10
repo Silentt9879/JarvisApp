@@ -818,6 +818,7 @@
   let driveOpTimer = null; // polls jarvis:driveOperationStatus while a backup/preview/restore is in flight
   let drivePreview = null; // { backupId, token } - the one currently open in the preview/confirm modal
   let driveShowByo = false; // Phase 2: once true, always show the BYO-client fields even if the app-owned path is available
+  let driveEditingClient = false; // Phase 6 bugfix: true while the Client ID/secret fields are deliberately open - never force-closed by a status refresh mid-edit
 
   function fmtWhen(ms) { return ms ? new Date(ms).toLocaleString() : 'never'; }
   function fmtSize(n) {
@@ -847,8 +848,15 @@
     const showAppOwned = appOwned.available && !r.clientConfigured && r.status === 'disconnected' && !driveShowByo;
     $('driveAppOwnedSection').hidden = !showAppOwned;
 
-    $('driveClientFields').hidden = true;
-    $('driveConfigureBtn').hidden = !!r.clientConfigured || showAppOwned;
+    // Bugfix (Phase 6): a Client ID, once saved, must stay editable - there was previously no
+    // way back to these fields at all once clientConfigured became true (the only way out was
+    // deleting drive-client.bin by hand). The button now always offers a way in, labelled
+    // differently once something is already saved; the fields themselves are only force-closed
+    // when the person is not actively using them (never mid-edit, so a background status
+    // refresh can't silently snap them shut while someone is typing).
+    if (!driveEditingClient) $('driveClientFields').hidden = true;
+    $('driveConfigureBtn').hidden = showAppOwned;
+    $('driveConfigureBtn').textContent = r.clientConfigured ? 'Change OAuth Client ID' : 'Configure OAuth Client ID';
     $('driveConnectBtn').hidden = !(r.clientConfigured && r.status === 'disconnected');
     $('driveReconnectBtn').hidden = !(r.clientConfigured && (r.status === 'expired' || r.status === 'error'));
     $('driveDisconnectBtn').hidden = !(r.status === 'connected' || r.status === 'expired');
@@ -910,7 +918,7 @@
       clearInterval(driveOpTimer); driveOpTimer = null;
     }
   }
-  $('driveConfigureBtn').onclick = () => { $('driveClientFields').hidden = false; $('driveClientId').focus(); };
+  $('driveConfigureBtn').onclick = () => { driveEditingClient = true; $('driveClientFields').hidden = false; $('driveClientId').focus(); };
   $('driveShowByoBtn').onclick = () => { driveShowByo = true; renderDriveStatus(); };
   $('driveConnectAppOwnedBtn').onclick = async () => {
     $('driveConnectAppOwnedBtn').disabled = true;
@@ -930,6 +938,7 @@
     const r = await window.jarvis.driveConfigureClient(clientId, clientSecret);
     $('driveClientSecret').value = ''; // never left sitting in the DOM longer than needed
     if (!r.ok) { JV.notify(r.error || 'Could not save that Client ID.', { level: 'err' }); return; }
+    driveEditingClient = false; // saved successfully - a later status refresh may now close the fields again
     await renderDriveStatus();
   };
   async function doConnect() {

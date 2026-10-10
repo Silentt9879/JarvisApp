@@ -697,6 +697,30 @@ console.log('\n--- Phase 2: app-owned "Connect Google Account" (Decision 1) ---'
     JV.$('driveAppOwnedSection').hidden === true && JV.$('driveConfigureBtn').hidden === false);
 }
 
+console.log('\n--- Phase 6 bugfix: a saved Client ID must stay editable - there was no way back in before ---');
+{
+  const d = DIR();
+  let saved = null;
+  const JV = boot(d, new FakeStorage(), null, {
+    driveStatus: async () => (saved ? { status: 'disconnected', clientConfigured: true } : { status: 'disconnected', clientConfigured: false }),
+    appOwned: { available: false },
+  });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('before anything is configured, the button says "Configure"', JV.$('driveConfigureBtn').textContent === 'Configure OAuth Client ID');
+
+  await JV.$('driveConfigureBtn').onclick(); await tick();
+  check('clicking it opens the fields', JV.$('driveClientFields').hidden === false);
+  JV.$('driveClientId').value = 'abc.apps.googleusercontent.com';
+  saved = true; // simulates window.jarvis.driveConfigureClient having succeeded
+  await JV.$('driveSaveClient').onclick(); await tick();
+
+  check('BUG FIX: after saving, the button is still visible, never permanently gone', JV.$('driveConfigureBtn').hidden === false);
+  check('and it now reads "Change", not "Configure", reflecting that something is already saved', JV.$('driveConfigureBtn').textContent === 'Change OAuth Client ID');
+  await JV.$('driveConfigureBtn').onclick(); await tick();
+  check('clicking it again still reopens the fields - there is always a way back in', JV.$('driveClientFields').hidden === false);
+}
+
 console.log('\n--- Phase 3: sync status line and Sync Now (UI wiring only - the engine is tested separately) ---');
 {
   const d = DIR();
