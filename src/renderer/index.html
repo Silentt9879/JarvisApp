@@ -476,7 +476,12 @@
               <button class="btn btn-primary btn-block" id="kneNew"><i data-icon="plus"></i><span>New note</span></button>
               <button class="btn btn-block" id="kneAskOpen" type="button"><i data-icon="search"></i><span>Ask about your notes</span></button>
               <button class="btn btn-block" id="kneImportOpen" type="button"><i data-icon="import"></i><span>Import from Notes (Classic)</span></button>
-              <details class="drive-panel" id="driveConn">
+              <!-- Open by default (Phase 6 UX fix): every Drive control used to be hidden
+                   behind one undiscoverable click on the status row - a real person had to
+                   find out by accident that this collapsed. Still a <details> (so it CAN be
+                   collapsed to save space once someone knows it's there), just never
+                   collapsed on first sight. -->
+              <details class="drive-panel" id="driveConn" open>
                 <summary>
                   <span class="dot" id="driveDot"></span>
                   <span id="driveStatusWord">Google Drive</span>
