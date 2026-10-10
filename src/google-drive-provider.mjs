@@ -127,5 +127,18 @@ export function createGoogleDriveProvider({ getAccessToken, fetchImpl = fetch, l
     return buf;
   }
 
-  return { findFolder, ensureFolder, listChildren, uploadFile, downloadFile };
+  /**
+   * Phase 3 (sync): propagates a local deletion/trash-move to the live sync mirror. Moves the
+   * file to Drive's OWN Trash (`trashed: true`) rather than a permanent delete - so a sync bug
+   * or a wrong local state can never destroy the only remote copy outright; the person can
+   * still recover it from drive.google.com's own Trash for as long as Google keeps it there.
+   * This is a NEW contract method beyond Phase 24B's original five - drive-backup.mjs's
+   * backup/restore engine never calls it and is completely unaffected (backups are immutable
+   * historical runs, by design, never deleted by anything in this codebase).
+   */
+  async function deleteFile(id) {
+    await call(`${API}/files/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+  }
+
+  return { findFolder, ensureFolder, listChildren, uploadFile, downloadFile, deleteFile };
 }

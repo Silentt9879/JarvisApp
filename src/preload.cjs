@@ -259,6 +259,9 @@ contextBridge.exposeInMainWorld('jarvis', {
   driveRestorePreview: (backupId) => ipcRenderer.invoke('jarvis:driveRestorePreview', backupId),
   driveRestoreConfirm: (backupId, token) => ipcRenderer.invoke('jarvis:driveRestoreConfirm', backupId, token),
   driveOperationStatus: () => ipcRenderer.invoke('jarvis:driveOperationStatus'),
+  // Phase 3: bidirectional sync status/trigger - separate from backup/restore above.
+  driveSyncStatus: () => ipcRenderer.invoke('jarvis:driveSyncStatus'),
+  driveSyncNow: () => ipcRenderer.invoke('jarvis:driveSyncNow'),
   // ASP.NET sites and APIs: dotnet watch run, shown in the window.
   webApps: () => ipcRenderer.invoke('jarvis:webApps'),
   webRun: (key, watch) => ipcRenderer.invoke('jarvis:webRun', key, watch),

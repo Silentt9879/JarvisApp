@@ -22,6 +22,7 @@ export class FakeDriveProvider {
     this._corruptNextUpload = false;
     this._failNextDownload = 0;         // how many subsequent downloads to fail
     this._failNextUpload = 0;           // how many subsequent uploads to fail
+    this._failNextDelete = 0;           // how many subsequent deleteFile calls to fail
   }
 
   /** The next upload succeeds, but the bytes read back by downloadFile are silently altered - a "bad transfer." */
@@ -75,6 +76,19 @@ export class FakeDriveProvider {
     if (!f) { const e = new Error('file not found'); e.code = 'ENOENT'; throw e; }
     return Buffer.from(f.bytes);
   }
+
+  /** Phase 3 (sync): the sixth contract method - removes a file outright. The real provider
+   *  moves to Drive's own Trash instead of a hard delete (see google-drive-provider.mjs); this
+   *  fake just removes it, which is enough to prove the sync engine's own logic (it never
+   *  re-reads a deleted file, never re-creates it unasked) without needing to model Drive's
+   *  Trash semantics in a test double. */
+  async deleteFile(id) {
+    if (this._failNextDelete > 0) { this._failNextDelete -= 1; throw new Error('simulated delete failure'); }
+    this.files.delete(id);
+  }
+
+  /** The next N deleteFile calls reject outright. */
+  failNextDelete(n = 1) { this._failNextDelete = n; }
 
   /** Test-only convenience, not part of the provider contract: the real bytes currently stored for a file id, for asserting against directly. */
   _rawBytes(id) { return this.files.get(id)?.bytes ?? null; }

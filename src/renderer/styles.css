@@ -1102,6 +1102,7 @@ dl.kv dd { margin: 0; word-break: break-word; font-size: 12.5px; }
 .drive-panel .drive-client-fields { display: flex; flex-direction: column; gap: 6px; }
 .drive-panel .drive-app-owned { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .drive-panel .drive-backup-section { display: flex; flex-direction: column; gap: 6px; }
+.drive-panel .drive-sync-section { display: flex; flex-direction: column; gap: 6px; }
 .drive-panel .drive-sep { border: none; border-top: 1px solid var(--line); margin: 4px 0; }
 .mcp-err { color: var(--err); font-size: 12px; margin: 6px 0; }
 body.still .mcp-row.st-pending .dot { animation: none; }

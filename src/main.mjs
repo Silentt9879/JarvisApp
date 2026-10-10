@@ -44,6 +44,7 @@ import { resolveTelegramToken, telegramTokenField, migrateTelegramToken } from '
 import { createDriveConnection } from './drive-connection.mjs';
 import { createGoogleDriveProvider } from './google-drive-provider.mjs';
 import { createDriveBackupController } from './drive-backup-controller.mjs';
+import { createDriveSyncController } from './drive-sync-controller.mjs';
 import { describeStoppedWork } from './active-work.mjs';
 import { closePanes } from './pane-windows.mjs';
 import { normalizeWorkspaces, addWorkspace, renameWorkspace, selectWorkspace, removeWorkspace, setWorkspaceTrust, setProjectSettings, projectSettings, workspacesForWindow, NO_WORKSPACE } from './workspaces.mjs';
@@ -2720,6 +2721,7 @@ ipcMain.handle('jarvis:knowledgeSave', (_e, input) => {
   if (!r.ok) return r;
   if (r.overwrote) log('knowledge note overwrite confirmed', id, '- prior revision backed up as', r.overwrote.snapshot || '(nothing to back up)');
   log('knowledge note saved', id);
+  if (!r.unchanged) driveSyncController.requestSync(); // Phase 3: debounced - local-first, Drive follows in the background
   return { ok: true, note: r.note, revision: r.revision, unchanged: r.unchanged, overwrote: r.overwrote };
 });
 
@@ -2732,6 +2734,7 @@ ipcMain.handle('jarvis:knowledgeImportPreview', () => previewMigration(userDir))
 ipcMain.handle('jarvis:knowledgeImport', () => {
   const r = migrateFromLegacy(userDir);
   log('knowledge import from Notes', `migrated ${r.migrated}, skipped ${r.skipped}, conflicts ${r.conflicts.length}, errors ${r.errors.length}`);
+  if (r.migrated > 0) driveSyncController.requestSync();
   return r;
 });
 
@@ -2765,6 +2768,7 @@ ipcMain.handle('jarvis:knowledgeAutoMigrate', () => {
   if (r.migrated > 0 || r.conflicts.length > 0 || r.errors.length > 0) {
     log('knowledge auto-migrate from Notes', `migrated ${r.migrated}, skipped ${r.skipped}, conflicts ${r.conflicts.length}, errors ${r.errors.length}`);
   }
+  if (r.migrated > 0) driveSyncController.requestSync();
   return { ...r, already: false };
 });
 
@@ -2790,13 +2794,13 @@ ipcMain.handle('jarvis:knowledgeDelete', (_e, id, baseRevision) => {
   if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
   const rev = typeof baseRevision === 'string' ? baseRevision : null;
   const r = deleteKnowledgeNote(userDir, id, { baseRevision: rev });
-  if (r.ok) log('knowledge note moved to Trash', id);
+  if (r.ok) { log('knowledge note moved to Trash', id); driveSyncController.requestSync(); }
   return r;
 });
 ipcMain.handle('jarvis:knowledgeRestore', (_e, id) => {
   if (typeof id !== 'string' || !id) return { ok: false, error: 'No note id was given.' };
   const r = restoreKnowledgeNote(userDir, id);
-  if (r.ok) log('knowledge note restored from Trash', id);
+  if (r.ok) { log('knowledge note restored from Trash', id); driveSyncController.requestSync(); }
   return r;
 });
 
@@ -2815,7 +2819,7 @@ ipcMain.handle('jarvis:knowledgeSnapshotRestore', (_e, id, file, baseRevision) =
   if (typeof id !== 'string' || !id || typeof file !== 'string' || !file) return { ok: false, error: 'No version reference was given.' };
   const rev = typeof baseRevision === 'string' ? baseRevision : null;
   const r = restoreSnapshot(userDir, id, file, { baseRevision: rev });
-  if (r.ok) log('knowledge note restored from version history', id, file);
+  if (r.ok) { log('knowledge note restored from version history', id, file); driveSyncController.requestSync(); }
   return r;
 });
 
@@ -2836,6 +2840,7 @@ ipcMain.handle('jarvis:driveConfigureClient', (_e, clientId, clientSecret) => {
 ipcMain.handle('jarvis:driveConnect', async () => {
   const r = await driveConnection.connect({ timeoutMs: 120000 });
   log('Drive connect:', r.ok ? 'connected' : `failed (${r.error})`);
+  if (r.ok) driveSyncController.syncNow(); // Phase 3: "sync on reconnection" - fire-and-forget, never blocks the Connect reply
   return { ok: r.ok, error: r.ok ? undefined : r.error, ...driveStatusForWindow() };
 });
 ipcMain.handle('jarvis:driveDisconnect', async () => {
@@ -2859,6 +2864,7 @@ ipcMain.handle('jarvis:driveConnectAppOwned', async () => {
   if (!configured.ok) return configured;
   const r = await driveConnection.connect({ timeoutMs: 120000 });
   log('Drive connect (app-owned):', r.ok ? 'connected' : `failed (${r.error})`);
+  if (r.ok) driveSyncController.syncNow();
   return { ok: r.ok, error: r.ok ? undefined : r.error, ...driveStatusForWindow() };
 });
 
@@ -2887,6 +2893,28 @@ ipcMain.handle('jarvis:driveRestoreConfirm', async (_e, backupId, token) => {
   return r;
 });
 ipcMain.handle('jarvis:driveOperationStatus', () => driveBackupController.operationStatus());
+
+// ---------------------------------------------------------------- IPC: Google Drive sync (Phase 3)
+// Deliberately separate from the backup controller above: sync maintains one LIVE mirror
+// (src/drive-sync.mjs's own "JARVIS Notes Sync" folder) and keeps backup's own immutable,
+// timestamped runs completely untouched - "manual recovery backups stay independent of sync"
+// is true by construction, not by a runtime check, since this controller never imports or
+// calls anything backup-related. requestSync() is wired into every knowledge save/delete/
+// restore/import handler below, debounced - local-first: a save lands on disk immediately,
+// regardless of Drive; sync follows a few seconds later, in the background, never blocking.
+const driveSyncController = createDriveSyncController({
+  userDir,
+  getProvider: () => createGoogleDriveProvider({ getAccessToken: driveConnection.getAccessToken, log }),
+  isConnected: () => driveConnection.status().status === 'connected',
+  log,
+});
+ipcMain.handle('jarvis:driveSyncStatus', () => driveSyncController.status());
+ipcMain.handle('jarvis:driveSyncNow', () => driveSyncController.syncNow());
+// A slow heartbeat (not a tight poll) picks up a retry whose backoff has elapsed, and is also
+// how a device notices another device's remote changes with no local edit of its own to
+// trigger the debounce. No-op whenever nothing is actually due - see drive-sync-controller.mjs.
+const driveSyncHeartbeat = setInterval(() => driveSyncController.syncIfDue(), 5 * 60_000);
+app.on('before-quit', () => clearInterval(driveSyncHeartbeat));
 
 // ---------------------------------------------------------------- IPC: files (read-only) + VS Code
 let fileIndex = null;
@@ -3015,6 +3043,9 @@ if (!process.env.JARVIS_CAPTURE && !app.requestSingleInstanceLock()) {
     if (launchHidden) log('started at login, in the tray');
     runTelegramTokenMigration();
     createWindow();
+    // Phase 3: "sync on startup" - fire-and-forget; a disconnected account is simply a no-op
+    // (driveSyncController's own isConnected() check), never a startup delay either way.
+    if (driveConnection.status().status === 'connected') driveSyncController.syncNow();
     createTray();
     watchDeliveries();
     // Idle until remote control is switched on; then it listens. See remote.mjs.

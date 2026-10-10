@@ -97,6 +97,8 @@ function makeJarvis(userDir, drive, opts = {}) {
     driveDisconnect: async () => ({ status: 'disconnected' }),
     driveAppOwnedStatus: async () => appOwned,
     driveConnectAppOwned: opts.driveConnectAppOwned || (async () => ({ ok: true, status: 'connected' })),
+    driveSyncStatus: opts.driveSyncStatus || (async () => ({ state: 'idle', lastSyncAt: null, conflictCount: 0, syncing: false })),
+    driveSyncNow: opts.driveSyncNow || (async () => ({ ok: true })),
     driveBackupNow: () => drive.controller.backupNow(),
     driveBackupHistory: () => drive.controller.backupHistory(),
     driveRestorePreview: (id) => drive.controller.restorePreview(id),
@@ -686,6 +688,31 @@ console.log('\n--- Phase 2: app-owned "Connect Google Account" (Decision 1) ---'
   await JV.$('driveShowByoBtn').onclick(); await tick();
   check('"Use my own Client ID instead" switches to the BYO fields and hides the app-owned section',
     JV.$('driveAppOwnedSection').hidden === true && JV.$('driveConfigureBtn').hidden === false);
+}
+
+console.log('\n--- Phase 3: sync status line and Sync Now (UI wiring only - the engine is tested separately) ---');
+{
+  const d = DIR();
+  const drive = makeDrive(d);
+  let syncCalls = 0;
+  const JV = boot(d, new FakeStorage(), drive, {
+    driveSyncStatus: async () => (syncCalls ? { state: 'idle', lastSyncAt: Date.now(), conflictCount: 0, syncing: false } : { state: 'offline', conflictCount: 0, syncing: false }),
+    driveSyncNow: async () => { syncCalls += 1; return { ok: true }; },
+  });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('an offline sync status is shown in plain language, not silently blank', /Offline/.test(JV.$('driveSyncStatus').textContent));
+  await JV.$('driveSyncNowBtn').onclick(); await tick();
+  check('pressing Sync Now calls the real IPC call, not the backup/restore ones', syncCalls === 1);
+  check('the status line reflects the result of that sync', /Synced/.test(JV.$('driveSyncStatus').textContent), JV.$('driveSyncStatus').textContent);
+}
+{
+  const d = DIR();
+  const drive = makeDrive(d);
+  const JV = boot(d, new FakeStorage(), drive, { driveSyncStatus: async () => ({ state: 'conflict', conflictCount: 2, syncing: false }) });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('a conflict state is surfaced in plain language pointing at Version History, never silently hidden', /2 notes need attention/.test(JV.$('driveSyncStatus').textContent) && /Version History/.test(JV.$('driveSyncStatus').textContent), JV.$('driveSyncStatus').textContent);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

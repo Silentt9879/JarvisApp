@@ -500,6 +500,13 @@
                   <button class="btn btn-primary btn-block" id="driveConnectBtn" type="button" hidden>Connect Google Drive</button>
                   <button class="btn btn-block" id="driveReconnectBtn" type="button" hidden>Reconnect</button>
                   <button class="btn btn-block" id="driveDisconnectBtn" type="button" hidden>Disconnect</button>
+                  <!-- Phase 3: automatic bidirectional sync status - separate from the manual
+                       Back Up Now / Backup History below, which stay independent of sync. -->
+                  <div class="drive-sync-section" id="driveSyncSection" hidden>
+                    <hr class="drive-sep" />
+                    <p class="muted small" id="driveSyncStatus">Not synced yet.</p>
+                    <button class="btn btn-block" id="driveSyncNowBtn" type="button">Sync Now</button>
+                  </div>
                   <div class="drive-backup-section" id="driveBackupSection" hidden>
                     <hr class="drive-sep" />
                     <p class="muted small" id="driveLastBackup">No backup yet.</p>

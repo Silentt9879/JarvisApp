@@ -777,8 +777,32 @@
     $('driveReconnectBtn').hidden = !(r.clientConfigured && (r.status === 'expired' || r.status === 'error'));
     $('driveDisconnectBtn').hidden = !(r.status === 'connected' || r.status === 'expired');
     $('driveBackupSection').hidden = r.status !== 'connected';
-    if (r.status === 'connected') await renderDriveOpStatus();
+    $('driveSyncSection').hidden = r.status !== 'connected';
+    if (r.status === 'connected') { await renderDriveOpStatus(); await renderDriveSyncStatus(); }
   }
+
+  /** Phase 3: a plain-language status line - never silent about a conflict, never silent
+   *  about being offline/behind - reusing the controller's own four words (idle/syncing/
+   *  offline/error/conflict) rather than inventing a second vocabulary for the same thing. */
+  async function renderDriveSyncStatus() {
+    let s;
+    try { s = await window.jarvis.driveSyncStatus(); } catch { return; }
+    const words = {
+      idle: 'Synced', syncing: 'Syncing…', offline: 'Offline - will sync once reconnected',
+      error: s.lastError || 'Sync error', conflict: `${s.conflictCount} note${s.conflictCount === 1 ? '' : 's'} need attention - see Version History`,
+    };
+    let text = words[s.state] || 'Not synced yet.';
+    if (s.state === 'idle' && s.lastSyncAt) text = `Synced ${JV.ago(s.lastSyncAt)}`;
+    if (s.syncing && s.progress?.total) text = `Syncing… ${s.progress.current}/${s.progress.total}`;
+    $('driveSyncStatus').textContent = text;
+    $('driveSyncNowBtn').disabled = !!s.syncing;
+  }
+  $('driveSyncNowBtn').onclick = async () => {
+    $('driveSyncNowBtn').disabled = true;
+    try { await window.jarvis.driveSyncNow(); } catch { /* status below reflects whatever actually happened */ }
+    await renderDriveSyncStatus();
+    await load(); // a pull may have changed the list - the same safe, draft-preserving refresh a Drive restore already uses
+  };
 
   /** Polls main.mjs's one in-flight-operation record - real progress, read, never guessed. */
   async function renderDriveOpStatus() {
