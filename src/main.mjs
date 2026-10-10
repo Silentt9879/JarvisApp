@@ -26,6 +26,7 @@ import {
   listSnapshots, readSnapshot, restoreSnapshot, historyStats, markKnowledgeNoteSent,
 } from './knowledge.mjs';
 import { authStatus, authLogout, startLogin } from './auth.mjs';
+import { appOwnedLoginAvailable, appOwnedClientId } from './drive-app-client.mjs';
 import { createPhoneWatcher, listPhones, enableWifi, connect as phoneConnect, postNotification } from './phone.mjs';
 import os from 'node:os';
 import { call as telegramCall, sendTelegram, verifyToken, discoverChat, discoverGroup, isToken, isChatId } from './telegram.mjs';
@@ -217,7 +218,12 @@ const driveConnection = createDriveConnection({
 function driveStatusForWindow() {
   const s = driveConnection.status();
   const c = driveConnection.getClient();
-  return { status: s.status, reason: s.reason || null, clientConfigured: !!c };
+  return {
+    status: s.status, reason: s.reason || null, clientConfigured: !!c,
+    // Phase 2 (Decision 1): lets the UI say "connected through JARVIS's own sign-in" vs
+    // "connected through your own Client ID" - never the id's value either way.
+    appOwned: !!c && c.clientId === appOwnedClientId(),
+  };
 }
 
 function phoneConfig() {
@@ -2836,6 +2842,24 @@ ipcMain.handle('jarvis:driveDisconnect', async () => {
   await driveConnection.disconnect();
   log('Drive disconnected');
   return driveStatusForWindow();
+});
+
+// Phase 2 (Decision 1): the app-owned, no-setup path - "Connect Google Account" with nothing
+// to paste. Both environment gates (drive-app-client.mjs) must be open for `available` to be
+// true; until a real, Google-verified Client ID exists, this is false on every build and the
+// button below it in the renderer simply never appears - BYO-client above is completely
+// unaffected either way. driveConnectAppOwned does not reimplement anything: it calls the
+// exact same configureClient + connect PKCE flow BYO-client uses, just with the app's own
+// (non-secret) Client ID instead of one the person typed in - see drive-connection.mjs, which
+// has no idea which source a Client ID came from.
+ipcMain.handle('jarvis:driveAppOwnedStatus', () => ({ available: appOwnedLoginAvailable() }));
+ipcMain.handle('jarvis:driveConnectAppOwned', async () => {
+  if (!appOwnedLoginAvailable()) return { ok: false, error: 'Google sign-in through JARVIS is not available on this build yet.' };
+  const configured = driveConnection.configureClient({ clientId: appOwnedClientId(), clientSecret: '' });
+  if (!configured.ok) return configured;
+  const r = await driveConnection.connect({ timeoutMs: 120000 });
+  log('Drive connect (app-owned):', r.ok ? 'connected' : `failed (${r.error})`);
+  return { ok: r.ok, error: r.ok ? undefined : r.error, ...driveStatusForWindow() };
 });
 
 // ---------------------------------------------------------------- IPC: Google Drive backup/restore (Phase 24D)

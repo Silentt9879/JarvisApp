@@ -250,6 +250,10 @@ contextBridge.exposeInMainWorld('jarvis', {
   driveConfigureClient: (clientId, clientSecret) => ipcRenderer.invoke('jarvis:driveConfigureClient', clientId, clientSecret),
   driveConnect: () => ipcRenderer.invoke('jarvis:driveConnect'),
   driveDisconnect: () => ipcRenderer.invoke('jarvis:driveDisconnect'),
+  // Phase 2 (Decision 1): the app-owned, no-Client-ID path - available only once both of
+  // drive-app-client.mjs's env gates are open on this build.
+  driveAppOwnedStatus: () => ipcRenderer.invoke('jarvis:driveAppOwnedStatus'),
+  driveConnectAppOwned: () => ipcRenderer.invoke('jarvis:driveConnectAppOwned'),
   driveBackupNow: () => ipcRenderer.invoke('jarvis:driveBackupNow'),
   driveBackupHistory: () => ipcRenderer.invoke('jarvis:driveBackupHistory'),
   driveRestorePreview: (backupId) => ipcRenderer.invoke('jarvis:driveRestorePreview', backupId),

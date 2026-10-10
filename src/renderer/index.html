@@ -482,6 +482,15 @@
                 </summary>
                 <div class="drive-body">
                   <p class="muted small" id="driveReason"></p>
+                  <!-- Phase 2 (Decision 1): the no-setup path - hidden entirely unless this
+                       build's two env gates (drive-app-client.mjs) are both open. Until a real,
+                       Google-verified Client ID exists, driveAppOwnedStatus() always reports
+                       available:false and nothing below this comment ever becomes visible. -->
+                  <div class="drive-app-owned" id="driveAppOwnedSection" hidden>
+                    <button class="btn btn-primary btn-block" id="driveConnectAppOwnedBtn" type="button">Connect Google Account</button>
+                    <p class="muted small">Uses JARVIS's own Google sign-in - no Client ID to create or paste. <b>Early/testing configuration</b> until Google's verification for this app completes; see Settings for details.</p>
+                    <button class="link-btn" id="driveShowByoBtn" type="button">Use my own Google Cloud Client ID instead</button>
+                  </div>
                   <div class="drive-client-fields" id="driveClientFields" hidden>
                     <input class="field slim" id="driveClientId" placeholder="OAuth Client ID" autocomplete="off" spellcheck="false" />
                     <input class="field slim" id="driveClientSecret" type="password" placeholder="Client secret (optional for some client types)" autocomplete="off" spellcheck="false" />

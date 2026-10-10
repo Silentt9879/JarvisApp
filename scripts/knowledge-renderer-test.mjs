@@ -89,11 +89,14 @@ function makeJarvis(userDir, drive, opts = {}) {
       historyCount: h.count, historyBytes: h.bytes, historyWarn: h.warn, telegram,
     };
   };
-  const driveCalls = drive ? {
-    driveStatus: async () => ({ status: 'connected', clientConfigured: true }),
+  const appOwned = opts.appOwned || { available: false };
+  const driveCalls = (drive || opts.driveStatus) ? {
+    driveStatus: opts.driveStatus || (async () => ({ status: 'connected', clientConfigured: true, appOwned: false })),
     driveConfigureClient: async () => ({ ok: true }),
     driveConnect: async () => ({ ok: true, status: 'connected' }),
     driveDisconnect: async () => ({ status: 'disconnected' }),
+    driveAppOwnedStatus: async () => appOwned,
+    driveConnectAppOwned: opts.driveConnectAppOwned || (async () => ({ ok: true, status: 'connected' })),
     driveBackupNow: () => drive.controller.backupNow(),
     driveBackupHistory: () => drive.controller.backupHistory(),
     driveRestorePreview: (id) => drive.controller.restorePreview(id),
@@ -653,6 +656,36 @@ console.log('\n--- Phase 1 hardening item 4: folder hierarchy renders nested, no
   await tick();
   check('selecting the (empty) parent folder shows no notes - it does not fall back to including its child\'s notes',
     JV.$('kneList').children.length === 1 && /No note/.test(JV.$('kneList').textContent));
+}
+
+console.log('\n--- Phase 2: app-owned "Connect Google Account" (Decision 1) ---');
+{
+  const d = DIR();
+  const disconnected = async () => ({ status: 'disconnected', clientConfigured: false });
+  // Both gates closed (the real default on every build today): nothing changes from before.
+  let JV = boot(d, new FakeStorage(), null, { driveStatus: disconnected, appOwned: { available: false } });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('with the app-owned path unavailable, the section stays hidden and BYO is exactly as before',
+    JV.$('driveAppOwnedSection').hidden === true && JV.$('driveConfigureBtn').hidden === false);
+
+  // Both gates open: the one-click path appears, and BYO's own button is hidden behind it.
+  let connectCalls = 0;
+  JV = boot(d, new FakeStorage(), null, {
+    driveStatus: disconnected, appOwned: { available: true },
+    driveConnectAppOwned: async () => { connectCalls += 1; return { ok: true, status: 'connected' }; },
+  });
+  await tick();
+  JV.emit('view', 'kne'); await tick();
+  check('with both gates open, "Connect Google Account" is offered and the BYO Configure button is not',
+    JV.$('driveAppOwnedSection').hidden === false && JV.$('driveConfigureBtn').hidden === true);
+  await JV.$('driveConnectAppOwnedBtn').onclick(); await tick();
+  check('pressing it calls the app-owned IPC - never driveConfigureClient/driveConnect\'s own BYO path', connectCalls === 1);
+
+  // The escape hatch: a person can still choose to use their own Client ID instead.
+  await JV.$('driveShowByoBtn').onclick(); await tick();
+  check('"Use my own Client ID instead" switches to the BYO fields and hides the app-owned section',
+    JV.$('driveAppOwnedSection').hidden === true && JV.$('driveConfigureBtn').hidden === false);
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

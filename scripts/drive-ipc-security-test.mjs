@@ -36,12 +36,25 @@ function handlerBody(channel) {
 }
 
 // ------------------------------------------------------------------ what main.mjs exposes
-check('exactly nine Drive IPC handlers exist - the four Phase 24C connection calls plus Phase 24D\'s backup/history/preview/confirm/status - and no other, wider Drive call', () => {
+check('exactly eleven Drive IPC handlers exist - the four Phase 24C connection calls, Phase 24D\'s backup/history/preview/confirm/status, and Phase 2\'s two app-owned calls - and no other, wider Drive call', () => {
   for (const h of ['jarvis:driveStatus', 'jarvis:driveConfigureClient', 'jarvis:driveConnect', 'jarvis:driveDisconnect',
-    'jarvis:driveBackupNow', 'jarvis:driveBackupHistory', 'jarvis:driveRestorePreview', 'jarvis:driveRestoreConfirm', 'jarvis:driveOperationStatus']) {
+    'jarvis:driveBackupNow', 'jarvis:driveBackupHistory', 'jarvis:driveRestorePreview', 'jarvis:driveRestoreConfirm', 'jarvis:driveOperationStatus',
+    'jarvis:driveAppOwnedStatus', 'jarvis:driveConnectAppOwned']) {
     assert.match(main, new RegExp(`ipcMain\\.handle\\('${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`), h);
   }
   assert.doesNotMatch(main, /ipcMain\.handle\('jarvis:drive(Delete|Sync|Upload|Download|ListFiles)/, 'no wider Drive call (delete, sync, raw file access) exists');
+});
+
+check('Phase 2: driveConnectAppOwned takes no arguments from the renderer - it can never be handed a different Client ID than drive-app-client.mjs\'s own env-gated one', () => {
+  const body = handlerBody('jarvis:driveConnectAppOwned');
+  assert.match(body, /async \(\) => \{/, 'no (_e, clientId, ...) parameter exists for the renderer to populate');
+  assert.match(body, /appOwnedClientId\(\)/, 'the Client ID always comes from drive-app-client.mjs, never a call argument');
+  assert.doesNotMatch(body, /clientSecret: (?!'')/, 'no client secret is ever supplied for this path');
+});
+check('Phase 2: driveAppOwnedStatus never returns the Client ID itself - only whether the path is available', () => {
+  const body = handlerBody('jarvis:driveAppOwnedStatus');
+  assert.doesNotMatch(body, /appOwnedClientId\(\)/, 'the id itself never appears in this handler\'s own reply shape');
+  assert.match(body, /available: appOwnedLoginAvailable\(\)/);
 });
 
 check('driveRestoreConfirm requires a token argument from the renderer - there is no handler that calls applyRestore without one', () => {
@@ -109,8 +122,8 @@ check('the authorization code and the callback URL are never logged anywhere in 
 });
 
 // ------------------------------------------------------------------ the preload bridge
-check('the preload bridge exposes only the four named Drive calls - never a generic invoke, never ipcRenderer itself', () => {
-  for (const name of ['driveStatus', 'driveConfigureClient', 'driveConnect', 'driveDisconnect']) {
+check('the preload bridge exposes only the named Drive connection calls - never a generic invoke, never ipcRenderer itself', () => {
+  for (const name of ['driveStatus', 'driveConfigureClient', 'driveConnect', 'driveDisconnect', 'driveAppOwnedStatus', 'driveConnectAppOwned']) {
     assert.match(preload, new RegExp(`${name}: \\(`));
   }
   assert.doesNotMatch(preload, /driveGetAccessToken|driveToken\b|getDriveToken/i);

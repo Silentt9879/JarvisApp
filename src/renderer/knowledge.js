@@ -741,6 +741,7 @@
   // -------------------------------------------------------------- Google Drive connection (Phase 24C) + backup/restore (Phase 24D)
   let driveOpTimer = null; // polls jarvis:driveOperationStatus while a backup/preview/restore is in flight
   let drivePreview = null; // { backupId, token } - the one currently open in the preview/confirm modal
+  let driveShowByo = false; // Phase 2: once true, always show the BYO-client fields even if the app-owned path is available
 
   function fmtWhen(ms) { return ms ? new Date(ms).toLocaleString() : 'never'; }
   function fmtSize(n) {
@@ -757,9 +758,21 @@
     const word = { disconnected: 'Not connected', connected: 'Connected', expired: 'Authentication expired', error: 'Connection error' }[r.status] || 'Not connected';
     $('driveStatusWord').textContent = `Google Drive: ${word}`;
     $('driveDot').className = `dot st-${r.status}`;
-    $('driveReason').textContent = r.reason || '';
+    $('driveReason').textContent = (r.reason || '') + (r.status === 'connected' && r.appOwned ? ' Connected through JARVIS\'s own Google sign-in.' : '');
+
+    // Phase 2 (Decision 1): the no-setup path is offered only while disconnected, no Client ID
+    // is configured yet, this build's env gates are both open, and the person has not already
+    // asked to use their own Client ID instead - BYO-client (unchanged) is the fallback in
+    // every other case, exactly as it has always been.
+    let appOwned = { available: false };
+    if (!r.clientConfigured && r.status === 'disconnected') {
+      try { appOwned = await window.jarvis.driveAppOwnedStatus(); } catch { /* treated as unavailable */ }
+    }
+    const showAppOwned = appOwned.available && !r.clientConfigured && r.status === 'disconnected' && !driveShowByo;
+    $('driveAppOwnedSection').hidden = !showAppOwned;
+
     $('driveClientFields').hidden = true;
-    $('driveConfigureBtn').hidden = !!r.clientConfigured;
+    $('driveConfigureBtn').hidden = !!r.clientConfigured || showAppOwned;
     $('driveConnectBtn').hidden = !(r.clientConfigured && r.status === 'disconnected');
     $('driveReconnectBtn').hidden = !(r.clientConfigured && (r.status === 'expired' || r.status === 'error'));
     $('driveDisconnectBtn').hidden = !(r.status === 'connected' || r.status === 'expired');
@@ -791,6 +804,18 @@
     }
   }
   $('driveConfigureBtn').onclick = () => { $('driveClientFields').hidden = false; $('driveClientId').focus(); };
+  $('driveShowByoBtn').onclick = () => { driveShowByo = true; renderDriveStatus(); };
+  $('driveConnectAppOwnedBtn').onclick = async () => {
+    $('driveConnectAppOwnedBtn').disabled = true;
+    $('driveStatusWord').textContent = 'Google Drive: Connecting…';
+    try {
+      const r = await window.jarvis.driveConnectAppOwned();
+      if (!r.ok) JV.notify(r.error || 'Could not connect to Google Drive.', { level: 'err' });
+    } finally {
+      $('driveConnectAppOwnedBtn').disabled = false;
+      await renderDriveStatus();
+    }
+  };
   $('driveSaveClient').onclick = async () => {
     const clientId = $('driveClientId').value.trim();
     const clientSecret = $('driveClientSecret').value;
